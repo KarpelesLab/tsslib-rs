@@ -9,6 +9,10 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  # purecrypto is a git dependency; fetch it via the git CLI.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 # Don't run two release-plz jobs in parallel.
 concurrency:
   group: release-plz-${{ github.ref }}

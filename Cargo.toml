@@ -14,23 +14,32 @@ readme = "README.md"
 name = "tsslib"
 
 [features]
-# Each protocol is gated so downstream users can compile only what they need.
+# Each protocol is gated so downstream users can compile only what they need;
+# each pulls in exactly the purecrypto curve/lattice features it requires.
 # `default` pulls in everything.
 default = ["frosttss", "frostristretto255tss", "mldsatss", "dklstss"]
 
 # FROST(Ed25519, SHA-512) — RFC 9591. Ed25519-compatible output.
-frosttss = []
+frosttss = ["purecrypto/hazmat-edwards25519"]
 # FROST(ristretto255, SHA-512) — RFC 9591 §6.2.
-frostristretto255tss = []
+frostristretto255tss = ["purecrypto/ristretto255"]
 # Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
-mldsatss = []
+mldsatss = ["purecrypto/mldsa"]
 # Threshold ECDSA on secp256k1 — DKLs23 (ePrint 2023/765).
-dklstss = []
+dklstss = ["purecrypto/hazmat-secp256k1"]
 
 [dependencies]
+# purecrypto provides all low-level crypto. The ristretto255 / Edwards25519 /
+# secp256k1 group modules landed after the v0.5.0 crates.io release, so we pin a
+# git rev until a release carrying them is published (at which point this
+# becomes a regular version dependency and the crate can ship to crates.io).
+purecrypto = { git = "https://github.com/KarpelesLab/purecrypto", rev = "1f6a2ca7da8f6324d0bfc3b835b7baef531fc2d7", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+hex = "0.4"
+zeroize = { version = "1", features = ["derive"] }
+subtle = "2"
 
 [dev-dependencies]
 serde_json = "1"

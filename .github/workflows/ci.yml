@@ -10,6 +10,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # purecrypto is a git dependency; fetch it via the git CLI for reliable
+  # anonymous HTTPS cloning of the public repo.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   test:
