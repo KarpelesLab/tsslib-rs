@@ -1,0 +1,7 @@
+[workspace]
+# Keep a conventional-commits changelog and let release-plz manage version
+# bumps and the GitHub release from the master branch.
+changelog_update = true
+git_release_enable = true
+# Single crate; no path-dependency propagation needed.
+dependencies_update = false

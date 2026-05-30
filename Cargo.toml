@@ -1,0 +1,36 @@
+[package]
+name = "tsslib"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Easy-to-use threshold signature schemes (FROST, ML-DSA, DKLs23) — wire- and save-data-compatible with the Go tss-lib."
+repository = "https://github.com/KarpelesLab/tsslib-rs"
+license = "MIT"
+keywords = ["tss", "threshold", "frost", "ecdsa", "cryptography"]
+categories = ["cryptography"]
+readme = "README.md"
+
+[lib]
+name = "tsslib"
+
+[features]
+# Each protocol is gated so downstream users can compile only what they need.
+# `default` pulls in everything.
+default = ["frosttss", "frostristretto255tss", "mldsatss", "dklstss"]
+
+# FROST(Ed25519, SHA-512) — RFC 9591. Ed25519-compatible output.
+frosttss = []
+# FROST(ristretto255, SHA-512) — RFC 9591 §6.2.
+frostristretto255tss = []
+# Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
+mldsatss = []
+# Threshold ECDSA on secp256k1 — DKLs23 (ePrint 2023/765).
+dklstss = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+serde_json = "1"
