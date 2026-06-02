@@ -32,10 +32,12 @@
 mod key;
 mod point;
 mod signature;
+mod signing;
 
 pub use key::{KEY_VERSION, Key};
 pub use point::PointError;
 pub use signature::SignatureData;
+pub use signing::Signing;
 
 /// Errors raised by the `frosttss` protocols.
 #[derive(Debug)]

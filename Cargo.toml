@@ -34,7 +34,7 @@ dklstss = ["purecrypto/hazmat-secp256k1"]
 # crates.io release, so we pin the v0.5.1 git tag for now. Once v0.5.1 is
 # confirmed on crates.io this becomes a plain version dependency and tsslib
 # itself becomes publishable (git deps block crates.io release).
-purecrypto = { git = "https://github.com/KarpelesLab/purecrypto", tag = "v0.5.1", default-features = false }
+purecrypto = { git = "https://github.com/KarpelesLab/purecrypto", tag = "v0.5.1", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 # arbitrary_precision: emit/parse big.Int-shaped JSON numbers (>2^53) losslessly,
 # matching Go's encoding/json for *big.Int save fields.

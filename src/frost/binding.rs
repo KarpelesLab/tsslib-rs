@@ -128,6 +128,25 @@ pub fn lagrange_coefficient<C: Ciphersuite>(id: &[u8], signers: &[Vec<u8>]) -> O
     Some(lambda)
 }
 
+/// `nonce_generate` with an extra domain-separation `label` folded into the H3
+/// input: `k = H3(random_bytes || EncodeScalar(secret) || label)`.
+///
+/// FROST signing derives its hiding and binding nonces from the same secret
+/// share; labeling the two derivations (`"hiding"` / `"binding"`) guarantees
+/// `d_i != e_i` even if the RNG returns identical bytes for both reads (a
+/// `d == e` nonce would leak the share).
+pub fn nonce_generate_labeled<C: Ciphersuite>(
+    random_bytes: &[u8; 32],
+    secret: &Scalar,
+    label: &[u8],
+) -> Scalar {
+    let mut input = Vec::with_capacity(64 + label.len());
+    input.extend_from_slice(random_bytes);
+    input.extend_from_slice(&encode_scalar(secret));
+    input.extend_from_slice(label);
+    C::h3(&input)
+}
+
 /// RFC 9591 §4.1 `nonce_generate`: `k = H3(random_bytes || EncodeScalar(secret))`.
 ///
 /// Mixing the long-term secret into the hash means two calls collide only if

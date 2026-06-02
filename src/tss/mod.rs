@@ -8,9 +8,15 @@
 pub(crate) mod b64;
 pub(crate) mod bigint;
 mod error;
+pub(crate) mod expect;
 mod message;
+mod params;
 mod party_id;
 
 pub use error::TssError;
-pub use message::{JsonMessage, MessageBroker, MessageReceiver, json_get, json_wrap};
+pub use message::{BrokerResult, JsonMessage, MessageBroker, MessageReceiver, json_get, json_wrap};
+pub use params::Parameters;
 pub use party_id::PartyId;
+
+#[cfg(test)]
+pub(crate) mod testhub;
