@@ -86,7 +86,7 @@ pub fn decimal_to_be(s: &str) -> Result<Vec<u8>, DecimalError> {
     // Accumulate big-endian base-256: bytes = bytes * 10 + digit.
     let mut bytes: Vec<u8> = vec![0];
     for ch in s.chars() {
-        let digit = ch.to_digit(10).ok_or(DecimalError("non-digit character"))? as u32;
+        let digit = ch.to_digit(10).ok_or(DecimalError("non-digit character"))?;
         let mut carry = digit;
         for b in bytes.iter_mut().rev() {
             let v = (*b as u32) * 10 + carry;

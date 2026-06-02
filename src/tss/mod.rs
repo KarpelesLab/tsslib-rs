@@ -5,6 +5,8 @@
 //! JSON-based message/broker plumbing the broker-style protocols route their
 //! rounds through.
 
+pub(crate) mod b64;
+pub(crate) mod bigint;
 mod error;
 mod message;
 mod party_id;

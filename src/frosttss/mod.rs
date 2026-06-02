@@ -28,3 +28,56 @@
 //! References:
 //! - RFC 9591: <https://www.rfc-editor.org/rfc/rfc9591.html>
 //! - FROST paper: <https://eprint.iacr.org/2020/852>
+
+mod key;
+mod point;
+mod signature;
+
+pub use key::{KEY_VERSION, Key};
+pub use point::PointError;
+pub use signature::SignatureData;
+
+/// Errors raised by the `frosttss` protocols.
+#[derive(Debug)]
+pub enum Error {
+    /// A [`Key`] failed an internal consistency check.
+    Validation(String),
+    /// A curve point could not be decoded.
+    Point(PointError),
+    /// A JSON (de)serialization error.
+    Serde(serde_json::Error),
+    /// A protocol-round error (carries victim / culprits). Boxed because
+    /// [`crate::tss::TssError`] is large relative to the other variants.
+    Tss(Box<crate::tss::TssError>),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Validation(m) => write!(f, "frosttss: {m}"),
+            Error::Point(e) => write!(f, "{e}"),
+            Error::Serde(e) => write!(f, "frosttss: json: {e}"),
+            Error::Tss(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<PointError> for Error {
+    fn from(e: PointError) -> Self {
+        Error::Point(e)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Error::Serde(e)
+    }
+}
+
+impl From<crate::tss::TssError> for Error {
+    fn from(e: crate::tss::TssError) -> Self {
+        Error::Tss(Box::new(e))
+    }
+}
