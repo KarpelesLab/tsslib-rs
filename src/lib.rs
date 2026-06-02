@@ -36,6 +36,10 @@
 
 pub mod tss;
 
+/// Shared FROST core (RFC 9591), used by the Ed25519 and ristretto255 variants.
+#[cfg(any(feature = "frosttss", feature = "frostristretto255tss"))]
+pub mod frost;
+
 #[cfg(feature = "frosttss")]
 pub mod frosttss;
 
