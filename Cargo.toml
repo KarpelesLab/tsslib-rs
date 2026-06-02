@@ -29,13 +29,16 @@ mldsatss = ["purecrypto/mldsa"]
 dklstss = ["purecrypto/hazmat-secp256k1"]
 
 [dependencies]
-# purecrypto provides all low-level crypto. The ristretto255 / Edwards25519 /
-# secp256k1 group modules landed after the v0.5.0 crates.io release, so we pin a
-# git rev until a release carrying them is published (at which point this
-# becomes a regular version dependency and the crate can ship to crates.io).
-purecrypto = { git = "https://github.com/KarpelesLab/purecrypto", rev = "1f6a2ca7da8f6324d0bfc3b835b7baef531fc2d7", default-features = false }
+# purecrypto provides all low-level crypto. The group modules this crate needs
+# (ristretto255 / Edwards25519 affine coords / secp256k1) landed after the v0.5.0
+# crates.io release, so we pin the v0.5.1 git tag for now. Once v0.5.1 is
+# confirmed on crates.io this becomes a plain version dependency and tsslib
+# itself becomes publishable (git deps block crates.io release).
+purecrypto = { git = "https://github.com/KarpelesLab/purecrypto", tag = "v0.5.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# arbitrary_precision: emit/parse big.Int-shaped JSON numbers (>2^53) losslessly,
+# matching Go's encoding/json for *big.Int save fields.
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 base64 = "0.22"
 hex = "0.4"
 zeroize = { version = "1", features = ["derive"] }
