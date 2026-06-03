@@ -16,9 +16,14 @@ mod ed25519;
 pub mod hashing;
 pub mod vss;
 
+#[cfg(feature = "frostristretto255tss")]
+mod ristretto255;
+
 pub use ed25519::Ed25519;
 pub use purecrypto::ec::edwards25519::hazmat::Scalar;
 use purecrypto::rng::RngCore;
+#[cfg(feature = "frostristretto255tss")]
+pub use ristretto255::Ristretto255;
 
 /// Samples a uniformly random scalar mod `L` from `rng`.
 pub fn random_scalar(rng: &mut impl RngCore) -> Scalar {
