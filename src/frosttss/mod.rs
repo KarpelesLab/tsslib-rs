@@ -29,6 +29,7 @@
 //! - RFC 9591: <https://www.rfc-editor.org/rfc/rfc9591.html>
 //! - FROST paper: <https://eprint.iacr.org/2020/852>
 
+mod hd;
 mod key;
 mod keygen;
 mod point;
@@ -36,6 +37,7 @@ mod schnorr;
 mod signature;
 mod signing;
 
+pub use hd::{HARDENED_KEY_START, derive_chain_code, import_key};
 pub use key::{KEY_VERSION, Key};
 pub use keygen::Keygen;
 pub use point::PointError;

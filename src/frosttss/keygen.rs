@@ -19,7 +19,6 @@ use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
-use purecrypto::hash::sha256;
 use purecrypto::rng::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -31,7 +30,6 @@ const ROUND2_TYPE: &str = "frost:ed25519:keygen:round2";
 const SESSION_NONCE_LEN: usize = 16;
 const COMMITMENT_BYTES: usize = 32;
 const SCALAR_BYTES: usize = 32;
-const CHAINCODE_DOMAIN: &[u8] = b"FROST-Ed25519-chaincode-v1";
 const AD_PREFIX: &[u8] = b"frosttss/keygen/r2/v1|";
 const POK_TAG: &[u8] = b"dkg-pok";
 
@@ -401,7 +399,7 @@ impl Shared {
                 "joint public key is the curve identity".into(),
             )));
         }
-        let chain_code = derive_chain_code(&group_public_key);
+        let chain_code = super::hd::derive_chain_code(&group_public_key);
 
         let ks: Vec<BigUintDec> = st.ks.iter().map(|k| BigUintDec::from_be_bytes(k)).collect();
         let share_id = BigUintDec::from_be_bytes(my_id);
@@ -467,14 +465,6 @@ fn keygen_round2_ad(sender_nonce: &[u8], sender_pub: &[u8], recipient_pub: &[u8]
     ad.push(b'|');
     ad.extend_from_slice(recipient_pub);
     ad
-}
-
-/// Master chain code = `SHA-256(domain || compress(pub))`.
-fn derive_chain_code(pub_key: &EdwardsPoint) -> [u8; 32] {
-    let mut data = Vec::with_capacity(CHAINCODE_DOMAIN.len() + 32);
-    data.extend_from_slice(CHAINCODE_DOMAIN);
-    data.extend_from_slice(&Ed25519::encode_point(pub_key));
-    sha256(&data)
 }
 
 fn strip(b: &[u8]) -> &[u8] {
@@ -585,6 +575,45 @@ mod tests {
         let keys = run_keygen(&ids, 2);
         for k in &keys {
             k.validate_basic().unwrap();
+        }
+    }
+
+    #[test]
+    fn keygen_derive_child_then_sign_verifies_under_child_key() {
+        let n = 3;
+        let t = 1;
+        let ids = party_ids(n);
+        let keys = run_keygen(&ids, t);
+        let path = [1u32, 5, 9];
+
+        // Every party derives the same child public key from public inputs.
+        let (_, child_pub, _) = keys[0].derive_child(&path).unwrap();
+        for k in &keys[1..] {
+            let (_, cp, _) = k.derive_child(&path).unwrap();
+            assert!(Ed25519::eq(&cp, &child_pub));
+        }
+
+        // Sign under the derived child key with a t+1 committee.
+        let committee = t + 1;
+        let committee_ids: Vec<PartyId> = ids[..committee].to_vec();
+        let hub = TestHub::new(&committee_ids);
+        let msg = b"hd signing".to_vec();
+        let signings: Vec<_> = (0..committee)
+            .map(|i| {
+                let params =
+                    Parameters::new(committee_ids.clone(), &committee_ids[i], t, hub.broker(i));
+                let (sg, _) = keys[i].derive_and_sign(&path, msg.clone(), params).unwrap();
+                sg
+            })
+            .collect();
+
+        let pk = Ed25519PublicKey::from_bytes(Ed25519::encode_point(&child_pub));
+        for s in &signings {
+            let sig = s.wait().expect("hd signing succeeds");
+            let mut sb = [0u8; 64];
+            sb.copy_from_slice(&sig.signature);
+            pk.verify(&msg, &Ed25519Signature::from_bytes(sb))
+                .expect("verifies under the derived child key");
         }
     }
 }
