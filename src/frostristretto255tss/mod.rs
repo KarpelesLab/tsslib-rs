@@ -12,10 +12,13 @@
 //! is no HD derivation.
 
 mod key;
+mod keygen;
+mod schnorr;
 mod signature;
 mod signing;
 
 pub use key::{KEY_VERSION, Key};
+pub use keygen::Keygen;
 pub use signature::SignatureData;
 pub use signing::Signing;
 
