@@ -11,6 +11,7 @@
 
 pub mod aead;
 pub mod binding;
+pub mod commitments;
 mod ed25519;
 pub mod hashing;
 pub mod vss;

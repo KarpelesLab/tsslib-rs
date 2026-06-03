@@ -15,7 +15,7 @@ mod party_id;
 
 pub use error::TssError;
 pub use message::{BrokerResult, JsonMessage, MessageBroker, MessageReceiver, json_get, json_wrap};
-pub use params::Parameters;
+pub use params::{Parameters, ReSharingParameters};
 pub use party_id::PartyId;
 
 #[cfg(test)]

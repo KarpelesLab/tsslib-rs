@@ -30,7 +30,25 @@ pub fn sha512_256_parts(parts: &[&[u8]]) -> [u8; 32] {
 /// Returns the 32-byte digest (big-endian integer).
 pub fn sha512_256i_tagged(tag: &[u8], operands: &[&[u8]]) -> [u8; 32] {
     let tag_bz = sha512_256_parts(&[tag]);
+    // state.write(tag_bz); state.write(tag_bz); state.write(operands_data)
+    let data = operands_data(operands);
+    let mut input = Vec::with_capacity(64 + data.len());
+    input.extend_from_slice(&tag_bz);
+    input.extend_from_slice(&tag_bz);
+    input.extend_from_slice(&data);
+    sha512_256(&input)
+}
 
+/// Port of Go `common.SHA512_256i(in...)`: the untagged big-integer hash used by
+/// the hash-commitment scheme. `operands` are big-endian magnitudes of
+/// non-negative integers. Returns the 32-byte digest (big-endian integer).
+pub fn sha512_256i(operands: &[&[u8]]) -> [u8; 32] {
+    sha512_256(&operands_data(operands))
+}
+
+/// The big-integer-list framing shared by `SHA512_256i` and its tagged variant:
+/// `LE64(n) || (signbyte=0 || op || '$' || LE64(len(op)))*`.
+fn operands_data(operands: &[&[u8]]) -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(&(operands.len() as u64).to_le_bytes());
     for op in operands {
@@ -39,13 +57,7 @@ pub fn sha512_256i_tagged(tag: &[u8], operands: &[&[u8]]) -> [u8; 32] {
         data.push(DELIMITER);
         data.extend_from_slice(&(op.len() as u64).to_le_bytes());
     }
-
-    // state.write(tag_bz); state.write(tag_bz); state.write(data)
-    let mut input = Vec::with_capacity(64 + data.len());
-    input.extend_from_slice(&tag_bz);
-    input.extend_from_slice(&tag_bz);
-    input.extend_from_slice(&data);
-    sha512_256(&input)
+    data
 }
 
 #[cfg(test)]

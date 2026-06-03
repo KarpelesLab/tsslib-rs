@@ -33,6 +33,7 @@ mod hd;
 mod key;
 mod keygen;
 mod point;
+mod resharing;
 mod schnorr;
 mod signature;
 mod signing;
@@ -41,6 +42,7 @@ pub use hd::{HARDENED_KEY_START, derive_chain_code, import_key};
 pub use key::{KEY_VERSION, Key};
 pub use keygen::Keygen;
 pub use point::PointError;
+pub use resharing::Resharing;
 pub use signature::SignatureData;
 pub use signing::Signing;
 
