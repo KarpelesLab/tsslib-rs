@@ -30,11 +30,14 @@
 //! - FROST paper: <https://eprint.iacr.org/2020/852>
 
 mod key;
+mod keygen;
 mod point;
+mod schnorr;
 mod signature;
 mod signing;
 
 pub use key::{KEY_VERSION, Key};
+pub use keygen::Keygen;
 pub use point::PointError;
 pub use signature::SignatureData;
 pub use signing::Signing;

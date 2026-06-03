@@ -20,9 +20,10 @@ name = "tsslib"
 default = ["frosttss", "frostristretto255tss", "mldsatss", "dklstss"]
 
 # FROST(Ed25519, SHA-512) — RFC 9591. Ed25519-compatible output.
-frosttss = ["purecrypto/hazmat-edwards25519"]
+# cipher/kdf back the X25519+HKDF+ChaCha20-Poly1305 encrypted-share envelope.
+frosttss = ["purecrypto/hazmat-edwards25519", "purecrypto/cipher", "purecrypto/kdf"]
 # FROST(ristretto255, SHA-512) — RFC 9591 §6.2.
-frostristretto255tss = ["purecrypto/ristretto255"]
+frostristretto255tss = ["purecrypto/ristretto255", "purecrypto/cipher", "purecrypto/kdf"]
 # Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
 mldsatss = ["purecrypto/mldsa"]
 # Threshold ECDSA on secp256k1 — DKLs23 (ePrint 2023/765).

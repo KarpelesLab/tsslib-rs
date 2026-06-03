@@ -3,7 +3,28 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use serde::{Deserialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// A byte string that (de)serializes as a single base64 std string — Go's
+/// `[]byte` JSON form. Use inside a `Vec` for a `[][]byte` field.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct B64Bytes(pub Vec<u8>);
+
+impl Serialize for B64Bytes {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&BASE64.encode(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for B64Bytes {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let s = String::deserialize(d)?;
+        Ok(B64Bytes(
+            BASE64.decode(s.as_bytes()).map_err(D::Error::custom)?,
+        ))
+    }
+}
 
 /// `#[serde(with = "crate::tss::b64::vec")]` for a `Vec<u8>` field.
 pub mod vec {

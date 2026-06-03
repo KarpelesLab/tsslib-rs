@@ -9,11 +9,22 @@
 //! This mirrors the Go `crypto/frost` package. Scalar arithmetic is implicitly
 //! reduced mod the group order `L`.
 
+pub mod aead;
 pub mod binding;
 mod ed25519;
+pub mod hashing;
+pub mod vss;
 
 pub use ed25519::Ed25519;
 pub use purecrypto::ec::edwards25519::hazmat::Scalar;
+use purecrypto::rng::RngCore;
+
+/// Samples a uniformly random scalar mod `L` from `rng`.
+pub fn random_scalar(rng: &mut impl RngCore) -> Scalar {
+    let mut b = [0u8; 64];
+    rng.fill_bytes(&mut b);
+    Scalar::from_bytes_mod_order(&b)
+}
 
 /// A FROST ciphersuite: a prime-order group plus the RFC 9591 §6 hash suite
 /// (H1..H5). The associated [`Point`](Ciphersuite::Point) is the group element
@@ -73,6 +84,13 @@ pub trait Ciphersuite {
 /// Encodes a scalar as 32 bytes little-endian (RFC 9591 `EncodeScalar`).
 pub fn encode_scalar(s: &Scalar) -> [u8; 32] {
     s.to_bytes()
+}
+
+/// Encodes a scalar as its big-endian minimal magnitude (Go `big.Int.Bytes()`).
+pub fn scalar_to_be(s: &Scalar) -> Vec<u8> {
+    let be: Vec<u8> = s.to_bytes().iter().rev().copied().collect();
+    let start = be.iter().position(|&x| x != 0).unwrap_or(be.len());
+    be[start..].to_vec()
 }
 
 /// Decodes a canonical 32-byte little-endian scalar in `[0, L)`. Returns `None`

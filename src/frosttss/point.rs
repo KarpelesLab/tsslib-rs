@@ -51,16 +51,27 @@ pub(crate) fn point_from_json(j: &EcPointJson) -> Result<EdwardsPoint, PointErro
     if j.curve != CURVE_NAME {
         return Err(PointError(format!("unexpected curve {:?}", j.curve)));
     }
-    let x = &j.coords[0];
-    let y = &j.coords[1];
+    point_from_affine_be(j.coords[0].as_be_bytes(), j.coords[1].as_be_bytes())
+}
 
-    // y as 32-byte little-endian, with the x-sign bit in the top bit.
-    let y_be = y.to_be_bytes_padded(32);
+/// Returns a point's affine `(x, y)` coordinates as big-endian magnitudes
+/// (Go `big.Int.Bytes()` form), for hashing into the Schnorr challenge.
+pub(crate) fn point_to_affine_be(p: &EdwardsPoint) -> (Vec<u8>, Vec<u8>) {
+    let (x_le, y_le) = p.to_affine();
+    (le32_to_biguint(&x_le).0, le32_to_biguint(&y_le).0)
+}
+
+/// Reconstructs a point from big-endian affine coordinates: rebuild the RFC 8032
+/// compressed form (32-byte LE `y` with the parity of `x` as the sign bit),
+/// decompress, and confirm the recovered `x` matches.
+pub(crate) fn point_from_affine_be(x_be: &[u8], y_be: &[u8]) -> Result<EdwardsPoint, PointError> {
+    let y = BigUintDec::from_be_bytes(y_be);
+    let y_be32 = y.to_be_bytes_padded(32);
     let mut compressed = [0u8; 32];
-    for (i, &b) in y_be.iter().rev().enumerate() {
+    for (i, &b) in y_be32.iter().rev().enumerate() {
         compressed[i] = b;
     }
-    if x_is_odd(x) {
+    if be_is_odd(x_be) {
         compressed[31] |= 1 << 7;
     }
 
@@ -69,15 +80,15 @@ pub(crate) fn point_from_json(j: &EcPointJson) -> Result<EdwardsPoint, PointErro
 
     // Defend against inconsistent (X, Y): the decompressed X must match input X.
     let (x_le, _) = p.to_affine();
-    if le32_to_biguint(&x_le) != *x {
+    if le32_to_biguint(&x_le) != BigUintDec::from_be_bytes(x_be) {
         return Err(PointError("X coordinate inconsistent with Y".to_string()));
     }
     Ok(p)
 }
 
-/// Whether the integer `x` is odd (its sign bit in Ed25519 compression).
-fn x_is_odd(x: &BigUintDec) -> bool {
-    match x.as_be_bytes().last() {
+/// Whether the big-endian integer is odd (its sign bit in Ed25519 compression).
+fn be_is_odd(be: &[u8]) -> bool {
+    match be.last() {
         Some(b) => b & 1 == 1,
         None => false, // zero
     }
