@@ -6,6 +6,7 @@ use crate::tss::PartyId;
 
 /// The two directions of OT-extension state between this party and one peer,
 /// established at keygen and reused (under distinct sids) across signings.
+#[derive(Clone)]
 pub struct PairOTState {
     /// OT-extension receiver, used when this party is Alice in a ΠMul.
     pub as_alice: ExtReceiver,
@@ -15,6 +16,7 @@ pub struct PairOTState {
 
 /// One party's output of the DKLs DKG: public material (joint key, per-party
 /// commitments) and private material (Shamir share, per-pair OT state).
+#[derive(Clone)]
 pub struct Key {
     /// Total number of parties.
     pub n: usize,

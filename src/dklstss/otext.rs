@@ -27,12 +27,14 @@ pub const KEY_LEN: usize = 32;
 pub type MessagePair = (Vec<[u8; KEY_LEN]>, Vec<[u8; KEY_LEN]>);
 
 /// OT-extension sender state (plays the base-OT *receiver* with choice bits Δ).
+#[derive(Clone)]
 pub struct ExtSender {
     delta: [u8; DELTA_BYTES],
     seeds: Vec<[u8; SEED_LEN]>, // length KAPPA; seeds[j] = base-OT key for Δ_j
 }
 
 /// OT-extension receiver state (plays the base-OT *sender*, knows both seeds).
+#[derive(Clone)]
 pub struct ExtReceiver {
     seeds0: Vec<[u8; SEED_LEN]>,
     seeds1: Vec<[u8; SEED_LEN]>,
