@@ -26,6 +26,7 @@
 
 mod key;
 mod keygen;
+mod packing;
 mod params;
 
 pub use key::{Key44, Share44};
