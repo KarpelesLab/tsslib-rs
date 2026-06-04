@@ -27,7 +27,8 @@ frostristretto255tss = ["purecrypto/ristretto255", "purecrypto/cipher", "purecry
 # Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
 mldsatss = ["purecrypto/mldsa"]
 # Threshold ECDSA on secp256k1 — DKLs23 (ePrint 2023/765).
-dklstss = ["purecrypto/hazmat-secp256k1"]
+# cipher backs the AES-CTR PRG in the OT-extension layer.
+dklstss = ["purecrypto/hazmat-secp256k1", "purecrypto/cipher"]
 
 [dependencies]
 # purecrypto provides all low-level crypto. The group modules this crate needs

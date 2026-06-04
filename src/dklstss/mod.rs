@@ -23,6 +23,49 @@
 //!
 //! # Status
 //!
-//! Not yet implemented — this is a scaffold. It depends on secp256k1 scalar /
-//! point arithmetic and an oblivious-transfer stack in `purecrypto` (see the
-//! crate README's "purecrypto requirements").
+//! In progress. The secp256k1 group layer and OT stack are built on
+//! `purecrypto`'s secp256k1 primitives; higher protocol layers follow.
+
+// dklstss is under active construction: lower layers (secp/OT) are exercised by
+// tests and by the not-yet-landed protocol layers. Remove once keygen/signing
+// wire everything together.
+#![allow(dead_code)]
+
+pub(crate) mod baseot;
+pub(crate) mod schnorr;
+pub(crate) mod secp;
+
+/// Errors raised by the `dklstss` protocols.
+#[derive(Debug)]
+pub enum Error {
+    /// A value failed an internal consistency check.
+    Validation(String),
+    /// A JSON (de)serialization error.
+    Serde(serde_json::Error),
+    /// A protocol-round error (carries victim / culprits).
+    Tss(Box<crate::tss::TssError>),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Validation(m) => write!(f, "dklstss: {m}"),
+            Error::Serde(e) => write!(f, "dklstss: json: {e}"),
+            Error::Tss(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Error::Serde(e)
+    }
+}
+
+impl From<crate::tss::TssError> for Error {
+    fn from(e: crate::tss::TssError) -> Self {
+        Error::Tss(Box::new(e))
+    }
+}
