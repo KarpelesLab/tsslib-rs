@@ -32,10 +32,19 @@
 #![allow(dead_code)]
 
 pub(crate) mod baseot;
+mod key;
+mod keygen;
 pub(crate) mod ole;
 pub(crate) mod otext;
 pub(crate) mod schnorr;
 pub(crate) mod secp;
+mod setup;
+mod signing;
+pub(crate) mod vss;
+
+pub use key::{Key, PairOTState, Signature};
+pub use keygen::{derive_chain_code, keygen};
+pub use signing::{sign, sign_with_tweak};
 
 /// Errors raised by the `dklstss` protocols.
 #[derive(Debug)]
