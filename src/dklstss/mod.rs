@@ -32,6 +32,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod baseot;
+pub(crate) mod otext;
 pub(crate) mod schnorr;
 pub(crate) mod secp;
 
