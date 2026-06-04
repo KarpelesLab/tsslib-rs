@@ -37,6 +37,7 @@ mod key;
 mod keygen;
 pub(crate) mod ole;
 pub(crate) mod otext;
+mod resharing;
 pub(crate) mod schnorr;
 pub(crate) mod secp;
 mod serialize;
@@ -47,6 +48,7 @@ pub(crate) mod vss;
 pub use hd::{HARDENED_KEY_START, derive_and_sign, derive_child, import_key};
 pub use key::{Key, PairOTState, Signature};
 pub use keygen::{derive_chain_code, keygen};
+pub use resharing::{refresh, reshare};
 pub use signing::{sign, sign_with_tweak};
 
 /// Errors raised by the `dklstss` protocols.

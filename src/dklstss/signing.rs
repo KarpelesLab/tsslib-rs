@@ -191,7 +191,7 @@ fn sign_core(
 }
 
 /// Lagrange coefficient `λ_i = Π_{j≠i} id_j / (id_j − id_i)` (mod n) at x=0.
-fn lagrange_coefficient(ids: &[Scalar], i: usize) -> Result<Scalar, Error> {
+pub(crate) fn lagrange_coefficient(ids: &[Scalar], i: usize) -> Result<Scalar, Error> {
     let mut lambda = Scalar::ONE;
     for (j, idj) in ids.iter().enumerate() {
         if j == i {
