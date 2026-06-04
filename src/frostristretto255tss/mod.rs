@@ -11,14 +11,17 @@
 //! keygen proof-of-knowledge is a Schnorr proof over encoded points, and there
 //! is no HD derivation.
 
+mod commit;
 mod key;
 mod keygen;
+mod resharing;
 mod schnorr;
 mod signature;
 mod signing;
 
 pub use key::{KEY_VERSION, Key};
 pub use keygen::Keygen;
+pub use resharing::Resharing;
 pub use signature::SignatureData;
 pub use signing::Signing;
 
