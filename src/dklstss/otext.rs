@@ -68,6 +68,27 @@ impl ExtSender {
         self.delta
     }
 
+    /// Serializes to `delta || seeds` (`DELTA_BYTES + KAPPA·SEED_LEN` bytes).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(DELTA_BYTES + KAPPA * SEED_LEN);
+        out.extend_from_slice(&self.delta);
+        for s in &self.seeds {
+            out.extend_from_slice(s);
+        }
+        out
+    }
+
+    /// Inverse of [`to_bytes`](ExtSender::to_bytes).
+    pub fn from_bytes(b: &[u8]) -> Result<ExtSender, Error> {
+        if b.len() != DELTA_BYTES + KAPPA * SEED_LEN {
+            return Err(Error::Validation("otext: bad ExtSender length".into()));
+        }
+        let mut delta = [0u8; DELTA_BYTES];
+        delta.copy_from_slice(&b[..DELTA_BYTES]);
+        let seeds = chunk_seeds(&b[DELTA_BYTES..]);
+        Ok(ExtSender { delta, seeds })
+    }
+
     /// Runs the OT-extension sender given the receiver's message, returning
     /// `(m_0, m_1)` after verifying the consistency check.
     #[allow(clippy::needless_range_loop)]
@@ -144,6 +165,29 @@ impl ExtReceiver {
         Ok(ExtReceiver {
             seeds0: k0.to_vec(),
             seeds1: k1.to_vec(),
+        })
+    }
+
+    /// Serializes to `seeds0 || seeds1` (`2·KAPPA·SEED_LEN` bytes).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 * KAPPA * SEED_LEN);
+        for s in &self.seeds0 {
+            out.extend_from_slice(s);
+        }
+        for s in &self.seeds1 {
+            out.extend_from_slice(s);
+        }
+        out
+    }
+
+    /// Inverse of [`to_bytes`](ExtReceiver::to_bytes).
+    pub fn from_bytes(b: &[u8]) -> Result<ExtReceiver, Error> {
+        if b.len() != 2 * KAPPA * SEED_LEN {
+            return Err(Error::Validation("otext: bad ExtReceiver length".into()));
+        }
+        Ok(ExtReceiver {
+            seeds0: chunk_seeds(&b[..KAPPA * SEED_LEN]),
+            seeds1: chunk_seeds(&b[KAPPA * SEED_LEN..]),
         })
     }
 
@@ -335,6 +379,17 @@ fn transpose_bits(input: &[Vec<u8>], rows: usize, cols: usize) -> Vec<Vec<u8>> {
 
 fn popcount_byte(b: u8) -> u8 {
     b.count_ones() as u8
+}
+
+/// Splits a flat buffer into `KAPPA` 32-byte seeds.
+fn chunk_seeds(b: &[u8]) -> Vec<[u8; SEED_LEN]> {
+    b.chunks_exact(SEED_LEN)
+        .map(|c| {
+            let mut s = [0u8; SEED_LEN];
+            s.copy_from_slice(c);
+            s
+        })
+        .collect()
 }
 
 #[cfg(test)]

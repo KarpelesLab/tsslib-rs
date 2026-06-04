@@ -39,6 +39,7 @@ pub(crate) mod ole;
 pub(crate) mod otext;
 pub(crate) mod schnorr;
 pub(crate) mod secp;
+mod serialize;
 mod setup;
 mod signing;
 pub(crate) mod vss;
