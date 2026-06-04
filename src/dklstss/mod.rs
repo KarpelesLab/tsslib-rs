@@ -32,6 +32,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod baseot;
+mod hd;
 mod key;
 mod keygen;
 pub(crate) mod ole;
@@ -42,6 +43,7 @@ mod setup;
 mod signing;
 pub(crate) mod vss;
 
+pub use hd::{HARDENED_KEY_START, derive_and_sign, derive_child, import_key};
 pub use key::{Key, PairOTState, Signature};
 pub use keygen::{derive_chain_code, keygen};
 pub use signing::{sign, sign_with_tweak};

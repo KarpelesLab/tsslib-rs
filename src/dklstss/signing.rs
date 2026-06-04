@@ -207,7 +207,7 @@ fn lagrange_coefficient(ids: &[Scalar], i: usize) -> Result<Scalar, Error> {
 }
 
 /// SEC1 §4.1.3 hash-to-scalar: leftmost `qlen` bits of the digest, mod n.
-fn hash_to_scalar(hash: &[u8]) -> Scalar {
+pub(crate) fn hash_to_scalar(hash: &[u8]) -> Scalar {
     let mut e = [0u8; 32];
     if hash.len() >= 32 {
         e.copy_from_slice(&hash[..32]);
@@ -218,7 +218,7 @@ fn hash_to_scalar(hash: &[u8]) -> Scalar {
 }
 
 /// ECDSA verification: `(s^{-1}·e)·G + (s^{-1}·r)·Q` has x-coordinate `r`.
-fn ecdsa_verify(pub_key: &ProjectivePoint, e: &Scalar, r: &Scalar, s: &Scalar) -> bool {
+pub(crate) fn ecdsa_verify(pub_key: &ProjectivePoint, e: &Scalar, r: &Scalar, s: &Scalar) -> bool {
     let w = s.invert();
     let u1 = e.mul(&w);
     let u2 = r.mul(&w);
