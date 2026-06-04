@@ -25,7 +25,8 @@ frosttss = ["purecrypto/hazmat-edwards25519", "purecrypto/cipher", "purecrypto/k
 # FROST(ristretto255, SHA-512) — RFC 9591 §6.2.
 frostristretto255tss = ["purecrypto/ristretto255", "purecrypto/cipher", "purecrypto/kdf"]
 # Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
-mldsatss = ["purecrypto/mldsa"]
+# hazmat-mldsa exposes the low-level Poly/NTT/sampler/packing API.
+mldsatss = ["purecrypto/mldsa", "purecrypto/hazmat-mldsa"]
 # Threshold ECDSA on secp256k1 — DKLs23 (ePrint 2023/765).
 # cipher backs the AES-CTR PRG in the OT-extension layer.
 dklstss = ["purecrypto/hazmat-secp256k1", "purecrypto/cipher"]
