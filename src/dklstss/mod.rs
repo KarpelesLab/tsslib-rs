@@ -40,6 +40,7 @@ mod keygen_party;
 pub(crate) mod ole;
 pub(crate) mod otext;
 mod resharing;
+mod resharing_party;
 pub(crate) mod schnorr;
 pub(crate) mod secp;
 mod serialize;
@@ -53,6 +54,7 @@ pub use key::{Key, PairOTState, Signature};
 pub use keygen::{derive_chain_code, keygen};
 pub use keygen_party::KeygenParty;
 pub use resharing::{refresh, reshare};
+pub use resharing_party::ResharingParty;
 pub use signing::{sign, sign_with_tweak};
 pub use signing_party::SigningParty;
 
