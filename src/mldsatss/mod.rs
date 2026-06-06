@@ -16,23 +16,29 @@
 //!
 //! # Status
 //!
-//! In progress on `purecrypto`'s `mldsa::hazmat` low-level API (Poly/NTT/
-//! samplers/packing). Trusted-dealer keygen first, then threshold signing.
+//! Trusted-dealer keygen ([`trusted_dealer_keygen44`]) and threshold signing
+//! ([`sign44`]) are implemented and produce FIPS-204-verifiable signatures.
+//! Built on `purecrypto`'s `mldsa::hazmat` lattice primitives; the hyperball
+//! rejection sampler and full-range `w` packing live in this module. Distributed
+//! key generation (no trusted dealer) is future work.
 
 // Index-paired loops over polynomial vectors (`for j in 0..L { v[j]... }`) are
 // idiomatic here and read closer to the FIPS 204 / reference math than iterator
 // adapters would; allow them module-wide.
 #![allow(clippy::needless_range_loop)]
 
+mod hyperball;
 mod key;
 mod keygen;
 mod packing;
 mod params;
+mod signing;
 
 pub use key::{Key44, Share44};
 pub use keygen::trusted_dealer_keygen44;
 pub use params::{GetThresholdParams44Error, ThresholdParams44, get_threshold_params44};
 pub use purecrypto::mldsa::MlDsa44PublicKey as PublicKey;
+pub use signing::{sign44, sign44_checked};
 
 /// Errors raised by the `mldsatss` protocol.
 #[derive(Debug)]
