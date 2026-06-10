@@ -237,7 +237,7 @@ pub(crate) fn is_high_s(s: &Scalar) -> bool {
     cmp_be(&s.to_bytes_be(), &HALF_N) == std::cmp::Ordering::Greater
 }
 
-fn make_sid(ssid: &[u8], kind: &str, alice: usize, bob: usize) -> Vec<u8> {
+pub(crate) fn make_sid(ssid: &[u8], kind: &str, alice: usize, bob: usize) -> Vec<u8> {
     let a = (alice as u32).to_be_bytes();
     let b = (bob as u32).to_be_bytes();
     let mut out = ssid.to_vec();
@@ -250,13 +250,13 @@ fn make_sid(ssid: &[u8], kind: &str, alice: usize, bob: usize) -> Vec<u8> {
     out
 }
 
-fn pad32(be: &[u8]) -> Vec<u8> {
+pub(crate) fn pad32(be: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; 32];
     out[32 - be.len()..].copy_from_slice(be);
     out
 }
 
-fn cmp_be(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+pub(crate) fn cmp_be(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
     let sa = strip(a);
     let sb = strip(b);
     sa.len().cmp(&sb.len()).then_with(|| sa.cmp(sb))

@@ -39,6 +39,7 @@ mod keygen;
 mod keygen_party;
 pub(crate) mod ole;
 pub(crate) mod otext;
+mod presign;
 mod refresh_party;
 mod resharing;
 mod resharing_party;
@@ -54,6 +55,10 @@ pub use hd::{HARDENED_KEY_START, derive_and_sign, derive_child, import_key};
 pub use key::{Key, PairOTState, Signature};
 pub use keygen::{derive_chain_code, keygen};
 pub use keygen_party::KeygenParty;
+pub use presign::{
+    InMemoryPresignStore, PresignOutput, UsedPresignStore, presign, sign_with_presign,
+    sign_with_presign_durable,
+};
 pub use refresh_party::RefreshParty;
 pub use resharing::{refresh, reshare};
 pub use resharing_party::ResharingParty;
