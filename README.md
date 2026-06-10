@@ -30,9 +30,11 @@ hand-rolled field arithmetic.
 
 The FROST protocols and `dklstss` provide keygen, signing, resharing/refresh,
 and HD derivation routed through a caller-supplied [`tss::MessageBroker`];
-`dklstss` also offers a synchronous in-process API. `mldsatss` provides
-trusted-dealer keygen and in-process threshold signing (`2 ≤ t ≤ n ≤ 6`);
-distributed keygen is future work. Each module is gated behind a like-named
+`dklstss` also offers a synchronous in-process API plus offline pre-signing
+(`presign` / `sign_with_presign` with single-use enforcement). `mldsatss`
+(`2 ≤ t ≤ n ≤ 6`) provides trusted-dealer keygen, sync + broker-driven threshold
+signing, and an **experimental** dealerless DKG (`DkgParty44` — no trusted
+dealer; not independently reviewed). Each module is gated behind a like-named
 cargo feature, all enabled by default:
 
 ```toml
@@ -48,8 +50,8 @@ src/
   frost/      shared FROST core: ciphersuite, binding, VSS, AEAD, commitments
   frosttss/                FROST(Ed25519)            keygen · sign · reshare · HD
   frostristretto255tss/    FROST(ristretto255)       keygen · sign · reshare
-  mldsatss/                Threshold ML-DSA-44       dealer keygen · sign (+ hyperball)
-  dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh
+  mldsatss/                Threshold ML-DSA-44       dealer + DKG keygen · sync/broker sign (+ hyperball)
+  dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh · presign
 ```
 
 ## Security
