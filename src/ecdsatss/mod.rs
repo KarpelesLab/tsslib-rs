@@ -20,7 +20,9 @@ pub(crate) mod bn;
 pub(crate) mod dlnproof;
 pub(crate) mod facproof;
 pub(crate) mod modproof;
+pub(crate) mod mta;
 pub mod paillier;
+pub(crate) mod secp;
 #[cfg(test)]
 mod testvec;
 

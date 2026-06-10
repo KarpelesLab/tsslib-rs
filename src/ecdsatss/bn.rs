@@ -237,9 +237,13 @@ impl Modulus {
         &self.m
     }
 
-    /// `a mod m`.
+    /// `a mod m`. Skips the (expensive) long division when `a < m` already.
     pub(crate) fn reduce(&self, a: &BoxedUint) -> BoxedUint {
-        a.reduce(&self.m)
+        if a.lt(&self.m) {
+            a.clone()
+        } else {
+            a.reduce(&self.m)
+        }
     }
 
     /// `(a · b) mod m`.
@@ -257,9 +261,12 @@ impl Modulus {
         self.mont.sub_mod(&self.reduce(a), &self.reduce(b))
     }
 
-    /// `base^exp mod m` in constant time (use for secret exponents).
+    /// `base^exp mod m`. Sized to the exponent's bit length, matching the Go
+    /// reference's non-constant-time `math/big` (this module is best-effort-CT;
+    /// see the `ecdsatss` warning). A modulus-width CT exponentiation over a
+    /// 4096-bit `N²` would be ~5× slower for the typical GG18 exponents.
     pub(crate) fn pow(&self, base: &BoxedUint, exp: &BoxedUint) -> BoxedUint {
-        self.mont.pow(&self.reduce(base), exp)
+        self.mont.pow_public(&self.reduce(base), exp)
     }
 
     /// `base^exp mod m` for a **public** exponent (faster; do not use for secret

@@ -73,7 +73,7 @@ func main() {
 	}
 
 	// --- real Paillier key + proof (small-factor-free N, proof verifies) ---
-	realSK, realPK, err := paillier.GenerateKeyPair(context.Background(), rand.Reader, 1024)
+	realSK, realPK, err := paillier.GenerateKeyPair(context.Background(), rand.Reader, 2048)
 	ck(err)
 	d := big.NewInt(0).SetBytes([]byte{0x12, 0x34, 0x56, 0x78, 0x9a})
 	ecdsaPub := crypto.ScalarBaseMult(tss.S256(), d)
