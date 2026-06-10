@@ -14,6 +14,8 @@ import (
 
 	"github.com/KarpelesLab/tss-lib/v2/crypto"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/dlnproof"
+	"github.com/KarpelesLab/tss-lib/v2/crypto/facproof"
+	"github.com/KarpelesLab/tss-lib/v2/crypto/modproof"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/paillier"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
@@ -119,9 +121,61 @@ func main() {
 		"alpha": alphas, "t": ts,
 	}
 
+	// --- facproof (N0 = product of two primes), against ring-Pedersen
+	// (NCap=ntilde, s=h1, t=h2). N0/N0p/N0q reuse the real Paillier key. -----
+	session := []byte("ecdsatss-fixture-session")
+	fac, err := facproof.NewProof(session, tss.S256(), realPK.N, ntilde, h1, h2, realSK.P, realSK.Q, rand.Reader)
+	ck(err)
+	facBz := fac.Bytes()
+	fac2, err := facproof.NewProofFromBytes(facBz[:])
+	ck(err)
+	if !fac2.Verify(session, tss.S256(), realPK.N, ntilde, h1, h2) {
+		panic("self-check: Go facproof byte-roundtrip did not verify")
+	}
+	out["facproof"] = map[string]any{
+		"session": "ecdsatss-fixture-session",
+		"n0":      s(realPK.N), "ncap": s(ntilde), "s": s(h1), "t": s(h2),
+		"v_sign": fac.V.Sign(),
+		"P":      s(fac.P), "Q": s(fac.Q), "A": s(fac.A), "B": s(fac.B),
+		"T": s(fac.T), "Sigma": s(fac.Sigma), "Z1": s(fac.Z1), "Z2": s(fac.Z2),
+		"W1": s(fac.W1), "W2": s(fac.W2), "V": s(fac.V),
+	}
+
+	// --- modproof (N = P·Q Blum integer, P,Q ≡ 3 mod 4) -------------------
+	mp1 := blumPrime(512)
+	mq1 := blumPrime(512)
+	modN := new(big.Int).Mul(mp1, mq1)
+	mProof, err := modproof.NewProof(session, modN, mp1, mq1, rand.Reader)
+	ck(err)
+	if !mProof.Verify(session, modN) {
+		panic("self-check: Go modproof did not verify")
+	}
+	mxs := make([]string, modproof.Iterations)
+	mzs := make([]string, modproof.Iterations)
+	for i := 0; i < modproof.Iterations; i++ {
+		mxs[i] = s(mProof.X[i])
+		mzs[i] = s(mProof.Z[i])
+	}
+	out["modproof"] = map[string]any{
+		"session": "ecdsatss-fixture-session",
+		"n":       s(modN), "p": s(mp1), "q": s(mq1),
+		"W": s(mProof.W), "A": s(mProof.A), "B": s(mProof.B),
+		"X": mxs, "Z": mzs,
+	}
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	ck(enc.Encode(out))
+}
+
+// blumPrime returns a prime ≡ 3 (mod 4).
+func blumPrime(bits int) *big.Int {
+	for {
+		p := genPrime(bits)
+		if new(big.Int).Mod(p, big.NewInt(4)).Cmp(big.NewInt(3)) == 0 {
+			return p
+		}
+	}
 }
 
 func genPrime(bits int) *big.Int {

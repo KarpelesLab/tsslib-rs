@@ -92,6 +92,19 @@ fn low_u64(n: &BoxedUint) -> u64 {
     n.as_limbs().first().copied().unwrap_or(0)
 }
 
+/// Bit `i` of `n` (LSB-first), as 0 or 1.
+pub(crate) fn bit(n: &BoxedUint, i: usize) -> u8 {
+    let limb = i / 64;
+    n.as_limbs()
+        .get(limb)
+        .map_or(0, |&l| ((l >> (i % 64)) & 1) as u8)
+}
+
+/// A `BoxedUint` from a `u128`.
+pub(crate) fn from_u128(v: u128) -> BoxedUint {
+    from_be(&v.to_be_bytes())
+}
+
 /// `n mod m` for a small `m` (≤ u32 range), returned as `u64`.
 pub(crate) fn mod_small(n: &BoxedUint, m: u64) -> u64 {
     let (_, r) = n.divrem(&u64(m));
@@ -124,6 +137,33 @@ pub(crate) fn rem(a: &BoxedUint, m: &BoxedUint) -> BoxedUint {
 /// `(a, b) -> (a/b, a mod b)`.
 pub(crate) fn divrem(a: &BoxedUint, b: &BoxedUint) -> (BoxedUint, BoxedUint) {
     a.divrem(b)
+}
+
+/// Floor integer square root (`⌊√n⌋`), matching Go `big.Int.Sqrt`.
+pub(crate) fn sqrt(n: &BoxedUint) -> BoxedUint {
+    if n.bit_len() <= 1 {
+        return n.clone(); // 0 -> 0, 1 -> 1
+    }
+    // Newton's method, converging downward from an overestimate.
+    let mut x = n.clone();
+    loop {
+        let (q, _) = divrem(n, &x);
+        let y = add(&x, &q).shr_bits(1); // (x + n/x) / 2
+        if !y.lt(&x) {
+            break;
+        }
+        x = y;
+    }
+    x
+}
+
+/// The secp256k1 group order `n`.
+pub(crate) fn secp256k1_order() -> BoxedUint {
+    from_be(&[
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36,
+        0x41, 0x41,
+    ])
 }
 
 /// `a⁻¹ mod m` for an arbitrary modulus (even or odd) — extended Euclid, no
@@ -415,6 +455,18 @@ mod tests {
         assert_eq!(to_be(&m.pow(&u64(5), &u64(3))), vec![125 % 97]); // 28
         let inv = m.inv(&u64(5)).unwrap();
         assert_eq!(to_be(&m.mul(&u64(5), &inv)), vec![1]);
+    }
+
+    #[test]
+    fn sqrt_known() {
+        assert_eq!(to_be(&sqrt(&u64(0))), Vec::<u8>::new());
+        assert_eq!(to_be(&sqrt(&u64(1))), vec![1]);
+        assert_eq!(to_be(&sqrt(&u64(15))), vec![3]);
+        assert_eq!(to_be(&sqrt(&u64(16))), vec![4]);
+        assert_eq!(to_be(&sqrt(&u64(17))), vec![4]);
+        assert_eq!(to_be(&sqrt(&u64(1_000_000))), vec![0x03, 0xe8]); // 1000
+        let big = mul(&u64(1_234_567), &u64(1_234_567));
+        assert_eq!(to_be(&sqrt(&add(&big, &u64(5)))), to_be(&u64(1_234_567)));
     }
 
     #[test]
