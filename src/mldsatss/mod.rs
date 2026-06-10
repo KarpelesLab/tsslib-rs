@@ -30,6 +30,7 @@
 mod hyperball;
 mod key;
 mod keygen;
+mod keygen_party;
 mod packing;
 mod params;
 mod signing;
@@ -37,6 +38,7 @@ mod signing_party;
 
 pub use key::{Key44, Share44};
 pub use keygen::trusted_dealer_keygen44;
+pub use keygen_party::DkgParty44;
 pub use params::{GetThresholdParams44Error, ThresholdParams44, get_threshold_params44};
 pub use purecrypto::mldsa::MlDsa44PublicKey as PublicKey;
 pub use signing::{sign44, sign44_checked};

@@ -123,7 +123,7 @@ pub fn trusted_dealer_keygen44(
 }
 
 /// All masks over `n` bits with exactly `popcount` bits set (Gosper's hack).
-fn gosper_masks(n: usize, popcount: u32) -> Vec<u8> {
+pub(crate) fn gosper_masks(n: usize, popcount: u32) -> Vec<u8> {
     let mut out = Vec::new();
     let end: u32 = 1u32 << n;
     let mut mask: u32 = (1u32 << popcount) - 1;
