@@ -32,12 +32,9 @@ mldsatss = ["purecrypto/mldsa", "purecrypto/hazmat-mldsa"]
 dklstss = ["purecrypto/hazmat-secp256k1", "purecrypto/cipher"]
 
 [dependencies]
-# purecrypto provides all low-level crypto. The group modules this crate needs
-# (ristretto255 / Edwards25519 affine coords / secp256k1) landed after the v0.5.0
-# crates.io release, so we pin the v0.5.1 git tag for now. Once v0.5.1 is
-# confirmed on crates.io this becomes a plain version dependency and tsslib
-# itself becomes publishable (git deps block crates.io release).
-purecrypto = { git = "https://github.com/KarpelesLab/purecrypto", tag = "v0.6.1", default-features = false, features = ["std"] }
+# purecrypto provides all low-level crypto (curve groups + ML-DSA lattice
+# primitives). Pulled from crates.io so tsslib is itself publishable.
+purecrypto = { version = "0.6.1", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 # arbitrary_precision: emit/parse big.Int-shaped JSON numbers (>2^53) losslessly,
 # matching Go's encoding/json for *big.Int save fields.
