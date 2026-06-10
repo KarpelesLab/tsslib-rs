@@ -2,9 +2,9 @@
 //!
 //! Both FROST ciphersuites this crate ships — FROST(Ed25519, SHA-512) and
 //! FROST(ristretto255, SHA-512) — operate over Curve25519's scalar field, so
-//! the [`Scalar`] type is shared and only the point operations and a couple of
-//! hash domains differ. The [`Ciphersuite`] trait captures that difference; the
-//! protocol math ([`binding`]) is written once against it.
+//! the `Scalar` type is shared and only the point operations and a couple of
+//! hash domains differ. The `Ciphersuite` trait captures that difference; the
+//! protocol math (`binding`) is written once against it.
 //!
 //! This mirrors the Go `crypto/frost` package. Scalar arithmetic is implicitly
 //! reduced mod the group order `L`.
@@ -34,7 +34,7 @@ pub fn random_scalar(rng: &mut impl RngCore) -> Scalar {
 
 /// A FROST ciphersuite: a prime-order group plus the RFC 9591 §6 hash suite
 /// (H1..H5). The associated [`Point`](Ciphersuite::Point) is the group element
-/// type; scalars are the shared Curve25519 [`Scalar`].
+/// type; scalars are the shared Curve25519 `Scalar`.
 pub trait Ciphersuite {
     /// The group element type.
     type Point: Clone + Copy;

@@ -1,5 +1,5 @@
 //! FROST binding factors, group commitment/challenge, Lagrange coefficients,
-//! and nonce generation — RFC 9591 §4. Written once against [`Ciphersuite`].
+//! and nonce generation — RFC 9591 §4. Written once against `Ciphersuite`.
 
 use super::{Ciphersuite, Scalar, encode_scalar, scalar_from_be_mod_l};
 use std::collections::HashMap;

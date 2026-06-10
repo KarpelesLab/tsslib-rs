@@ -1,4 +1,4 @@
-//! Feldman verifiable secret sharing over a [`Ciphersuite`] group.
+//! Feldman verifiable secret sharing over a `Ciphersuite` group.
 //!
 //! Port of tss-lib `crypto/vss`: a degree-`t` polynomial with the secret as its
 //! constant term, Feldman commitments `v_i = a_i·G`, and shares `f(id)`. A share
