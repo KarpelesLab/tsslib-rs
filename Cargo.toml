@@ -17,7 +17,7 @@ name = "tsslib"
 # Each protocol is gated so downstream users can compile only what they need;
 # each pulls in exactly the purecrypto curve/lattice features it requires.
 # `default` pulls in everything.
-default = ["frosttss", "frostristretto255tss", "mldsatss", "dklstss"]
+default = ["frosttss", "frostristretto255tss", "mldsatss", "dklstss", "ecdsatss"]
 
 # FROST(Ed25519, SHA-512) — RFC 9591. Ed25519-compatible output.
 # cipher/kdf back the X25519+HKDF+ChaCha20-Poly1305 encrypted-share envelope.
@@ -30,6 +30,10 @@ mldsatss = ["purecrypto/mldsa", "purecrypto/hazmat-mldsa"]
 # Threshold ECDSA on secp256k1 — DKLs23 (ePrint 2023/765).
 # cipher backs the AES-CTR PRG in the OT-extension layer.
 dklstss = ["purecrypto/hazmat-secp256k1", "purecrypto/cipher"]
+# Legacy threshold ECDSA on secp256k1 — GG18/GG20 (Paillier + MtA), for
+# migrating keys from the Go tss-lib `ecdsatss`. bignum backs the Paillier /
+# ZK-proof big-integer arithmetic. EXPERIMENTAL — see the module docs.
+ecdsatss = ["purecrypto/hazmat-secp256k1", "purecrypto/bignum", "purecrypto/hash"]
 
 [dependencies]
 # purecrypto provides all low-level crypto (curve groups + ML-DSA lattice
