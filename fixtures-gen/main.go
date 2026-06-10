@@ -13,6 +13,7 @@ import (
 	"os"
 
 	"github.com/KarpelesLab/tss-lib/v2/crypto"
+	"github.com/KarpelesLab/tss-lib/v2/crypto/dlnproof"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/paillier"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
@@ -92,9 +93,52 @@ func main() {
 		"pi": pis,
 	}
 
+	// --- DLN proof. NTilde = safeP·safeQ with safeP=2p'+1; the QR group has
+	// order p'·q', so NewDLNProof takes the Sophie-Germain primes (p', q'). ---
+	pp, safeP := sophieGermain(256)
+	qp, safeQ := sophieGermain(256)
+	ntilde := new(big.Int).Mul(safeP, safeQ)
+	ord := new(big.Int).Mul(pp, qp) // QR-subgroup order
+	// h1 = f^2 mod NTilde (a quadratic residue); x random < ord; h2 = h1^x.
+	f, _ := rand.Int(rand.Reader, ntilde)
+	h1 := new(big.Int).Exp(f, big.NewInt(2), ntilde)
+	x, _ := rand.Int(rand.Reader, ord)
+	h2 := new(big.Int).Exp(h1, x, ntilde)
+	dln := dlnproof.NewDLNProof(h1, h2, x, pp, qp, ntilde, rand.Reader)
+	if !dln.Verify(h1, h2, ntilde) {
+		panic("self-check: Go DLN proof did not verify")
+	}
+	alphas := make([]string, dlnproof.Iterations)
+	ts := make([]string, dlnproof.Iterations)
+	for i := 0; i < dlnproof.Iterations; i++ {
+		alphas[i] = s(dln.Alpha[i])
+		ts[i] = s(dln.T[i])
+	}
+	out["dlnproof"] = map[string]any{
+		"ntilde": s(ntilde), "h1": s(h1), "h2": s(h2),
+		"alpha": alphas, "t": ts,
+	}
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	ck(enc.Encode(out))
+}
+
+func genPrime(bits int) *big.Int {
+	p, err := rand.Prime(rand.Reader, bits)
+	ck(err)
+	return p
+}
+
+// sophieGermain returns (p', 2p'+1) where both are prime.
+func sophieGermain(bits int) (pp, safe *big.Int) {
+	for {
+		pp = genPrime(bits)
+		safe = new(big.Int).Add(new(big.Int).Lsh(pp, 1), big.NewInt(1))
+		if safe.ProbablyPrime(20) {
+			return
+		}
+	}
 }
 
 func mkSK(P, Q *big.Int) *paillier.PrivateKey {
