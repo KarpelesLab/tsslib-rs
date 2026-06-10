@@ -1,16 +1,18 @@
-//! Synchronous threshold ML-DSA-44 signing (ePrint 2025/1166).
+//! Threshold ML-DSA-44 signing (ePrint 2025/1166) — shared crypto + a
+//! synchronous in-process signer.
 //!
-//! Runs the 3-phase threshold protocol in-process across a signing set of `t`
-//! parties and emits a signature **byte-identical to stock FIPS 204** that
-//! verifies under a [`MlDsa44PublicKey`]. Each party masks its response with a
-//! constant-time [hyperball](super::hyperball) sample of `k` parallel tries; a
-//! try succeeds only if every party accepts it (its `ν`-scaled L2 norm stays
-//! within radius `r`). Combine recomputes `c̃ = H(μ ‖ w₁)`, checks
-//! `‖A·z − 2ᵈ·c·t₁ − w‖∞ < γ₂` and the hint weight, then assembles `(c̃, z, h)`.
+//! The 3-phase protocol masks each party's response with a constant-time
+//! [hyperball](super::hyperball) sample of `k` parallel tries; a try succeeds
+//! only if every party accepts it (its `ν`-scaled L2 norm stays within radius
+//! `r`). Combine recomputes `c̃ = H(μ ‖ w₁)`, checks `‖A·z − 2ᵈ·c·t₁ − w‖∞ < γ₂`
+//! and the hint weight, then assembles `(c̃, z, h)` — byte-identical to stock
+//! FIPS 204. The per-phase primitives ([`sample_w`], [`compute_response`],
+//! [`combine_try`]) are reused by the broker-driven signer in
+//! [`signing_party`](super::signing_party).
 //!
 //! All lattice crypto (NTT, challenge sampling, packing) comes from
-//! `purecrypto`; only the protocol orchestration and the hyperball rejection
-//! gate live here.
+//! `purecrypto`; only the orchestration and the hyperball rejection gate live
+//! here.
 
 use super::Error;
 use super::hyperball::{FVec, sample_hyperball};
@@ -21,8 +23,8 @@ use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{self, D, GAMMA2_88, ML_DSA_44, N, Poly, Q};
 use purecrypto::rng::RngCore;
 
-const L: usize = 4;
-const K: usize = 4;
+pub(crate) const L: usize = 4;
+pub(crate) const K: usize = 4;
 /// Outer attempts before giving up (each attempt runs `k` parallel tries with
 /// fresh hyperball randomness). Failure past this bound is astronomically
 /// unlikely for the tabulated parameters.
@@ -52,19 +54,12 @@ pub fn sign44(
         k.validate()?;
     }
     let kk = params.k as usize;
-    let nu = params.nu;
-    let (r_rad, rp_rad) = (params.r, params.rp);
-    let omega = ML_DSA_44.params.omega;
-    let tau = ML_DSA_44.params.tau;
-    let gamma1 = ML_DSA_44.params.gamma1;
-    let beta = ML_DSA_44.params.beta;
+    let (nu, rp_rad) = (params.nu, params.rp);
 
-    // Shared public material (identical across signers).
     let mu = compute_mu(&signers[0].tr, ctx, msg);
     let a = signers[0].matrix();
     let t1 = signers[0].t1;
 
-    // act = bitmask of the signing set's ids; recover each party's NTT shares.
     let mut act = 0u8;
     for k in signers {
         act |= 1 << k.id;
@@ -79,7 +74,7 @@ pub fn sign44(
     let nsign = signers.len();
 
     for _attempt in 0..MAX_ATTEMPTS {
-        // Phase 1: each party samples k hyperball points and computes w = A·r + e.
+        // Phase 1: each party samples k hyperball points and computes w = A·r+e.
         let mut stws: Vec<Vec<FVec>> = Vec::with_capacity(nsign);
         let mut w_by: Vec<Vec<[Poly; K]>> = Vec::with_capacity(nsign);
         for _ in 0..nsign {
@@ -88,28 +83,7 @@ pub fn sign44(
             let mut my_stws = Vec::with_capacity(kk);
             let mut my_w = Vec::with_capacity(kk);
             for tri in 0..kk {
-                let mut fv = FVec::zero();
-                sample_hyperball(&mut fv, rp_rad, nu, &rhop, tri as u16);
-
-                let mut rpoly = [Poly::zero(); L];
-                let mut epoly = [Poly::zero(); K];
-                fv.round_into(&mut rpoly, &mut epoly);
-
-                let mut rh = [Poly::zero(); L];
-                for j in 0..L {
-                    let mut h = rpoly[j];
-                    h.ntt();
-                    rh[j] = h;
-                }
-                let mut wi = [Poly::zero(); K];
-                for (i, wij) in wi.iter_mut().enumerate() {
-                    let mut acc = Poly::zero();
-                    for j in 0..L {
-                        acc = acc.add(&hazmat::ntt_mul(&a[i * L + j], &rh[j]));
-                    }
-                    acc.inv_ntt();
-                    *wij = acc.add(&epoly[i]);
-                }
+                let (fv, wi) = sample_w(&a, rp_rad, nu, &rhop, tri as u16);
                 my_stws.push(fv);
                 my_w.push(wi);
             }
@@ -132,39 +106,20 @@ pub fn sign44(
         for s in 0..nsign {
             let mut my_z = Vec::with_capacity(kk);
             for (tri, wf) in wfinal.iter().enumerate() {
-                let w1 = high_bits_vec(wf);
-                let ctilde = compute_ctilde(&mu, &w1);
-                let mut chat = hazmat::sample_challenge(&ctilde, tau);
-                chat.ntt();
-
-                let mut zpart = [Poly::zero(); L];
-                for j in 0..L {
-                    let mut p = hazmat::ntt_mul(&chat, &s1h[s][j]);
-                    p.inv_ntt();
-                    zpart[j] = p;
-                }
-                let mut ypart = [Poly::zero(); K];
-                for j in 0..K {
-                    let mut p = hazmat::ntt_mul(&chat, &s2h[s][j]);
-                    p.inv_ntt();
-                    ypart[j] = p;
-                }
-                let mut zf = FVec::from_polys(&zpart, &ypart);
-                zf.add_assign(&stws[s][tri]);
-                if zf.excess(r_rad, nu) {
-                    my_z.push(None);
-                } else {
-                    let mut z2 = [Poly::zero(); L];
-                    let mut yd = [Poly::zero(); K];
-                    zf.round_into(&mut z2, &mut yd);
-                    my_z.push(Some(z2));
-                }
+                my_z.push(compute_response(
+                    &s1h[s],
+                    &s2h[s],
+                    &stws[s][tri],
+                    wf,
+                    &mu,
+                    params,
+                ));
             }
             zresp.push(my_z);
         }
 
         // Combine: find a try every party accepted that also verifies.
-        for tri in 0..kk {
+        for (tri, wf) in wfinal.iter().enumerate() {
             if zresp.iter().any(|zs| zs[tri].is_none()) {
                 continue;
             }
@@ -175,71 +130,9 @@ pub fn sign44(
                     zfinal[j] = zfinal[j].add(&z[j]);
                 }
             }
-            if !z_within_bound(&zfinal, gamma1 - beta) {
-                continue;
+            if let Some(sig) = combine_try(&a, &t1, &mu, wf, &zfinal) {
+                return Ok(sig);
             }
-
-            let w1 = high_bits_vec(&wfinal[tri]);
-            let ctilde = compute_ctilde(&mu, &w1);
-            let mut chat = hazmat::sample_challenge(&ctilde, tau);
-            chat.ntt();
-
-            // A·z (NTT domain).
-            let mut zhat = [Poly::zero(); L];
-            for j in 0..L {
-                let mut h = zfinal[j];
-                h.ntt();
-                zhat[j] = h;
-            }
-            // f = InvNTT(A·z − 2ᵈ·c·t₁) − w.
-            let mut f = [Poly::zero(); K];
-            for (i, fi) in f.iter_mut().enumerate() {
-                let mut az = Poly::zero();
-                for j in 0..L {
-                    az = az.add(&hazmat::ntt_mul(&a[i * L + j], &zhat[j]));
-                }
-                let mut t1s = Poly::zero();
-                for j in 0..N {
-                    t1s.c[j] = t1[i].c[j] << D;
-                }
-                t1s.ntt();
-                let ct1 = hazmat::ntt_mul(&chat, &t1s);
-                let mut diff = az.sub(&ct1);
-                diff.inv_ntt();
-                *fi = diff.sub(&wfinal[tri][i]);
-            }
-            if vec_inf_norm(&f) >= GAMMA2_88 {
-                continue;
-            }
-
-            // Hint bits from the perturbed low parts.
-            let mut hints = [Poly::zero(); K];
-            let mut ones = 0usize;
-            for i in 0..K {
-                for j in 0..N {
-                    let (_, r0) = hazmat::decompose(wfinal[tri][i].c[j], GAMMA2_88);
-                    let w0mod = if r0 < 0 { Q - (-r0) as u32 } else { r0 as u32 };
-                    let mut z0 = w0mod + f[i].c[j];
-                    if z0 >= Q {
-                        z0 -= Q;
-                    }
-                    let h = make_hint_low_bits(z0, w1[i].c[j]);
-                    hints[i].c[j] = h;
-                    ones += h as usize;
-                }
-            }
-            if ones > omega {
-                continue;
-            }
-
-            // Assemble (c̃, z, h).
-            let mut sig = Vec::with_capacity(ML_DSA_44.params.sig);
-            sig.extend_from_slice(&ctilde);
-            for j in 0..L {
-                sig.extend_from_slice(&hazmat::pack_z(&zfinal[j], &ML_DSA_44.params));
-            }
-            sig.extend_from_slice(&hazmat::pack_hint(&hints, omega));
-            return Ok(sig);
         }
     }
 
@@ -267,8 +160,163 @@ pub fn sign44_checked(
     Ok(sig)
 }
 
+// --- shared per-phase primitives (also used by the broker signer) ----------
+
+/// Phase 1 for one try: draws a hyperball sample `fv` and computes this party's
+/// `w = A·r + e` (where `(r, e)` is the rounded split of `fv`). Returns
+/// `(fv, w)`; `fv` is retained as the response mask.
+pub(crate) fn sample_w(
+    a: &[Poly],
+    rp: f64,
+    nu: f64,
+    rhop: &[u8; 64],
+    tri: u16,
+) -> (FVec, [Poly; K]) {
+    let mut fv = FVec::zero();
+    sample_hyperball(&mut fv, rp, nu, rhop, tri);
+
+    let mut rpoly = [Poly::zero(); L];
+    let mut epoly = [Poly::zero(); K];
+    fv.round_into(&mut rpoly, &mut epoly);
+
+    let mut rh = [Poly::zero(); L];
+    for j in 0..L {
+        let mut h = rpoly[j];
+        h.ntt();
+        rh[j] = h;
+    }
+    let mut wi = [Poly::zero(); K];
+    for (i, wij) in wi.iter_mut().enumerate() {
+        let mut acc = Poly::zero();
+        for j in 0..L {
+            acc = acc.add(&hazmat::ntt_mul(&a[i * L + j], &rh[j]));
+        }
+        acc.inv_ntt();
+        *wij = acc.add(&epoly[i]);
+    }
+    (fv, wi)
+}
+
+/// Phase 2 for one try: this party's response `z_i = round(c·s1_i + y_i)`, or
+/// `None` if the masked response exceeds the `ν`-scaled radius `r` (rejected).
+/// `c` is derived from the aggregated `wfinal_tri`.
+pub(crate) fn compute_response(
+    s1h: &[Poly; L],
+    s2h: &[Poly; K],
+    stws_tri: &FVec,
+    wfinal_tri: &[Poly; K],
+    mu: &[u8; 64],
+    params: &ThresholdParams44,
+) -> Option<[Poly; L]> {
+    let tau = ML_DSA_44.params.tau;
+    let w1 = high_bits_vec(wfinal_tri);
+    let ctilde = compute_ctilde(mu, &w1);
+    let mut chat = hazmat::sample_challenge(&ctilde, tau);
+    chat.ntt();
+
+    let mut zpart = [Poly::zero(); L];
+    for j in 0..L {
+        let mut p = hazmat::ntt_mul(&chat, &s1h[j]);
+        p.inv_ntt();
+        zpart[j] = p;
+    }
+    let mut ypart = [Poly::zero(); K];
+    for j in 0..K {
+        let mut p = hazmat::ntt_mul(&chat, &s2h[j]);
+        p.inv_ntt();
+        ypart[j] = p;
+    }
+    let mut zf = FVec::from_polys(&zpart, &ypart);
+    zf.add_assign(stws_tri);
+    if zf.excess(params.r, params.nu) {
+        None
+    } else {
+        let mut z2 = [Poly::zero(); L];
+        let mut yd = [Poly::zero(); K];
+        zf.round_into(&mut z2, &mut yd);
+        Some(z2)
+    }
+}
+
+/// Combine for one try: given the aggregated `wfinal_tri` and `zfinal_tri`,
+/// run the FIPS 204 correctness checks (`‖z‖∞`, `‖A·z − 2ᵈ·c·t₁ − w‖∞`, hint
+/// weight) and, on success, return the assembled signature `(c̃ ‖ z ‖ h)`.
+pub(crate) fn combine_try(
+    a: &[Poly],
+    t1: &[Poly; K],
+    mu: &[u8; 64],
+    wfinal_tri: &[Poly; K],
+    zfinal_tri: &[Poly; L],
+) -> Option<Vec<u8>> {
+    let tau = ML_DSA_44.params.tau;
+    let gamma1 = ML_DSA_44.params.gamma1;
+    let beta = ML_DSA_44.params.beta;
+    let omega = ML_DSA_44.params.omega;
+
+    if !z_within_bound(zfinal_tri, gamma1 - beta) {
+        return None;
+    }
+    let w1 = high_bits_vec(wfinal_tri);
+    let ctilde = compute_ctilde(mu, &w1);
+    let mut chat = hazmat::sample_challenge(&ctilde, tau);
+    chat.ntt();
+
+    let mut zhat = [Poly::zero(); L];
+    for j in 0..L {
+        let mut h = zfinal_tri[j];
+        h.ntt();
+        zhat[j] = h;
+    }
+    let mut f = [Poly::zero(); K];
+    for (i, fi) in f.iter_mut().enumerate() {
+        let mut az = Poly::zero();
+        for j in 0..L {
+            az = az.add(&hazmat::ntt_mul(&a[i * L + j], &zhat[j]));
+        }
+        let mut t1s = Poly::zero();
+        for j in 0..N {
+            t1s.c[j] = t1[i].c[j] << D;
+        }
+        t1s.ntt();
+        let ct1 = hazmat::ntt_mul(&chat, &t1s);
+        let mut diff = az.sub(&ct1);
+        diff.inv_ntt();
+        *fi = diff.sub(&wfinal_tri[i]);
+    }
+    if vec_inf_norm(&f) >= GAMMA2_88 {
+        return None;
+    }
+
+    let mut hints = [Poly::zero(); K];
+    let mut ones = 0usize;
+    for i in 0..K {
+        for j in 0..N {
+            let (_, r0) = hazmat::decompose(wfinal_tri[i].c[j], GAMMA2_88);
+            let w0mod = if r0 < 0 { Q - (-r0) as u32 } else { r0 as u32 };
+            let mut z0 = w0mod + f[i].c[j];
+            if z0 >= Q {
+                z0 -= Q;
+            }
+            let h = make_hint_low_bits(z0, w1[i].c[j]);
+            hints[i].c[j] = h;
+            ones += h as usize;
+        }
+    }
+    if ones > omega {
+        return None;
+    }
+
+    let mut sig = Vec::with_capacity(ML_DSA_44.params.sig);
+    sig.extend_from_slice(&ctilde);
+    for j in 0..L {
+        sig.extend_from_slice(&hazmat::pack_z(&zfinal_tri[j], &ML_DSA_44.params));
+    }
+    sig.extend_from_slice(&hazmat::pack_hint(&hints, omega));
+    Some(sig)
+}
+
 /// μ = SHAKE256(tr ‖ 0x00 ‖ |ctx| ‖ ctx ‖ msg) — the FIPS 204 message digest.
-fn compute_mu(tr: &[u8; 64], ctx: &[u8], msg: &[u8]) -> [u8; 64] {
+pub(crate) fn compute_mu(tr: &[u8; 64], ctx: &[u8], msg: &[u8]) -> [u8; 64] {
     let mut input = Vec::with_capacity(64 + 2 + ctx.len() + msg.len());
     input.extend_from_slice(tr);
     input.push(0);
@@ -281,7 +329,7 @@ fn compute_mu(tr: &[u8; 64], ctx: &[u8], msg: &[u8]) -> [u8; 64] {
 }
 
 /// c̃ = SHAKE256(μ ‖ pack_w1(w₁)) → λ/4 bytes.
-fn compute_ctilde(mu: &[u8; 64], w1: &[Poly; K]) -> Vec<u8> {
+pub(crate) fn compute_ctilde(mu: &[u8; 64], w1: &[Poly; K]) -> Vec<u8> {
     let mut input = Vec::with_capacity(64 + K * 192);
     input.extend_from_slice(mu);
     for row in w1.iter() {
@@ -293,7 +341,7 @@ fn compute_ctilde(mu: &[u8; 64], w1: &[Poly; K]) -> Vec<u8> {
 }
 
 /// w₁ = HighBits(w) per coefficient (γ₂ = (q−1)/88).
-fn high_bits_vec(w: &[Poly; K]) -> [Poly; K] {
+pub(crate) fn high_bits_vec(w: &[Poly; K]) -> [Poly; K] {
     let mut out = [Poly::zero(); K];
     for i in 0..K {
         for j in 0..N {
@@ -346,7 +394,6 @@ mod tests {
             pk.verify(&sig, msg, ctx),
             "threshold signature must verify under the FIPS 204 public key"
         );
-        // Wrong message must not verify.
         assert!(!pk.verify(&sig, b"other message", ctx));
     }
 

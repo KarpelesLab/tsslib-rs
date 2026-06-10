@@ -33,12 +33,14 @@ mod keygen;
 mod packing;
 mod params;
 mod signing;
+mod signing_party;
 
 pub use key::{Key44, Share44};
 pub use keygen::trusted_dealer_keygen44;
 pub use params::{GetThresholdParams44Error, ThresholdParams44, get_threshold_params44};
 pub use purecrypto::mldsa::MlDsa44PublicKey as PublicKey;
 pub use signing::{sign44, sign44_checked};
+pub use signing_party::SigningParty44;
 
 /// Errors raised by the `mldsatss` protocol.
 #[derive(Debug)]
@@ -56,3 +58,9 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Error::Validation(format!("json: {e}"))
+    }
+}

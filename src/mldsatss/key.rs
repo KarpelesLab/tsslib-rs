@@ -21,6 +21,7 @@ pub struct Share44 {
 
 /// One party's threshold ML-DSA-44 key: public material (`rho`, `tr`, `t1`) plus
 /// the shares whose subset mask includes this party's `id`.
+#[derive(Clone)]
 pub struct Key44 {
     /// This party's 0-based id.
     pub id: u8,
