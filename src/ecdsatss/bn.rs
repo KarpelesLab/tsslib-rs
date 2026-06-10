@@ -126,6 +126,12 @@ pub(crate) fn divrem(a: &BoxedUint, b: &BoxedUint) -> (BoxedUint, BoxedUint) {
     a.divrem(b)
 }
 
+/// `a⁻¹ mod m` for an arbitrary modulus (even or odd) — extended Euclid, no
+/// Montgomery context. `None` if not invertible.
+pub(crate) fn mod_inv(a: &BoxedUint, m: &BoxedUint) -> Option<BoxedUint> {
+    inv_mod_boxed(&rem(a, m), m)
+}
+
 /// Greatest common divisor (binary GCD).
 pub(crate) fn gcd(a: &BoxedUint, b: &BoxedUint) -> BoxedUint {
     let mut a = a.clone();

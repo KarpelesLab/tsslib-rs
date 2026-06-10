@@ -17,6 +17,7 @@
 //! OT-based [`dklstss`](crate::dklstss), which avoids Paillier entirely.
 
 pub(crate) mod bn;
+pub mod paillier;
 #[cfg(test)]
 mod testvec;
 
