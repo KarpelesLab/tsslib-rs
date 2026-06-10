@@ -16,6 +16,7 @@ import (
 	"github.com/KarpelesLab/tss-lib/v2/crypto/dlnproof"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/facproof"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/modproof"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/paillier"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
@@ -162,6 +163,28 @@ func main() {
 		"W": s(mProof.W), "A": s(mProof.A), "B": s(mProof.B),
 		"X": mxs, "Z": mzs,
 	}
+
+	// --- a full ecdsatss.Key (save-format shape) ---------------------------
+	// Cryptographically arbitrary but structurally valid: on-curve points,
+	// real Paillier key, real ring-Pedersen params. Validates the JSON shape.
+	key := ecdsatss.NewKey(2)
+	key.PaillierSK = realSK
+	key.NTildei, key.H1i, key.H2i = ntilde, h1, h2
+	key.Alpha, key.Beta = x, big.NewInt(0).SetBytes([]byte{0x55, 0x66})
+	key.P, key.Q = pp, qp
+	key.Xi = big.NewInt(0).SetBytes([]byte{0xab, 0xcd, 0xef})
+	key.ShareID = big.NewInt(7)
+	key.Ks[0], key.Ks[1] = big.NewInt(7), big.NewInt(9)
+	key.NTildej[0], key.NTildej[1] = ntilde, ntilde
+	key.H1j[0], key.H1j[1] = h1, h1
+	key.H2j[0], key.H2j[1] = h2, h2
+	key.BigXj[0] = crypto.ScalarBaseMult(tss.S256(), big.NewInt(111))
+	key.BigXj[1] = crypto.ScalarBaseMult(tss.S256(), big.NewInt(222))
+	key.PaillierPKs[0], key.PaillierPKs[1] = realPK, realPK
+	key.ECDSAPub = crypto.ScalarBaseMult(tss.S256(), big.NewInt(333))
+	keyJSON, err := json.Marshal(key)
+	ck(err)
+	out["ecdsatss_key"] = json.RawMessage(keyJSON)
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
