@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -19,11 +20,81 @@ import (
 	"github.com/KarpelesLab/tss-lib/v2/crypto/dlnproof"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/facproof"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/modproof"
+	"github.com/KarpelesLab/tss-lib/v2/dklstss"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
 	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
+	"github.com/KarpelesLab/tss-lib/v2/frosttss"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/paillier"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
+
+// writeFrostFixtures runs a real 3-party (t=1) Go FROST(Ed25519) keygen and
+// writes each party's marshaled Key to src/frosttss/testdata/frost.json.
+func writeFrostFixtures() {
+	const partyCount, threshold = 3, 1
+	pIDs := tss.GenerateTestPartyIDs(partyCount)
+	hub := newTestHub(partyCount)
+	p2pCtx := tss.NewPeerContext(pIDs)
+	keygens := make([]*frosttss.Keygen, partyCount)
+	for i := 0; i < partyCount; i++ {
+		params := tss.NewParameters(tss.Edwards(), p2pCtx, pIDs[i], partyCount, threshold)
+		params.SetBroker(hub.brokers[i])
+		kg, err := frosttss.NewKeygen(context.Background(), params)
+		ck(err)
+		keygens[i] = kg
+	}
+	raw := make([]json.RawMessage, partyCount)
+	for i := 0; i < partyCount; i++ {
+		select {
+		case k := <-keygens[i].Done:
+			bz, err := json.Marshal(k)
+			ck(err)
+			raw[i] = json.RawMessage(bz)
+		case err := <-keygens[i].Err:
+			panic(fmt.Sprintf("frost party %d keygen error: %v", i, err))
+		case <-time.After(2 * time.Minute):
+			panic(fmt.Sprintf("frost party %d keygen timed out", i))
+		}
+	}
+	out := map[string]any{"keys": raw}
+	bz, err := json.MarshalIndent(out, "", "  ")
+	ck(err)
+	ck(os.WriteFile("../src/frosttss/testdata/frost.json", bz, 0o644))
+}
+
+// writeDklsFixtures runs a real 3-party (t=1) Go DKLs23 keygen and writes each
+// party's Save() JSON (the v4 wire format) to src/dklstss/testdata/dkls.json.
+func writeDklsFixtures() {
+	const partyCount, threshold = 3, 1
+	pIDs := tss.GenerateTestPartyIDs(partyCount)
+	hub := newTestHub(partyCount)
+	p2pCtx := tss.NewPeerContext(pIDs)
+	parties := make([]*dklstss.KeygenParty, partyCount)
+	for i := 0; i < partyCount; i++ {
+		params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[i], partyCount, threshold)
+		params.SetBroker(hub.brokers[i])
+		kg, err := dklstss.NewKeygen(context.Background(), params)
+		ck(err)
+		parties[i] = kg
+	}
+	raw := make([]json.RawMessage, partyCount)
+	for i, p := range parties {
+		select {
+		case k := <-p.Done:
+			var buf bytes.Buffer
+			ck(k.Save(&buf))
+			raw[i] = json.RawMessage(append([]byte(nil), bytes.TrimSpace(buf.Bytes())...))
+		case err := <-p.Err:
+			panic(fmt.Sprintf("dkls party %d keygen error: %v", i, err))
+		case <-time.After(5 * time.Minute):
+			panic(fmt.Sprintf("dkls party %d keygen timed out", i))
+		}
+	}
+	out := map[string]any{"keys": raw}
+	bz, err := json.MarshalIndent(out, "", "  ")
+	ck(err)
+	ck(os.WriteFile("../src/dklstss/testdata/dkls.json", bz, 0o644))
+}
 
 // runEddsaKeygen runs an in-process threshold-EdDSA keygen and returns the keys.
 func runEddsaKeygen(partyCount, threshold int) []*eddsatss.Key {
@@ -341,6 +412,8 @@ func main() {
 
 	// --- eddsatss (threshold EdDSA) fixtures, written to their own file -------
 	writeEddsaFixtures()
+	writeDklsFixtures()
+	writeFrostFixtures()
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
