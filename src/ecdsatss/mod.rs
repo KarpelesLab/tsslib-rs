@@ -26,7 +26,9 @@ pub(crate) mod modproof;
 pub(crate) mod mta;
 pub mod paillier;
 pub mod prepare;
+pub(crate) mod schnorr;
 pub(crate) mod secp;
+pub mod signing;
 #[cfg(test)]
 mod testvec;
 pub(crate) mod vss;

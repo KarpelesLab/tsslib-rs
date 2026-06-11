@@ -9,8 +9,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/KarpelesLab/tss-lib/v2/crypto"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/dlnproof"
@@ -20,6 +23,102 @@ import (
 	"github.com/KarpelesLab/tss-lib/v2/crypto/paillier"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
+
+// --- in-process hub broker (mirrors ecdsatss_test.go) ---
+
+type hubBroker struct {
+	partyIdx int
+	hub      *testHub
+	handlers map[string]tss.MessageReceiver
+	pending  map[string][]*tss.JsonMessage
+	mu       sync.Mutex
+}
+
+type testHub struct{ brokers []*hubBroker }
+
+func newTestHub(n int) *testHub {
+	h := &testHub{brokers: make([]*hubBroker, n)}
+	for i := 0; i < n; i++ {
+		h.brokers[i] = &hubBroker{
+			partyIdx: i, hub: h,
+			handlers: make(map[string]tss.MessageReceiver),
+			pending:  make(map[string][]*tss.JsonMessage),
+		}
+	}
+	return h
+}
+
+func (b *hubBroker) Connect(typ string, dest tss.MessageReceiver) {
+	b.mu.Lock()
+	b.handlers[typ] = dest
+	queued := b.pending[typ]
+	delete(b.pending, typ)
+	b.mu.Unlock()
+	for _, msg := range queued {
+		if err := dest.Receive(msg); err != nil {
+			fmt.Fprintf(os.Stderr, "hubBroker deliver err: %v\n", err)
+		}
+	}
+}
+
+func (b *hubBroker) Receive(msg *tss.JsonMessage) error {
+	if msg.From.Index == b.partyIdx {
+		if msg.To != nil {
+			return b.hub.brokers[msg.To.Index].Receive(msg)
+		}
+		for j, broker := range b.hub.brokers {
+			if j == b.partyIdx {
+				continue
+			}
+			if err := broker.Receive(msg); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	b.mu.Lock()
+	handler, ok := b.handlers[msg.Type]
+	if !ok {
+		b.pending[msg.Type] = append(b.pending[msg.Type], msg)
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
+	return handler.Receive(msg)
+}
+
+// runKeygen runs an in-process GG18 keygen and returns the per-party keys.
+func runKeygen(partyCount, threshold int) []*ecdsatss.Key {
+	preParams := make([]ecdsatss.LocalPreParams, partyCount)
+	for i := 0; i < partyCount; i++ {
+		pp, err := ecdsatss.GeneratePreParams(5*time.Minute, 4)
+		ck(err)
+		preParams[i] = *pp
+	}
+	pIDs := tss.GenerateTestPartyIDs(partyCount)
+	hub := newTestHub(partyCount)
+	p2pCtx := tss.NewPeerContext(pIDs)
+	keygens := make([]*ecdsatss.Keygen, partyCount)
+	for i := 0; i < partyCount; i++ {
+		params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[i], partyCount, threshold)
+		params.SetBroker(hub.brokers[i])
+		kg, err := ecdsatss.NewKeygen(context.Background(), params, preParams[i])
+		ck(err)
+		keygens[i] = kg
+	}
+	keys := make([]*ecdsatss.Key, partyCount)
+	for i := 0; i < partyCount; i++ {
+		select {
+		case k := <-keygens[i].Done:
+			keys[i] = k
+		case err := <-keygens[i].Err:
+			panic(fmt.Sprintf("party %d keygen error: %v", i, err))
+		case <-time.After(5 * time.Minute):
+			panic(fmt.Sprintf("party %d keygen timed out", i))
+		}
+	}
+	return keys
+}
 
 func s(n *big.Int) string { return n.String() }
 
@@ -185,6 +284,16 @@ func main() {
 	keyJSON, err := json.Marshal(key)
 	ck(err)
 	out["ecdsatss_key"] = json.RawMessage(keyJSON)
+
+	// --- a real 2-party (t=1) keygen result, for the Rust signing test ------
+	signKeys := runKeygen(2, 1)
+	rawKeys := make([]json.RawMessage, len(signKeys))
+	for i, k := range signKeys {
+		bz, err := json.Marshal(k)
+		ck(err)
+		rawKeys[i] = json.RawMessage(bz)
+	}
+	out["signing_keys"] = rawKeys
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

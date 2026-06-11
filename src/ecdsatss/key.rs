@@ -124,6 +124,34 @@ impl Key {
         )
     }
 
+    /// The party key integers `Ks` (VSS x-coordinates) as `BoxedUint`s.
+    pub(crate) fn ks(&self) -> Vec<BoxedUint> {
+        self.ks.iter().map(bn::from_dec).collect()
+    }
+
+    /// This party's secret share `Xi`.
+    pub(crate) fn xi(&self) -> BoxedUint {
+        bn::from_dec(&self.xi)
+    }
+
+    /// The public share points `BigXj`.
+    pub(crate) fn big_xj_points(&self) -> Option<Vec<super::secp::ProjectivePoint>> {
+        self.big_xj
+            .iter()
+            .map(|p| {
+                super::secp::from_coords(&bn::from_dec(&p.coords[0]), &bn::from_dec(&p.coords[1]))
+            })
+            .collect()
+    }
+
+    /// The group public key `ECDSAPub` as a curve point.
+    pub(crate) fn ecdsa_pub_point(&self) -> Option<super::secp::ProjectivePoint> {
+        super::secp::from_coords(
+            &bn::from_dec(&self.ecdsa_pub.coords[0]),
+            &bn::from_dec(&self.ecdsa_pub.coords[1]),
+        )
+    }
+
     /// Basic well-formedness: matching per-party slice lengths and the secp256k1
     /// curve on all points.
     pub fn validate_basic(&self) -> Result<(), Error> {

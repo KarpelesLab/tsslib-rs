@@ -37,6 +37,32 @@ pub(crate) struct RangeProofAlice {
     pub s2: BoxedUint,
 }
 
+impl RangeProofAlice {
+    /// Big-endian parts `Z, U, W, S, S1, S2` (Go `RangeProofAlice.Bytes`).
+    pub(crate) fn to_parts(&self) -> Vec<Vec<u8>> {
+        [&self.z, &self.u, &self.w, &self.s, &self.s1, &self.s2]
+            .iter()
+            .map(|x| bn::to_be(x))
+            .collect()
+    }
+
+    /// Inverse of [`RangeProofAlice::to_parts`].
+    pub(crate) fn from_parts(parts: &[Vec<u8>]) -> Option<RangeProofAlice> {
+        if parts.len() != 6 {
+            return None;
+        }
+        let g = |i: usize| bn::from_be(&parts[i]);
+        Some(RangeProofAlice {
+            z: g(0),
+            u: g(1),
+            w: g(2),
+            s: g(3),
+            s1: g(4),
+            s2: g(5),
+        })
+    }
+}
+
 /// Proves Alice's ciphertext `c = Enc(m; r)` encrypts an in-range `m`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prove_range_alice<R: RngCore>(
@@ -146,6 +172,52 @@ pub(crate) struct ProofBob {
     pub t1: BoxedUint,
     pub t2: BoxedUint,
     pub u: Option<ProjectivePoint>,
+}
+
+impl ProofBob {
+    /// Big-endian parts `Z, ZPrm, T, V, W, S, S1, S2, T1, T2` (10), plus `Ux, Uy`
+    /// (12 total) for the "with check" variant.
+    pub(crate) fn to_parts(&self) -> Vec<Vec<u8>> {
+        let mut out: Vec<Vec<u8>> = [
+            &self.z, &self.zprm, &self.t, &self.v, &self.w, &self.s, &self.s1, &self.s2, &self.t1,
+            &self.t2,
+        ]
+        .iter()
+        .map(|x| bn::to_be(x))
+        .collect();
+        if let Some(u) = &self.u {
+            let (ux, uy) = super::secp::coords(u);
+            out.push(bn::to_be(&ux));
+            out.push(bn::to_be(&uy));
+        }
+        out
+    }
+
+    /// Inverse of [`ProofBob::to_parts`]; 10 parts → basic, 12 → "with check".
+    pub(crate) fn from_parts(parts: &[Vec<u8>]) -> Option<ProofBob> {
+        if parts.len() != 10 && parts.len() != 12 {
+            return None;
+        }
+        let g = |i: usize| bn::from_be(&parts[i]);
+        let u = if parts.len() == 12 {
+            Some(super::secp::from_coords(&g(10), &g(11))?)
+        } else {
+            None
+        };
+        Some(ProofBob {
+            z: g(0),
+            zprm: g(1),
+            t: g(2),
+            v: g(3),
+            w: g(4),
+            s: g(5),
+            s1: g(6),
+            s2: g(7),
+            t1: g(8),
+            t2: g(9),
+            u,
+        })
+    }
 }
 
 /// Bob's proof; pass `x_point = Some(b·G)` for the "with check" variant.
