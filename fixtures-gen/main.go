@@ -20,9 +20,53 @@ import (
 	"github.com/KarpelesLab/tss-lib/v2/crypto/facproof"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/modproof"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
+	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
 	"github.com/KarpelesLab/tss-lib/v2/crypto/paillier"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
+
+// runEddsaKeygen runs an in-process threshold-EdDSA keygen and returns the keys.
+func runEddsaKeygen(partyCount, threshold int) []*eddsatss.Key {
+	pIDs := tss.GenerateTestPartyIDs(partyCount)
+	hub := newTestHub(partyCount)
+	p2pCtx := tss.NewPeerContext(pIDs)
+	keygens := make([]*eddsatss.Keygen, partyCount)
+	for i := 0; i < partyCount; i++ {
+		params := tss.NewParameters(tss.Edwards(), p2pCtx, pIDs[i], partyCount, threshold)
+		params.SetBroker(hub.brokers[i])
+		kg, err := eddsatss.NewKeygen(context.Background(), params)
+		ck(err)
+		keygens[i] = kg
+	}
+	keys := make([]*eddsatss.Key, partyCount)
+	for i := 0; i < partyCount; i++ {
+		select {
+		case k := <-keygens[i].Done:
+			keys[i] = k
+		case err := <-keygens[i].Err:
+			panic(fmt.Sprintf("eddsa party %d keygen error: %v", i, err))
+		case <-time.After(2 * time.Minute):
+			panic(fmt.Sprintf("eddsa party %d keygen timed out", i))
+		}
+	}
+	return keys
+}
+
+// writeEddsaFixtures emits a real 2-party (t=1) EdDSA keygen result for the Rust
+// eddsatss tests, written to src/eddsatss/testdata/eddsa.json.
+func writeEddsaFixtures() {
+	keys := runEddsaKeygen(2, 1)
+	raw := make([]json.RawMessage, len(keys))
+	for i, k := range keys {
+		bz, err := json.Marshal(k)
+		ck(err)
+		raw[i] = json.RawMessage(bz)
+	}
+	out := map[string]any{"signing_keys": raw}
+	bz, err := json.MarshalIndent(out, "", "  ")
+	ck(err)
+	ck(os.WriteFile("../src/eddsatss/testdata/eddsa.json", bz, 0o644))
+}
 
 // --- in-process hub broker (mirrors ecdsatss_test.go) ---
 
@@ -294,6 +338,9 @@ func main() {
 		rawKeys[i] = json.RawMessage(bz)
 	}
 	out["signing_keys"] = rawKeys
+
+	// --- eddsatss (threshold EdDSA) fixtures, written to their own file -------
+	writeEddsaFixtures()
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

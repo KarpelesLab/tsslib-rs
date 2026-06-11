@@ -54,3 +54,6 @@ pub mod dklstss;
 
 #[cfg(feature = "ecdsatss")]
 pub mod ecdsatss;
+
+#[cfg(feature = "eddsatss")]
+pub mod eddsatss;
