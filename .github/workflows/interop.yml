@@ -44,10 +44,17 @@ jobs:
         with:
           path: tsslib-rs
 
-      - name: Check out the Go tss-lib reference
+      # Pinned to the exact commit the Rust port was validated against. The latest
+      # published tag (v2.3.0) predates `913bbb5` (dlnproof/MtA tagged-hash
+      # Fiat-Shamir), which the Rust side matches — so pinning that tag would make
+      # Go emit the older proof format and fail interop. Once the ecdsatss changes
+      # are released in a tag, drop this checkout, set `require .../tss-lib/v2
+      # vX.Y.Z` in fixtures-gen/go.mod, and remove the `replace` directive.
+      - name: Check out the Go tss-lib reference (pinned)
         uses: actions/checkout@v6
         with:
           repository: KarpelesLab/tss-lib
+          ref: 817ef8bf81e84681e0d9126dfd000428373343be
           path: tss-lib
 
       - name: Install Go
