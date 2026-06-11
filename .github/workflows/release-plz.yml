@@ -36,7 +36,10 @@ jobs:
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use the stored release-plz token (org-level secret) so the release PR
+          # and any tags/releases it creates can trigger other workflows — the
+          # default GITHUB_TOKEN is blocked from triggering workflow runs.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   release-plz-pr:
@@ -56,4 +59,7 @@ jobs:
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use the stored release-plz token (org-level secret) so the release PR
+          # and any tags/releases it creates can trigger other workflows — the
+          # default GITHUB_TOKEN is blocked from triggering workflow runs.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
