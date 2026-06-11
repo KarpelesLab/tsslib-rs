@@ -14,7 +14,7 @@ both languages. All low-level cryptography is provided by
 [`purecrypto`](https://github.com/KarpelesLab/purecrypto) — this crate adds no
 hand-rolled field arithmetic.
 
-> **Status: all four protocols implemented.** Every scheme below produces
+> **Status: all five protocols implemented.** Every scheme below produces
 > signatures that verify under the corresponding stock verifier (Ed25519,
 > ristretto255 Schnorr, secp256k1 ECDSA, FIPS-204 ML-DSA-44). See the per-module
 > notes for which operations are broker-driven vs. in-process.
@@ -27,6 +27,7 @@ hand-rolled field arithmetic.
 | `frostristretto255tss`   | FROST(ristretto255, SHA-512) — RFC 9591 | Ristretto255 signatures | ristretto255    |
 | `mldsatss`               | Threshold ML-DSA-44 — FIPS 204          | ML-DSA signatures       | ML-DSA-44       |
 | `dklstss`                | Threshold ECDSA — DKLs23                | ECDSA signatures        | secp256k1       |
+| `ecdsatss`               | Threshold ECDSA — GG18/GG20             | ECDSA signatures        | secp256k1       |
 
 The FROST protocols and `dklstss` provide keygen, signing, resharing/refresh,
 and HD derivation routed through a caller-supplied [`tss::MessageBroker`];
@@ -34,7 +35,11 @@ and HD derivation routed through a caller-supplied [`tss::MessageBroker`];
 (`presign` / `sign_with_presign` with single-use enforcement). `mldsatss`
 (`2 ≤ t ≤ n ≤ 6`) provides trusted-dealer keygen, sync + broker-driven threshold
 signing, and an **experimental** dealerless DKG (`DkgParty44` — no trusted
-dealer; not independently reviewed). Each module is gated behind a like-named
+dealer; not independently reviewed). `ecdsatss` is a broker-driven port of the
+legacy GG18/GG20 Paillier+MtA protocol (keygen, 9-round signing, resharing, and
+1-of-1 `import_key`) provided for **migrating existing Go `tss-lib/ecdsatss` keys**
+— it loads those save files byte-for-byte and signs with them; new deployments
+should prefer `dklstss`. Each module is gated behind a like-named
 cargo feature, all enabled by default:
 
 ```toml
@@ -52,6 +57,7 @@ src/
   frostristretto255tss/    FROST(ristretto255)       keygen · sign · reshare
   mldsatss/                Threshold ML-DSA-44       dealer + DKG keygen · sync/broker sign (+ hyperball)
   dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh · presign
+  ecdsatss/                Threshold ECDSA (GG18)    broker keygen/sign/reshare · import · Go save-data compat
 ```
 
 ## Security
@@ -60,7 +66,11 @@ Peer **authentication** is out of scope: the broker is trusted to authenticate
 message origin (pin peer identities, sign transport messages, reject tampered
 bytes). Peer **equivocation** is caught cryptographically where the protocol
 provides an echo-broadcast phase (DKLs keygen/refresh/reshare). The `mldsatss`
-protocol is an academic-grade prototype and is **not** production-ready.
+protocol is an academic-grade prototype and is **not** production-ready. The
+`ecdsatss` (GG18/GG20) port is **experimental and not independently audited** —
+the Paillier + MtA range-proof family has a history of catastrophic
+implementation bugs (TSSHOCK, Alpha-Rays); it exists to migrate legacy keys, and
+new deployments should use `dklstss`.
 
 ## Cryptography
 
