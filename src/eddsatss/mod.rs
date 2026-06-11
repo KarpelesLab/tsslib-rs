@@ -17,12 +17,14 @@ pub(crate) mod ed;
 pub mod key;
 pub mod keygen;
 pub(crate) mod schnorr;
+pub mod signing;
 #[cfg(test)]
 mod testvec;
 pub(crate) mod vss;
 
 pub use key::Key;
 pub use keygen::KeygenParty;
+pub use signing::{SignatureData, SigningParty};
 
 /// Errors raised by the `eddsatss` protocol.
 #[derive(Debug)]
