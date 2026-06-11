@@ -1,7 +1,7 @@
 //! GG18 key save-data, JSON-compatible with Go `ecdsatss.Key` /
 //! `ecdsa/keygen.LocalPartySaveData`, so legacy serialized keys load directly.
 //!
-//! Go marshals `*big.Int` as a bare JSON number ([`BigUintDec`]), `[]byte` as
+//! Go marshals `*big.Int` as a bare JSON number (`BigUintDec`), `[]byte` as
 //! base64, `crypto.ECPoint` as `{"Curve","Coords":[X,Y]}`, and the Paillier keys
 //! by their (capitalized, embedded) field names. Field order is irrelevant to
 //! JSON; only names/shapes must match.

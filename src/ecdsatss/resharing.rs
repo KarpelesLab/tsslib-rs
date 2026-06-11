@@ -1,4 +1,4 @@
-//! GG18 key resharing over a [`MessageBroker`] (5 rounds, old + new committees).
+//! GG18 key resharing over a `MessageBroker` (5 rounds, old + new committees).
 //!
 //! Port of Go `ecdsatss/resharing.go`. The old committee re-splits its secret to
 //! a fresh `new_threshold`-of-`new_party_count` committee while preserving

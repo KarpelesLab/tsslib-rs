@@ -33,6 +33,13 @@ pub(crate) mod secp;
 pub mod signing;
 #[cfg(test)]
 mod testvec;
+
+pub use import::import_key;
+pub use key::Key;
+pub use keygen::KeygenParty;
+pub use prepare::LocalPreParams;
+pub use resharing::ResharingParty;
+pub use signing::{SignatureData, SigningParty};
 pub(crate) mod vss;
 
 /// Errors raised by the `ecdsatss` protocol.

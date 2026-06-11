@@ -1,4 +1,4 @@
-//! GG18 threshold ECDSA signing over a [`MessageBroker`] (9 rounds + finalize).
+//! GG18 threshold ECDSA signing over a `MessageBroker` (9 rounds + finalize).
 //!
 //! Port of Go `ecdsatss/signing.go`. Produces a standard ECDSA signature
 //! `(r, s)` verifiable against the group public key. The committee must be

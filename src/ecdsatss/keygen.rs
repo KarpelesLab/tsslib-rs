@@ -1,4 +1,4 @@
-//! GG18 distributed key generation over a [`MessageBroker`] (4 rounds).
+//! GG18 distributed key generation over a `MessageBroker` (4 rounds).
 //!
 //! Port of Go `ecdsatss/keygen.go`. Round 1 broadcasts a hash commitment to the
 //! dealer's Feldman-VSS polynomial commitments plus this party's Paillier modulus
