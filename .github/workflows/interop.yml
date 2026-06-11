@@ -5,6 +5,10 @@ name: Go/Rust interop (ecdsatss)
 # 2-party keygen result) are regenerated FROM the Go implementation on each run,
 # then the Rust tests consume them — proving the migration path (export a key from
 # Go, load it in Rust, and sign).
+#
+# The Go reference is consumed as a normal published module
+# (github.com/KarpelesLab/tss-lib/v2, pinned in fixtures-gen/go.mod); no sibling
+# checkout is needed. Bump that version to test against a newer Go release.
 
 on:
   push:
@@ -37,25 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      # Lay the two repos out as siblings so the fixture generator's
-      # `replace github.com/KarpelesLab/tss-lib/v2 => ../../tss-lib` resolves.
-      - name: Check out tsslib-rs
-        uses: actions/checkout@v6
-        with:
-          path: tsslib-rs
-
-      # Pinned to the exact commit the Rust port was validated against. The latest
-      # published tag (v2.3.0) predates `913bbb5` (dlnproof/MtA tagged-hash
-      # Fiat-Shamir), which the Rust side matches — so pinning that tag would make
-      # Go emit the older proof format and fail interop. Once the ecdsatss changes
-      # are released in a tag, drop this checkout, set `require .../tss-lib/v2
-      # vX.Y.Z` in fixtures-gen/go.mod, and remove the `replace` directive.
-      - name: Check out the Go tss-lib reference (pinned)
-        uses: actions/checkout@v6
-        with:
-          repository: KarpelesLab/tss-lib
-          ref: 817ef8bf81e84681e0d9126dfd000428373343be
-          path: tss-lib
+      - uses: actions/checkout@v6
 
       - name: Install Go
         uses: actions/setup-go@v5
@@ -67,27 +53,24 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: tsslib-rs
 
-      # Regenerate every fixture from the CURRENT Go implementation — including a
-      # real in-process 2-party (t=1) Go keygen — overwriting the committed copy.
+      # Regenerate every fixture from the pinned Go release (fixtures-gen/go.mod) —
+      # including a real in-process 2-party (t=1) Go keygen — overwriting the
+      # committed copy.
       - name: Generate fixtures from Go
-        working-directory: tsslib-rs/fixtures-gen
+        working-directory: fixtures-gen
         run: |
-          GOFLAGS=-mod=mod go run . > ../src/ecdsatss/testdata/gg18.json
+          go run . > ../src/ecdsatss/testdata/gg18.json
           echo "Regenerated gg18.json ($(wc -c < ../src/ecdsatss/testdata/gg18.json) bytes)"
 
       # Fast Go->Rust proof interop: the Rust verifiers must accept Go-emitted
       # Paillier, DLN, fac, and mod proofs, and load a Go-marshaled Key.
       - name: Rust verifies Go proof + key vectors
-        working-directory: tsslib-rs
         run: "cargo test --features ecdsatss ecdsatss:: -- --nocapture"
 
       # End-to-end migration path: load the REAL Go-generated keys and produce a
       # standard ECDSA signature that verifies under the group public key.
       - name: Rust signs with real Go keys
-        working-directory: tsslib-rs
         run: cargo test --features ecdsatss go_keys_sign_and_verify -- --ignored --nocapture
 
       # Surface the regenerated fixture's shape (informational — fixtures use
@@ -95,7 +78,6 @@ jobs:
       # generator still emits every section the Rust tests expect).
       - name: Report regenerated fixture shape
         if: always()
-        working-directory: tsslib-rs
         run: |
           jq 'keys' src/ecdsatss/testdata/gg18.json
           jq '.signing_keys | length' src/ecdsatss/testdata/gg18.json
