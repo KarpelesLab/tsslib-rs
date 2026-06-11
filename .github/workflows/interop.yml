@@ -17,6 +17,7 @@ on:
       - "src/ecdsatss/**"
       - "src/eddsatss/**"
       - "src/dklstss/**"
+      - "src/frosttss/**"
       - "fixtures-gen/**"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
@@ -25,6 +26,7 @@ on:
       - "src/ecdsatss/**"
       - "src/eddsatss/**"
       - "src/dklstss/**"
+      - "src/frosttss/**"
       - "fixtures-gen/**"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
@@ -70,6 +72,7 @@ jobs:
           echo "gg18.json:  $(wc -c < ../src/ecdsatss/testdata/gg18.json) bytes"
           echo "eddsa.json: $(wc -c < ../src/eddsatss/testdata/eddsa.json) bytes"
           echo "dkls.json:  $(wc -c < ../src/dklstss/testdata/dkls.json) bytes"
+          echo "frost.json: $(wc -c < ../src/frosttss/testdata/frost.json) bytes"
 
       # Fast Go->Rust proof interop: the Rust verifiers must accept Go-emitted
       # Paillier, DLN, fac, and mod proofs, and load a Go-marshaled Key.
@@ -90,6 +93,11 @@ jobs:
       # OT-extension state) and produce an ECDSA signature.
       - name: Rust loads Go keys + signs (dklstss)
         run: "cargo test --features dklstss dklstss::serialize -- --nocapture"
+
+      # frosttss (FROST-Ed25519): load real Go-generated keys, round-trip the
+      # save format, and reconstruct the group key from the shares.
+      - name: Rust loads + round-trips Go keys (frosttss)
+        run: "cargo test --features frosttss frosttss::key -- --nocapture"
 
       # Surface the regenerated fixture's shape (informational — fixtures use
       # fresh randomness so values differ run-to-run; this just confirms the Go

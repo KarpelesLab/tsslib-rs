@@ -298,3 +298,52 @@ mod tests {
         assert_eq!(KEY_VERSION, 2);
     }
 }
+
+#[cfg(test)]
+mod go_interop_tests {
+    use super::*;
+    use crate::frost::binding::lagrange_coefficient;
+
+    /// Loads the real Go-generated FROST(Ed25519) keys, round-trips them, and
+    /// confirms the shares reconstruct to the group public key.
+    #[test]
+    fn go_keys_load_round_trip_and_reconstruct() {
+        let raw = include_str!("testdata/frost.json");
+        let doc: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let keys: Vec<Key> = doc["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| Key::from_json(&serde_json::to_string(v).unwrap()).expect("load Go FROST key"))
+            .collect();
+        assert_eq!(keys.len(), 3);
+
+        for k in &keys {
+            k.validate_basic().unwrap();
+            // All parties agree on the group public key.
+            assert!(Ed25519::eq(&k.group_public_key, &keys[0].group_public_key));
+            // Lossless JSON round-trip through the Rust writer.
+            let back = Key::from_json(&k.to_json().unwrap()).unwrap();
+            assert!(bool::from(k.xi.ct_eq(&back.xi)));
+            assert!(Ed25519::eq(&k.group_public_key, &back.group_public_key));
+            assert_eq!(k.ks, back.ks);
+            assert_eq!(k.chain_code, back.chain_code);
+        }
+
+        // Any t+1 = 2 shares Lagrange-reconstruct to the group secret.
+        let subset = [&keys[0], &keys[1]];
+        let ids: Vec<Vec<u8>> = subset
+            .iter()
+            .map(|k| k.share_id.as_be_bytes().to_vec())
+            .collect();
+        let mut secret = Scalar::ZERO;
+        for k in &subset {
+            let lambda = lagrange_coefficient::<Ed25519>(k.share_id.as_be_bytes(), &ids).unwrap();
+            secret = secret.add(&lambda.mul(&k.xi));
+        }
+        assert!(Ed25519::eq(
+            &Ed25519::mul_base(&secret),
+            &keys[0].group_public_key
+        ));
+    }
+}
