@@ -14,16 +14,20 @@
 
 pub(crate) mod commit;
 pub(crate) mod ed;
+pub mod import;
 pub mod key;
 pub mod keygen;
+pub mod resharing;
 pub(crate) mod schnorr;
 pub mod signing;
 #[cfg(test)]
 mod testvec;
 pub(crate) mod vss;
 
+pub use import::import_key;
 pub use key::Key;
 pub use keygen::KeygenParty;
+pub use resharing::ResharingParty;
 pub use signing::{SignatureData, SigningParty};
 
 /// Errors raised by the `eddsatss` protocol.
