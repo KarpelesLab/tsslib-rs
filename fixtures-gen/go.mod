@@ -2,7 +2,7 @@ module gg18fixtures
 
 go 1.25.0
 
-require github.com/KarpelesLab/tss-lib/v2 v2.0.0
+require github.com/KarpelesLab/tss-lib/v2 v2.3.1
 
 require (
 	github.com/KarpelesLab/edwards25519 v1.1.7 // indirect
@@ -16,6 +16,3 @@ require (
 	go.uber.org/zap v1.16.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 )
-
-// Local checkout of the Go reference. Adjust if tss-lib lives elsewhere.
-replace github.com/KarpelesLab/tss-lib/v2 => ../../tss-lib

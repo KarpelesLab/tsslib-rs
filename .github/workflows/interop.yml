@@ -1,0 +1,83 @@
+name: Go/Rust interop (ecdsatss)
+
+# Validates that the Rust `ecdsatss` (GG18/GG20) port stays compatible with the
+# Go `tss-lib/ecdsatss` reference: fixtures (Paillier/ZK-proof vectors and a real
+# 2-party keygen result) are regenerated FROM the Go implementation on each run,
+# then the Rust tests consume them — proving the migration path (export a key from
+# Go, load it in Rust, and sign).
+#
+# The Go reference is consumed as a normal published module
+# (github.com/KarpelesLab/tss-lib/v2, pinned in fixtures-gen/go.mod); no sibling
+# checkout is needed. Bump that version to test against a newer Go release.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/ecdsatss/**"
+      - "fixtures-gen/**"
+      - ".github/workflows/interop.yml"
+      - "Cargo.toml"
+  pull_request:
+    paths:
+      - "src/ecdsatss/**"
+      - "fixtures-gen/**"
+      - ".github/workflows/interop.yml"
+      - "Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # purecrypto is a git dependency; fetch it via the git CLI for reliable
+  # anonymous HTTPS cloning of the public repo.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  interop:
+    name: Go fixtures -> Rust verify + sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      # Regenerate every fixture from the pinned Go release (fixtures-gen/go.mod) —
+      # including a real in-process 2-party (t=1) Go keygen — overwriting the
+      # committed copy.
+      - name: Generate fixtures from Go
+        working-directory: fixtures-gen
+        run: |
+          go run . > ../src/ecdsatss/testdata/gg18.json
+          echo "Regenerated gg18.json ($(wc -c < ../src/ecdsatss/testdata/gg18.json) bytes)"
+
+      # Fast Go->Rust proof interop: the Rust verifiers must accept Go-emitted
+      # Paillier, DLN, fac, and mod proofs, and load a Go-marshaled Key.
+      - name: Rust verifies Go proof + key vectors
+        run: "cargo test --features ecdsatss ecdsatss:: -- --nocapture"
+
+      # End-to-end migration path: load the REAL Go-generated keys and produce a
+      # standard ECDSA signature that verifies under the group public key.
+      - name: Rust signs with real Go keys
+        run: cargo test --features ecdsatss go_keys_sign_and_verify -- --ignored --nocapture
+
+      # Surface the regenerated fixture's shape (informational — fixtures use
+      # fresh randomness so values differ run-to-run; this just confirms the Go
+      # generator still emits every section the Rust tests expect).
+      - name: Report regenerated fixture shape
+        if: always()
+        run: |
+          jq 'keys' src/ecdsatss/testdata/gg18.json
+          jq '.signing_keys | length' src/ecdsatss/testdata/gg18.json
