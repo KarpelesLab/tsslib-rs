@@ -92,6 +92,11 @@ fn low_u64(n: &BoxedUint) -> u64 {
     n.as_limbs().first().copied().unwrap_or(0)
 }
 
+/// The low 64 bits of `n` as a `u64` (for small length prefixes).
+pub(crate) fn to_u64(n: &BoxedUint) -> u64 {
+    low_u64(n)
+}
+
 /// Bit `i` of `n` (LSB-first), as 0 or 1.
 pub(crate) fn bit(n: &BoxedUint, i: usize) -> u8 {
     let limb = i / 64;
@@ -354,6 +359,26 @@ pub(crate) fn generate_safe_prime<R: RngCore>(bits: usize, rng: &mut R) -> Boxed
         let p = add(&add(&q, &q), &one());
         if is_probable_prime(&q, rng, rounds) && is_probable_prime(&p, rng, rounds) {
             return p;
+        }
+    }
+}
+
+/// A Germain/safe-prime pair `(q, 2q+1)` where `q` has `bits-1` bits and the safe
+/// prime has `bits` bits. Both are prime.
+pub(crate) fn generate_germain<R: RngCore>(bits: usize, rng: &mut R) -> (BoxedUint, BoxedUint) {
+    assert!(bits >= 4);
+    let rounds = 20;
+    loop {
+        let mut q = rand_bits(bits - 1, rng);
+        if mod_small(&q, 3) != 2 {
+            continue;
+        }
+        if !q.is_odd() {
+            q = add(&q, &one());
+        }
+        let p = add(&add(&q, &q), &one());
+        if is_probable_prime(&q, rng, rounds) && is_probable_prime(&p, rng, rounds) {
+            return (q, p);
         }
     }
 }

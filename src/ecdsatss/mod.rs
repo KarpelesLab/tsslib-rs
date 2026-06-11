@@ -17,15 +17,19 @@
 //! OT-based [`dklstss`](crate::dklstss), which avoids Paillier entirely.
 
 pub(crate) mod bn;
+pub(crate) mod commit;
 pub(crate) mod dlnproof;
 pub(crate) mod facproof;
 pub mod key;
+pub mod keygen;
 pub(crate) mod modproof;
 pub(crate) mod mta;
 pub mod paillier;
+pub mod prepare;
 pub(crate) mod secp;
 #[cfg(test)]
 mod testvec;
+pub(crate) mod vss;
 
 /// Errors raised by the `ecdsatss` protocol.
 #[derive(Debug)]

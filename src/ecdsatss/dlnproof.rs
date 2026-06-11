@@ -18,6 +18,27 @@ pub(crate) struct DlnProof {
     pub t: Vec<BoxedUint>,
 }
 
+impl DlnProof {
+    /// Big-endian parts: 128 `alpha` values followed by 128 `t` values.
+    pub(crate) fn to_parts(&self) -> Vec<Vec<u8>> {
+        self.alpha
+            .iter()
+            .chain(self.t.iter())
+            .map(bn::to_be)
+            .collect()
+    }
+
+    /// Inverse of [`DlnProof::to_parts`].
+    pub(crate) fn from_parts(parts: &[Vec<u8>]) -> Option<DlnProof> {
+        if parts.len() != 2 * ITERATIONS {
+            return None;
+        }
+        let alpha = parts[..ITERATIONS].iter().map(|b| bn::from_be(b)).collect();
+        let t = parts[ITERATIONS..].iter().map(|b| bn::from_be(b)).collect();
+        Some(DlnProof { alpha, t })
+    }
+}
+
 /// Bit `i` (LSB-first) of the 32-byte challenge interpreted as a big-endian int.
 fn challenge_bit(c: &[u8; 32], i: usize) -> u8 {
     (c[31 - i / 8] >> (i % 8)) & 1

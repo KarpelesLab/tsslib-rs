@@ -24,6 +24,35 @@ pub(crate) struct ProofMod {
     pub z: Vec<BoxedUint>, // ITERATIONS
 }
 
+impl ProofMod {
+    /// Big-endian parts: `W, A, B`, then 80 `X` values, then 80 `Z` values.
+    pub(crate) fn to_parts(&self) -> Vec<Vec<u8>> {
+        let mut out = vec![bn::to_be(&self.w), bn::to_be(&self.a), bn::to_be(&self.b)];
+        out.extend(self.x.iter().map(bn::to_be));
+        out.extend(self.z.iter().map(bn::to_be));
+        out
+    }
+
+    /// Inverse of [`ProofMod::to_parts`].
+    pub(crate) fn from_parts(parts: &[Vec<u8>]) -> Option<ProofMod> {
+        if parts.len() != 3 + 2 * ITERATIONS {
+            return None;
+        }
+        let w = bn::from_be(&parts[0]);
+        let a = bn::from_be(&parts[1]);
+        let b = bn::from_be(&parts[2]);
+        let x = parts[3..3 + ITERATIONS]
+            .iter()
+            .map(|p| bn::from_be(p))
+            .collect();
+        let z = parts[3 + ITERATIONS..]
+            .iter()
+            .map(|p| bn::from_be(p))
+            .collect();
+        Some(ProofMod { w, x, a, b, z })
+    }
+}
+
 /// `Jacobi(v, n) == 1`.
 fn is_qr(v: &BoxedUint, n: &BoxedUint) -> bool {
     bn::jacobi(v, n) == 1

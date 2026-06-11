@@ -5,7 +5,7 @@
 
 use super::bn;
 use purecrypto::bignum::BoxedUint;
-use purecrypto::ec::secp256k1::{AffinePoint, ProjectivePoint, Scalar};
+pub(crate) use purecrypto::ec::secp256k1::{AffinePoint, ProjectivePoint, Scalar};
 
 /// A `BoxedUint` (reduced mod the group order) as a secp256k1 scalar.
 pub(crate) fn scalar(n: &BoxedUint) -> Scalar {
@@ -14,6 +14,53 @@ pub(crate) fn scalar(n: &BoxedUint) -> Scalar {
     let mut b = [0u8; 32];
     b[32 - be.len()..].copy_from_slice(&be);
     Scalar::from_bytes_be_reduce(&b)
+}
+
+/// A scalar as its minimal big-endian bytes (Go `big.Int.Bytes()`).
+pub(crate) fn scalar_to_be(s: &Scalar) -> Vec<u8> {
+    let b = s.to_bytes_be();
+    let off = b.iter().position(|&x| x != 0).unwrap_or(b.len());
+    b[off..].to_vec()
+}
+
+/// A scalar from big-endian bytes, reduced mod the group order.
+pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
+    let mut b = [0u8; 32];
+    let n = be.len().min(32);
+    b[32 - n..].copy_from_slice(&be[be.len() - n..]);
+    Scalar::from_bytes_be_reduce(&b)
+}
+
+/// A scalar as a `BoxedUint` (its canonical residue mod the group order).
+pub(crate) fn scalar_to_uint(s: &Scalar) -> BoxedUint {
+    bn::from_be(&scalar_to_be(s))
+}
+
+/// secp256k1 field prime `P`.
+pub(crate) fn field_prime() -> BoxedUint {
+    bn::from_be(&hex32(
+        "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f",
+    ))
+}
+
+/// secp256k1 generator coordinates `(Gx, Gy)`.
+pub(crate) fn generator_coords() -> (BoxedUint, BoxedUint) {
+    (
+        bn::from_be(&hex32(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )),
+        bn::from_be(&hex32(
+            "483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8",
+        )),
+    )
+}
+
+fn hex32(s: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
+    }
+    out
 }
 
 /// `n·G`.

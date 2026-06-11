@@ -28,6 +28,49 @@ pub(crate) struct ProofFac {
     pub v: BoxedUint,
 }
 
+impl ProofFac {
+    /// Big-endian parts in field order `P,Q,A,B,T,σ,Z1,Z2,W1,W2,V`.
+    pub(crate) fn to_parts(&self) -> Vec<Vec<u8>> {
+        [
+            &self.p,
+            &self.q,
+            &self.a,
+            &self.b,
+            &self.t,
+            &self.sigma,
+            &self.z1,
+            &self.z2,
+            &self.w1,
+            &self.w2,
+            &self.v,
+        ]
+        .iter()
+        .map(|x| bn::to_be(x))
+        .collect()
+    }
+
+    /// Inverse of [`ProofFac::to_parts`].
+    pub(crate) fn from_parts(parts: &[Vec<u8>]) -> Option<ProofFac> {
+        if parts.len() != 11 {
+            return None;
+        }
+        let g = |i: usize| bn::from_be(&parts[i]);
+        Some(ProofFac {
+            p: g(0),
+            q: g(1),
+            a: g(2),
+            b: g(3),
+            t: g(4),
+            sigma: g(5),
+            z1: g(6),
+            z2: g(7),
+            w1: g(8),
+            w2: g(9),
+            v: g(10),
+        })
+    }
+}
+
 /// `e = SHA512_256i_TAGGED(session, N0, NCap, s, t, P, Q, A, B, T, σ) mod q`.
 fn challenge(
     session: &[u8],
