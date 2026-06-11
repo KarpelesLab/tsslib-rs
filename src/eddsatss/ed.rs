@@ -42,6 +42,37 @@ pub(crate) fn scalar_to_be(s: &Scalar) -> Vec<u8> {
     be
 }
 
+/// The edwards25519 field prime `P = 2^255 − 19`, big-endian.
+pub(crate) fn field_prime_be() -> Vec<u8> {
+    hex_be("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed")
+}
+
+/// The edwards25519 group order `L`, big-endian.
+pub(crate) fn order_be() -> Vec<u8> {
+    hex_be("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
+}
+
+/// The basepoint's affine `(x, y)` as minimal big-endian magnitudes.
+pub(crate) fn generator_coords_be() -> (Vec<u8>, Vec<u8>) {
+    coords_be(&EdwardsPoint::generator())
+}
+
+/// `p · 8 · (8⁻¹ mod L)` — clears any torsion component, leaving the prime-order
+/// part (Go `crypto.ECPoint.EightInvEight`). A no-op on honest prime-order points.
+pub(crate) fn eight_inv_eight(p: &EdwardsPoint) -> EdwardsPoint {
+    let mut eight_bytes = [0u8; 32];
+    eight_bytes[0] = 8;
+    let eight = Scalar::from_bytes_canonical(&eight_bytes).unwrap();
+    let inv8 = eight.invert();
+    p.mul(&eight).mul(&inv8)
+}
+
+fn hex_be(s: &str) -> Vec<u8> {
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap())
+        .collect()
+}
+
 /// `n·G`.
 pub(crate) fn mul_base(s: &Scalar) -> EdwardsPoint {
     EdwardsPoint::mul_base(s)
