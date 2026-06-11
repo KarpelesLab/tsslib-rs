@@ -16,6 +16,7 @@ on:
     paths:
       - "src/ecdsatss/**"
       - "src/eddsatss/**"
+      - "src/dklstss/**"
       - "fixtures-gen/**"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
@@ -23,6 +24,7 @@ on:
     paths:
       - "src/ecdsatss/**"
       - "src/eddsatss/**"
+      - "src/dklstss/**"
       - "fixtures-gen/**"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
@@ -67,6 +69,7 @@ jobs:
           go run . > ../src/ecdsatss/testdata/gg18.json
           echo "gg18.json:  $(wc -c < ../src/ecdsatss/testdata/gg18.json) bytes"
           echo "eddsa.json: $(wc -c < ../src/eddsatss/testdata/eddsa.json) bytes"
+          echo "dkls.json:  $(wc -c < ../src/dklstss/testdata/dkls.json) bytes"
 
       # Fast Go->Rust proof interop: the Rust verifiers must accept Go-emitted
       # Paillier, DLN, fac, and mod proofs, and load a Go-marshaled Key.
@@ -82,6 +85,11 @@ jobs:
       # Ed25519 signature (all eddsatss tests are fast — no safe primes).
       - name: Rust loads Go keys + signs (eddsatss)
         run: "cargo test --features eddsatss eddsatss:: -- --nocapture"
+
+      # dklstss (DKLs23): load a REAL Go-saved key (v4 format incl. structured
+      # OT-extension state) and produce an ECDSA signature.
+      - name: Rust loads Go keys + signs (dklstss)
+        run: "cargo test --features dklstss dklstss::serialize -- --nocapture"
 
       # Surface the regenerated fixture's shape (informational — fixtures use
       # fresh randomness so values differ run-to-run; this just confirms the Go
