@@ -14,7 +14,7 @@ both languages. All low-level cryptography is provided by
 [`purecrypto`](https://github.com/KarpelesLab/purecrypto) — this crate adds no
 hand-rolled field arithmetic.
 
-> **Status: all five protocols implemented.** Every scheme below produces
+> **Status: all six protocols implemented.** Every scheme below produces
 > signatures that verify under the corresponding stock verifier (Ed25519,
 > ristretto255 Schnorr, secp256k1 ECDSA, FIPS-204 ML-DSA-44). See the per-module
 > notes for which operations are broker-driven vs. in-process.
@@ -28,6 +28,7 @@ hand-rolled field arithmetic.
 | `mldsatss`               | Threshold ML-DSA-44 — FIPS 204          | ML-DSA signatures       | ML-DSA-44       |
 | `dklstss`                | Threshold ECDSA — DKLs23                | ECDSA signatures        | secp256k1       |
 | `ecdsatss`               | Threshold ECDSA — GG18/GG20             | ECDSA signatures        | secp256k1       |
+| `eddsatss`               | Threshold EdDSA — GG18-style            | Ed25519 signatures      | Edwards25519    |
 
 The FROST protocols and `dklstss` provide keygen, signing, resharing/refresh,
 and HD derivation routed through a caller-supplied [`tss::MessageBroker`];
@@ -39,7 +40,11 @@ dealer; not independently reviewed). `ecdsatss` is a broker-driven port of the
 legacy GG18/GG20 Paillier+MtA protocol (keygen, 9-round signing, resharing, and
 1-of-1 `import_key`) provided for **migrating existing Go `tss-lib/ecdsatss` keys**
 — it loads those save files byte-for-byte and signs with them; new deployments
-should prefer `dklstss`. Each module is gated behind a like-named
+should prefer `dklstss`. `eddsatss` is the EdDSA counterpart — a broker-driven
+port of the legacy GG18-style threshold Ed25519 (Feldman VSS + threshold Schnorr,
+no Paillier): keygen, 3-round signing, resharing, and 1-of-1 `import_key`, for
+migrating existing Go `tss-lib/eddsatss` keys (it loads them and emits standard
+Ed25519 signatures). Each module is gated behind a like-named
 cargo feature, all enabled by default:
 
 ```toml
@@ -58,6 +63,7 @@ src/
   mldsatss/                Threshold ML-DSA-44       dealer + DKG keygen · sync/broker sign (+ hyperball)
   dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh · presign
   ecdsatss/                Threshold ECDSA (GG18)    broker keygen/sign/reshare · import · Go save-data compat
+  eddsatss/                Threshold EdDSA (GG18)    broker keygen/sign/reshare · import · standard Ed25519 out
 ```
 
 ## Security
@@ -70,7 +76,9 @@ protocol is an academic-grade prototype and is **not** production-ready. The
 `ecdsatss` (GG18/GG20) port is **experimental and not independently audited** —
 the Paillier + MtA range-proof family has a history of catastrophic
 implementation bugs (TSSHOCK, Alpha-Rays); it exists to migrate legacy keys, and
-new deployments should use `dklstss`.
+new deployments should use `dklstss`. The `eddsatss` (threshold Ed25519) port is
+likewise **experimental and not independently audited**, provided for migrating
+legacy keys; new deployments should prefer `frosttss`.
 
 ## Cryptography
 

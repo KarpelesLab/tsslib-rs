@@ -15,12 +15,14 @@ on:
     branches: [master]
     paths:
       - "src/ecdsatss/**"
+      - "src/eddsatss/**"
       - "fixtures-gen/**"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
   pull_request:
     paths:
       - "src/ecdsatss/**"
+      - "src/eddsatss/**"
       - "fixtures-gen/**"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
@@ -60,18 +62,26 @@ jobs:
       - name: Generate fixtures from Go
         working-directory: fixtures-gen
         run: |
+          # Emits gg18.json (ecdsatss, to stdout) and, as a side effect,
+          # ../src/eddsatss/testdata/eddsa.json (a real 2-party Go EdDSA keygen).
           go run . > ../src/ecdsatss/testdata/gg18.json
-          echo "Regenerated gg18.json ($(wc -c < ../src/ecdsatss/testdata/gg18.json) bytes)"
+          echo "gg18.json:  $(wc -c < ../src/ecdsatss/testdata/gg18.json) bytes"
+          echo "eddsa.json: $(wc -c < ../src/eddsatss/testdata/eddsa.json) bytes"
 
       # Fast Go->Rust proof interop: the Rust verifiers must accept Go-emitted
       # Paillier, DLN, fac, and mod proofs, and load a Go-marshaled Key.
-      - name: Rust verifies Go proof + key vectors
+      - name: Rust verifies Go proof + key vectors (ecdsatss)
         run: "cargo test --features ecdsatss ecdsatss:: -- --nocapture"
 
       # End-to-end migration path: load the REAL Go-generated keys and produce a
       # standard ECDSA signature that verifies under the group public key.
-      - name: Rust signs with real Go keys
+      - name: Rust signs with real Go keys (ecdsatss)
         run: cargo test --features ecdsatss go_keys_sign_and_verify -- --ignored --nocapture
+
+      # eddsatss: load the REAL Go-generated EdDSA keys and produce a standard
+      # Ed25519 signature (all eddsatss tests are fast — no safe primes).
+      - name: Rust loads Go keys + signs (eddsatss)
+        run: "cargo test --features eddsatss eddsatss:: -- --nocapture"
 
       # Surface the regenerated fixture's shape (informational — fixtures use
       # fresh randomness so values differ run-to-run; this just confirms the Go
