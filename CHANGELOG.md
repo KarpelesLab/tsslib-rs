@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.1...v0.2.2) - 2026-06-11
+
+### Other
+
+- Go↔Rust save-data round-trip test
+- Go byte-compatible save format (Save/Load v4)
+- eddsatss P-final: public API, README, interop coverage
+- eddsatss P3: resharing (5 rounds) + legacy key import
+- eddsatss P2: signing (3 rounds) → standard Ed25519 signature
+- eddsatss P1: keygen (3 rounds) + supporting modules
+- eddsatss P0: scaffold + key save-data format (Go-compatible)
+
 ## [0.2.1](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.0...v0.2.1) - 2026-06-11
 
 ### Other
