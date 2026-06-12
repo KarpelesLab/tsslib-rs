@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.2...v0.2.3) - 2026-06-12
+
+### Other
+
+- document missing piMul check / selective-failure abort risk
+- zeroize secret share and OT seed material on demand
+- bounds-check party index in prepare_wi (audit finding 2)
+- wipe transient share byte copies in keygen/resharing (audit finding 1)
+- zeroize secret share Xi on Key drop (audit finding 1)
+- harden parse_secrets length handling
+- enforce minimum peer modulus bit length (Go parity)
+- reject U-less ProofBob in MtA "with check" verification
+- sample signing nonces in [1, q) like Go's GetRandomPositiveInt
+- validate per-party round-3 responses before combine
+- best-effort zeroization of key/keygen secret material
+- zeroize raw X25519 shared secret in share AEAD
+- cap decimal_to_be input length to prevent save-data DoS
+
 ## [0.2.2](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.1...v0.2.2) - 2026-06-11
 
 ### Other
