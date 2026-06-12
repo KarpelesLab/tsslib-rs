@@ -24,8 +24,9 @@ use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
 use purecrypto::hash::shake256;
-use purecrypto::mldsa::hazmat::{ML_DSA_44, Poly};
+use purecrypto::mldsa::hazmat::{ML_DSA_44, Poly, inf_norm, unpack_z};
 use purecrypto::rng::{OsRng, RngCore};
+use zeroize::Zeroize;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
 use std::sync::{Arc, Mutex};
@@ -65,6 +66,16 @@ struct State {
     r1commits: Vec<Option<Vec<u8>>>,
     r2wbufs: Vec<Option<Vec<u8>>>,
     r3resps: Vec<Option<Vec<u8>>>,
+}
+
+impl Drop for State {
+    /// Best-effort wipe of the per-try hyperball masks (the secret nonces `y`)
+    /// when the session ends — completed, failed, or abandoned before round 3.
+    fn drop(&mut self) {
+        for fv in self.stws.iter_mut() {
+            fv.zeroize();
+        }
+    }
 }
 
 impl SigningParty44 {
@@ -171,6 +182,9 @@ impl Shared {
             }
             stws.push(fv);
         }
+        // The hyperball seed derives the secret masks; wipe it now that every
+        // try has been sampled (best-effort, Go `defer ZeroizeBytes(rhop)`).
+        rhop.zeroize();
 
         let commit = self.compute_commitment(self.key.id, &wbuf);
         {
@@ -282,7 +296,7 @@ impl Shared {
         };
 
         // Recover this party's NTT shares.
-        let (s1h, s2h) = match self.key.recover_share(self.act, &self.th) {
+        let (mut s1h, mut s2h) = match self.key.recover_share(self.act, &self.th) {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
         };
@@ -290,7 +304,7 @@ impl Shared {
         // Compute responses (zeros for rejected tries → caught in combine).
         let mut respbuf = vec![0u8; self.kk * L * encoding_z_size()];
         {
-            let st = self.state.lock().unwrap();
+            let mut st = self.state.lock().unwrap();
             let mut off = 0;
             for tri in 0..self.kk {
                 let z =
@@ -302,6 +316,18 @@ impl Shared {
                     off += packed.len();
                 }
             }
+            // The per-try hyperball masks (secret nonces y) are never needed
+            // again — wipe them now (best-effort, Go zeroizes per-attempt).
+            for fv in st.stws.iter_mut() {
+                fv.zeroize();
+            }
+        }
+        // Wipe the recovered secret-key material (Go zeroizeNttVec{L,K}44).
+        for p in s1h.iter_mut() {
+            p.c.zeroize();
+        }
+        for p in s2h.iter_mut() {
+            p.c.zeroize();
         }
         {
             let mut st = self.state.lock().unwrap();
@@ -346,6 +372,19 @@ impl Shared {
 
         let (wfinal, zfinal) = {
             let st = self.state.lock().unwrap();
+            // Per-party response validity (Go `validatePartyResponses`, FIX 2 —
+            // identifiable abort). Before summing every party's z_i
+            // unconditionally, range/bound-check each party's block. A
+            // malicious party that submits garbage z_i (large coefficients)
+            // would otherwise corrupt the aggregate and force "all tries
+            // rejected" for the whole committee with no attribution (a silent
+            // DoS). On failure we name the offending committee slot instead of
+            // silently summing.
+            if let Err(e) =
+                validate_party_responses(&st.r3resps, self.kk, self.th.nu, self.th.rp, &self.key_ids)
+            {
+                return self.deliver(Err(e));
+            }
             (
                 aggregate_wfinal(&st.r2wbufs, self.kk),
                 aggregate_zfinal(&st.r3resps, self.kk),
@@ -452,6 +491,77 @@ fn aggregate_zfinal(r3resps: &[Option<Vec<u8>>], kk: usize) -> Vec<[Poly; L]> {
     zfinal
 }
 
+/// Checks every party's round-3 response block for per-party validity
+/// *before* combine sums them, so a single malformed/malicious `z_i` is
+/// attributed to its sender instead of silently corrupting the aggregate
+/// (Go `validatePartyResponses`, "FIX 2 — identifiable abort").
+///
+/// Derivable check (strongest available from public values at combine time):
+/// an honest party either rejects a try (sends an all-zero `z_i` block, which
+/// passes trivially) or accepts it, in which case its `z_i` is the L-part of a
+/// hyperball-masked response `zf` that passed the party's own gate
+/// `!zf.excess(r, ν)`, i.e. `Σ_L (zf_L[j]/ν)² + Σ_K (zf_K[j])² ≤ r²`. The
+/// L-part alone therefore satisfies `Σ_L (z_i[j]/ν)² ≤ r²`; integer rounding
+/// adds at most `√(L·N)·0.5/ν ≈ 5.3` to the ν-scaled L2 norm, comfortably
+/// inside the secondary radius `r′` (`r′ − r ≥ 55` across the whole parameter
+/// table). So we reject any non-zero `z_i` block whose ν-scaled L2 norm
+/// exceeds `r′` — an honest accepted block never does, while gross garbage
+/// (the DoS vector) is caught and its sender named.
+///
+/// LIMITATION (partial identifiable abort): this is a structural bound, not a
+/// full algebraic check. A full check would verify `HighBits(A·z_i − c·t_i) ==
+/// HighBits(w_i)` against the party's committed `w_i`, but that needs each
+/// party's public key share `t_i = A·s1_i + s2_i`, which this trusted-dealer
+/// protocol never transmits or stores (only the aggregate `t1` is public). A
+/// party can thus still submit a small but algebraically-wrong `z_i` that
+/// passes this bound yet breaks the aggregate; such a case still surfaces as
+/// "all tries rejected" (non-attributable).
+fn validate_party_responses(
+    r3resps: &[Option<Vec<u8>>],
+    kk: usize,
+    nu: f64,
+    rp: f64,
+    key_ids: &[u8],
+) -> Result<(), Error> {
+    let sz = encoding_z_size();
+    let rp_sq = rp * rp;
+    for (slot, resp) in r3resps.iter().enumerate() {
+        let Some(resp) = resp else {
+            return Err(Error::Validation(format!(
+                "round3 response missing for committee slot {slot}"
+            )));
+        };
+        let mut off = 0;
+        for tri in 0..kk {
+            let mut l2 = 0.0f64; // Σ_L (z_i[j]/ν)² for this try's block
+            let mut non_zero = false;
+            for _j in 0..L {
+                let poly = unpack_z(&resp[off..off + sz], &ML_DSA_44.params);
+                off += sz;
+                for &c in poly.c.iter() {
+                    // Recenter to a signed magnitude in [0, Q/2].
+                    let mag = inf_norm(c) as f64;
+                    if mag != 0.0 {
+                        non_zero = true;
+                    }
+                    let scaled = mag / nu;
+                    l2 += scaled * scaled;
+                }
+            }
+            // An all-zero block is a legitimate "try rejected at party"; only
+            // bound-check blocks that actually carry a response.
+            if non_zero && l2 > rp_sq {
+                return Err(Error::Validation(format!(
+                    "invalid round-3 response from committee slot {slot} (keyId {kid}), \
+                     try {tri}: z_i ν-scaled L2 norm² {l2:.0} exceeds Rp² {rp_sq:.0}",
+                    kid = key_ids[slot],
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Range-checks every packed coefficient of a peer wbuf is canonical (`< Q`);
 /// non-canonical values would feed HighBits/Decompose out of range.
 fn validate_canonical_wbuf(wbuf: &[u8]) -> Result<(), Error> {
@@ -542,5 +652,62 @@ mod tests {
         };
 
         assert!(pk.verify(&sig, msg, ctx), "broker signature must verify");
+    }
+
+    /// FIX 2 (identifiable abort): a garbage z_i block with grossly
+    /// out-of-bound coefficients must be rejected, naming the offending
+    /// committee slot, rather than silently summed into the aggregate.
+    /// Packs `kk · L` copies of `poly` the way round 3 does.
+    fn packed_resp_block(poly: &Poly, kk: usize) -> Vec<u8> {
+        let packed = purecrypto::mldsa::hazmat::pack_z(poly, &ML_DSA_44.params);
+        let mut out = Vec::with_capacity(kk * L * packed.len());
+        for _ in 0..(kk * L) {
+            out.extend_from_slice(&packed);
+        }
+        out
+    }
+
+    #[test]
+    fn validate_party_responses_names_offending_slot() {
+        let th = get_threshold_params44(2, 2).unwrap();
+        let kk = th.k as usize;
+
+        // Slot 0: zero polynomials — a legitimate "try rejected at party".
+        let honest = packed_resp_block(&Poly::zero(), kk);
+
+        // Slot 1: fully-saturated garbage — every coefficient = γ1, which
+        // packs/unpacks cleanly but blows the ν-scaled L2 bound (matches the
+        // Go TestSigning44_InvalidResponseIsAttributed payload).
+        let gamma1 = ML_DSA_44.params.gamma1;
+        let mut max_poly = Poly::zero();
+        for c in max_poly.c.iter_mut() {
+            *c = gamma1;
+        }
+        let garbage = packed_resp_block(&max_poly, kk);
+
+        let r3resps = vec![Some(honest), Some(garbage)];
+        let key_ids = vec![0u8, 1u8];
+        let err = validate_party_responses(&r3resps, kk, th.nu, th.rp, &key_ids)
+            .expect_err("garbage z_i must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("committee slot 1"),
+            "error must name the offending slot: {msg}"
+        );
+        assert!(
+            msg.contains("keyId 1"),
+            "error must name the offending keyId: {msg}"
+        );
+    }
+
+    /// All-zero response blocks ("try rejected at party") must pass.
+    #[test]
+    fn validate_party_responses_accepts_zero_blocks() {
+        let th = get_threshold_params44(2, 3).unwrap();
+        let kk = th.k as usize;
+        let block = packed_resp_block(&Poly::zero(), kk);
+        let r3resps = vec![Some(block.clone()), Some(block)];
+        validate_party_responses(&r3resps, kk, th.nu, th.rp, &[0, 1])
+            .expect("all-zero blocks are legitimate");
     }
 }
