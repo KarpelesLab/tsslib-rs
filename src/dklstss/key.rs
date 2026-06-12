@@ -14,6 +14,15 @@ pub struct PairOTState {
     pub as_bob: ExtSender,
 }
 
+impl PairOTState {
+    /// Overwrites both directions' OT seeds and correlation Δ with zeros,
+    /// rendering this pair state unusable.
+    pub fn zeroize(&mut self) {
+        self.as_alice.zeroize();
+        self.as_bob.zeroize();
+    }
+}
+
 /// One party's output of the DKLs DKG: public material (joint key, per-party
 /// commitments) and private material (Shamir share, per-pair OT state).
 #[derive(Clone)]
@@ -60,6 +69,56 @@ impl Key {
             return Err(Validation("Xi·G != BigXj[idx]".into()));
         }
         Ok(())
+    }
+
+    /// Overwrites the secret share with zero and scrubs every per-pair OT
+    /// state (PRG seeds and correlation Δ), rendering the key unusable for
+    /// signing or resharing. The chain code (public, but consistent with the
+    /// "unusable after zeroize" contract) is also cleared. Mirrors
+    /// [`crate::frosttss::Key::zeroize`].
+    ///
+    /// Note: `purecrypto`'s secp256k1 `Scalar` wipes its limbs on drop, so the
+    /// old `xi` value is scrubbed when it is replaced here (and whenever a
+    /// `Key` is dropped); the OT byte arrays have no such drop behavior, hence
+    /// the explicit overwrite.
+    pub fn zeroize(&mut self) {
+        self.xi = Scalar::ZERO;
+        for pair in self.ot.iter_mut().flatten() {
+            pair.zeroize();
+        }
+        self.chain_code = [0u8; 32];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{keygen, otext};
+    use purecrypto::rng::OsRng;
+
+    #[test]
+    fn zeroize_clears_share_and_ot_state() {
+        let ids = crate::tss::PartyId::sort(
+            (1..=2u8)
+                .map(|i| crate::tss::PartyId::new(i.to_string(), format!("P{i}"), vec![i]))
+                .collect(),
+            0,
+        );
+        let mut keys = keygen(2, 1, &ids, &mut OsRng).unwrap();
+        let mut key = keys.remove(0);
+        assert!(!bool::from(key.xi.is_zero()));
+        key.zeroize();
+        assert!(bool::from(key.xi.is_zero()));
+        assert_eq!(key.chain_code, [0u8; 32]);
+        for pair in key.ot.iter().flatten() {
+            assert_eq!(
+                pair.as_alice.to_bytes(),
+                vec![0u8; 2 * otext::KAPPA * otext::SEED_LEN]
+            );
+            assert_eq!(
+                pair.as_bob.to_bytes(),
+                vec![0u8; otext::DELTA_BYTES + otext::KAPPA * otext::SEED_LEN]
+            );
+        }
     }
 }
 

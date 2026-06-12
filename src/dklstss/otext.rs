@@ -10,6 +10,7 @@ use super::Error;
 use super::baseot;
 use purecrypto::cipher::{Aes128, Ctr};
 use purecrypto::hash::sha512_256;
+use zeroize::Zeroize;
 
 /// Computational security parameter (bits).
 pub const KAPPA: usize = 128;
@@ -89,6 +90,16 @@ impl ExtSender {
         delta.copy_from_slice(&b[..DELTA_BYTES]);
         let seeds = chunk_seeds(&b[DELTA_BYTES..]);
         Ok(ExtSender { delta, seeds })
+    }
+
+    /// Overwrites the secret correlation Δ and all PRG seeds with zeros,
+    /// rendering this state unusable. Best-effort scrubbing of long-lived key
+    /// material; does not affect serialization of live states.
+    pub fn zeroize(&mut self) {
+        self.delta.zeroize();
+        for s in &mut self.seeds {
+            s.zeroize();
+        }
     }
 
     /// Runs the OT-extension sender given the receiver's message, returning
@@ -191,6 +202,17 @@ impl ExtReceiver {
             seeds0: chunk_seeds(&b[..KAPPA * SEED_LEN]),
             seeds1: chunk_seeds(&b[KAPPA * SEED_LEN..]),
         })
+    }
+
+    /// Overwrites both PRG seed vectors with zeros, rendering this state
+    /// unusable. Best-effort scrubbing of long-lived key material.
+    pub fn zeroize(&mut self) {
+        for s in &mut self.seeds0 {
+            s.zeroize();
+        }
+        for s in &mut self.seeds1 {
+            s.zeroize();
+        }
     }
 
     /// Runs the OT-extension receiver. `c` packs L choice bits (LE within byte).
