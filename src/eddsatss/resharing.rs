@@ -28,6 +28,7 @@ use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroize;
 
 const TYPE_R1: &str = "eddsa:reshare:round1";
 const TYPE_R2: &str = "eddsa:reshare:round2";
@@ -379,8 +380,11 @@ impl Shared {
             new_big_xjs.push(bx);
         }
 
+        // Wipe the transient big-endian copy of the new secret share once it
+        // has been captured by the Key (which zeroizes its own copy on drop).
+        let mut new_xi_be = ed::scalar_to_be(&new_xi);
         let new_key = Key {
-            xi: BigUintDec::from_be_bytes(&ed::scalar_to_be(&new_xi)),
+            xi: BigUintDec::from_be_bytes(&new_xi_be),
             share_id: BigUintDec::from_be_bytes(&self.params.party_id().key),
             ks: new_ids
                 .iter()
@@ -389,6 +393,7 @@ impl Shared {
             big_xj: new_big_xjs.iter().map(ec_point).collect(),
             eddsa_pub: ec_point(&eddsa_pub),
         };
+        new_xi_be.zeroize();
         self.state.lock().unwrap().new_key = Some(new_key.clone());
 
         // Ack round4 to every other old+new party.

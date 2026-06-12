@@ -24,6 +24,7 @@ use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroize;
 
 const TYPE_R1: &str = "eddsa:keygen:round1";
 const TYPE_R2_1: &str = "eddsa:keygen:round2-1";
@@ -329,8 +330,11 @@ impl Shared {
         }
         let eddsa_pub = vc[0];
 
+        // Wipe the transient big-endian copy of the secret share once it has
+        // been captured by the Key (which zeroizes its own copy on drop).
+        let mut xi_be = ed::scalar_to_be(&xi);
         let key = Key {
-            xi: BigUintDec::from_be_bytes(&ed::scalar_to_be(&xi)),
+            xi: BigUintDec::from_be_bytes(&xi_be),
             share_id: BigUintDec::from_be_bytes(&self.params.party_id().key),
             ks: parties
                 .iter()
@@ -339,6 +343,7 @@ impl Shared {
             big_xj: big_xj.iter().map(ec_point).collect(),
             eddsa_pub: ec_point(&eddsa_pub),
         };
+        xi_be.zeroize();
         self.deliver(Ok(key));
     }
 
