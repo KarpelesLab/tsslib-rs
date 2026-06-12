@@ -12,6 +12,7 @@ use purecrypto::ec::x25519::x25519;
 use purecrypto::hash::Sha256;
 use purecrypto::kdf::hkdf;
 use purecrypto::rng::RngCore;
+use zeroize::Zeroizing;
 
 /// Length of an X25519 private/public key.
 pub const EPHEMERAL_KEY_BYTES: usize = 32;
@@ -66,15 +67,18 @@ pub fn seal_share(
     ad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, AeadError> {
-    let shared = shared_secret(sender_priv, recipient_pub)?;
-    let mut key = derive_key(&shared, ad);
+    // Zeroizing wipes the raw X25519 shared secret and the derived AEAD key
+    // on every exit path (including early returns and unwinds).
+    let shared = Zeroizing::new(shared_secret(sender_priv, recipient_pub)?);
+    let key = Zeroizing::new(derive_key(&shared, ad));
 
     let mut nonce = [0u8; NONCE_BYTES];
     rng.fill_bytes(&mut nonce);
 
+    // `buf` holds the plaintext only until the in-place encrypt below turns it
+    // into ciphertext, so no plaintext copy outlives this function.
     let mut buf = plaintext.to_vec();
     let tag = ChaCha20Poly1305::new(&key).encrypt(&nonce, ad, &mut buf);
-    key.fill(0);
 
     let mut out = Vec::with_capacity(NONCE_BYTES + buf.len() + TAG_BYTES);
     out.extend_from_slice(&nonce);
@@ -94,18 +98,25 @@ pub fn open_share(
     if ciphertext.len() < NONCE_BYTES + TAG_BYTES {
         return Err(AeadError::TooShort);
     }
-    let shared = shared_secret(recipient_priv, sender_pub)?;
-    let mut key = derive_key(&shared, ad);
+    // Zeroizing wipes the raw X25519 shared secret and the derived AEAD key
+    // on every exit path (including the tag-mismatch error return and unwinds).
+    let shared = Zeroizing::new(shared_secret(recipient_priv, sender_pub)?);
+    let key = Zeroizing::new(derive_key(&shared, ad));
 
     let nonce: [u8; NONCE_BYTES] = ciphertext[..NONCE_BYTES].try_into().unwrap();
     let tag: [u8; TAG_BYTES] = ciphertext[ciphertext.len() - TAG_BYTES..]
         .try_into()
         .unwrap();
+    // Decryption happens in place: `buf` starts as a ciphertext copy and is
+    // transformed into the plaintext, which is moved (not copied) to the
+    // caller, so no intermediate plaintext copy is left behind. The returned
+    // Vec itself is owned by the caller and intentionally not wrapped — doing
+    // so would change the public API.
     let mut buf = ciphertext[NONCE_BYTES..ciphertext.len() - TAG_BYTES].to_vec();
 
-    let res = ChaCha20Poly1305::new(&key).decrypt(&nonce, ad, &mut buf, &tag);
-    key.fill(0);
-    res.map_err(|_| AeadError::TagMismatch)?;
+    ChaCha20Poly1305::new(&key)
+        .decrypt(&nonce, ad, &mut buf, &tag)
+        .map_err(|_| AeadError::TagMismatch)?;
     Ok(buf)
 }
 
