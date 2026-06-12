@@ -188,8 +188,10 @@ impl Shared {
         // Lagrange-weighted share w_i and the transformed public shares bigWs.
         let (w, big_ws) = self.prepare_for_signing()?;
 
-        let k = bn::rand_range(&bn::u64(1), &q, &mut rng);
-        let gamma = bn::rand_range(&bn::u64(1), &q, &mut rng);
+        // [1, q) like Go's GetRandomPositiveInt; rand_range is upper-inclusive
+        // and would (with prob 2^-256) yield q ≡ 0 mod q.
+        let k = bn::rand_positive_below(&q, &mut rng);
+        let gamma = bn::rand_positive_below(&q, &mut rng);
         let point_gamma = secp::mul_base(&gamma);
         let (gx, gy) = secp::coords(&point_gamma);
         let (c, d) = super::commit::commit(&[gx, gy], &mut rng);
@@ -545,8 +547,9 @@ impl Shared {
         let (rx, ry) = secp::coords(&r);
         let si = modq.add(&modq.mul(&m_hash, &k), &modq.mul(&rx, &sigma));
 
-        let li = bn::rand_range(&bn::u64(1), &q, &mut rng);
-        let roi = bn::rand_range(&bn::u64(1), &q, &mut rng);
+        // [1, q) like Go's GetRandomPositiveInt (see round1).
+        let li = bn::rand_positive_below(&q, &mut rng);
+        let roi = bn::rand_positive_below(&q, &mut rng);
         let big_ai = secp::mul_base(&roi);
         let big_vi = secp::add(&secp::mul(&r, &si), &secp::mul_base(&li));
 

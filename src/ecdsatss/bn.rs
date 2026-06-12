@@ -418,6 +418,18 @@ pub(crate) fn rand_below<R: RngCore>(n: &BoxedUint, rng: &mut R) -> BoxedUint {
     }
 }
 
+/// A uniformly random integer in `[1, n)` (Go `common.GetRandomPositiveInt`).
+/// Unlike [`rand_range`], the upper bound is *exclusive*: use this for secret
+/// scalars mod a group order `q`, where both 0 and q (≡ 0) must be excluded.
+pub(crate) fn rand_positive_below<R: RngCore>(n: &BoxedUint, rng: &mut R) -> BoxedUint {
+    loop {
+        let x = rand_below(n, rng);
+        if !x.is_zero() {
+            return x;
+        }
+    }
+}
+
 /// A uniformly random integer in `[lo, hi]` (inclusive).
 pub(crate) fn rand_range<R: RngCore>(lo: &BoxedUint, hi: &BoxedUint, rng: &mut R) -> BoxedUint {
     // span = hi - lo + 1 ; result = lo + rand_below(span)
