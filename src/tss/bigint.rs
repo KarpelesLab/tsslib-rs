@@ -72,9 +72,24 @@ pub fn be_to_decimal(be: &[u8]) -> String {
     digits.iter().rev().map(|d| (b'0' + d) as char).collect()
 }
 
+/// Maximum number of decimal digits accepted by [`decimal_to_be`].
+///
+/// The base conversion below is O(n²) in the digit count, and the input comes
+/// straight from attacker-controllable save-data JSON (serde_json's
+/// `arbitrary_precision` feature preserves the full digit string), so an
+/// unbounded input is a denial-of-service vector. The largest legitimate
+/// values stored as [`BigUintDec`] anywhere in this crate are the 2048-bit
+/// Paillier modulus `N` and its `lambda`/`phi` in the GG18 ecdsatss save data
+/// (≈617 decimal digits; see `ecdsatss::key`), with the safe-prime `Ntilde`
+/// preparams the same size. 8192 digits (≈27k bits) is more than 13× that —
+/// and still over 4× a hypothetical 4096-bit modulus (≈1234 digits) — so no
+/// real save data is ever rejected, while a multi-megabyte digit string is
+/// refused in O(1).
+pub const MAX_DECIMAL_DIGITS: usize = 8192;
+
 /// Parses a non-negative decimal string into its big-endian magnitude (no
 /// leading zeros; empty for zero). Returns an error on empty input, a leading
-/// `-`, or any non-digit character.
+/// `-`, any non-digit character, or input longer than [`MAX_DECIMAL_DIGITS`].
 pub fn decimal_to_be(s: &str) -> Result<Vec<u8>, DecimalError> {
     let s = s.trim();
     if s.is_empty() {
@@ -82,6 +97,9 @@ pub fn decimal_to_be(s: &str) -> Result<Vec<u8>, DecimalError> {
     }
     if s.starts_with('-') {
         return Err(DecimalError("negative values are not supported"));
+    }
+    if s.len() > MAX_DECIMAL_DIGITS {
+        return Err(DecimalError("decimal string too long"));
     }
     // Accumulate big-endian base-256: bytes = bytes * 10 + digit.
     let mut bytes: Vec<u8> = vec![0];
@@ -199,5 +217,36 @@ mod tests {
         assert!(decimal_to_be("").is_err());
         assert!(decimal_to_be("-5").is_err());
         assert!(decimal_to_be("12a3").is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_decimal_but_accepts_paillier_sized() {
+        // Just over the cap: rejected as an error (no panic, no O(n²) work).
+        let too_long = "9".repeat(MAX_DECIMAL_DIGITS + 1);
+        assert_eq!(
+            decimal_to_be(&too_long),
+            Err(DecimalError("decimal string too long"))
+        );
+        // Same via serde: a huge bare JSON number must fail deserialization.
+        let json = format!("{{\"v\": {too_long}}}");
+        #[derive(Deserialize)]
+        struct Wrap {
+            #[allow(dead_code)]
+            v: BigUintDec,
+        }
+        assert!(serde_json::from_str::<Wrap>(&json).is_err());
+
+        // A 617-digit value (the size of a 2048-bit Paillier modulus, the
+        // largest legitimate BigUintDec in any save format) still parses and
+        // round-trips unchanged.
+        let mut paillier_sized = String::from("9");
+        paillier_sized.push_str(&"7".repeat(616));
+        assert_eq!(paillier_sized.len(), 617);
+        let be = decimal_to_be(&paillier_sized).unwrap();
+        assert_eq!(be_to_decimal(&be), paillier_sized);
+
+        // Exactly at the cap is still accepted.
+        let at_cap = "1".repeat(MAX_DECIMAL_DIGITS);
+        assert!(decimal_to_be(&at_cap).is_ok());
     }
 }
