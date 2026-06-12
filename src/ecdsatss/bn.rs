@@ -341,14 +341,35 @@ pub(crate) fn is_probable_prime<R: RngCore>(n: &BoxedUint, rng: &mut R, rounds: 
     true
 }
 
+/// `2^i`.
+fn pow2(i: usize) -> BoxedUint {
+    let mut buf = vec![0u8; i / 8 + 1];
+    buf[0] = 1u8 << (i % 8);
+    from_be(&buf)
+}
+
+/// Sets the *second*-highest bit of a `bits`-bit candidate. Go's safe-prime
+/// generator sets the top TWO bits of each candidate so that the product of
+/// two such primes always has full bit length; Go's keygen and resharing
+/// reject peer Paillier/ring-Pedersen moduli with BitLen() < 2048, so without
+/// this a freshly generated modulus could come out one bit short (2047) and
+/// be rejected by Go peers.
+fn set_second_top_bit(q: BoxedUint, bits: usize) -> BoxedUint {
+    if bit(&q, bits - 2) == 0 {
+        add(&q, &pow2(bits - 2))
+    } else {
+        q
+    }
+}
+
 /// Generates a Sophie-Germain *safe prime* `p = 2q + 1` (both `p` and `q` prime)
 /// of `bits` bits. Slow — callers should cache the result.
 pub(crate) fn generate_safe_prime<R: RngCore>(bits: usize, rng: &mut R) -> BoxedUint {
     assert!(bits >= 4);
     let rounds = 20;
     loop {
-        // q has bits-1 bits; p = 2q+1 has `bits` bits.
-        let mut q = rand_bits(bits - 1, rng);
+        // q has bits-1 bits (top two bits set, like Go); p = 2q+1 has `bits` bits.
+        let mut q = set_second_top_bit(rand_bits(bits - 1, rng), bits - 1);
         // q ≡ 2 (mod 3) keeps p = 2q+1 ≢ 0 (mod 3) (cheap pre-filter).
         if mod_small(&q, 3) != 2 {
             continue;
@@ -369,7 +390,8 @@ pub(crate) fn generate_germain<R: RngCore>(bits: usize, rng: &mut R) -> (BoxedUi
     assert!(bits >= 4);
     let rounds = 20;
     loop {
-        let mut q = rand_bits(bits - 1, rng);
+        // Top two bits set, like Go (see set_second_top_bit).
+        let mut q = set_second_top_bit(rand_bits(bits - 1, rng), bits - 1);
         if mod_small(&q, 3) != 2 {
             continue;
         }

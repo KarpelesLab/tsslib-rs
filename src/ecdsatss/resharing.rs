@@ -475,6 +475,23 @@ impl Shared {
             let h1 = bn::from_be(&msg.h1.0);
             let h2 = bn::from_be(&msg.h2.0);
             let pn = bn::from_be(&msg.paillier_n.0);
+            // Mirror Go resharing (paillierModulusLen = 2048): reject short
+            // peer moduli before storing/using them. A short Paillier N or
+            // ring-Pedersen Ñ weakens the proofs and the encryption itself.
+            if pn.bit_len() < super::prepare::MIN_PEER_MODULUS_BITS {
+                return self.fail(format!(
+                    "resharing: peer Paillier modulus bit length {} < {}",
+                    pn.bit_len(),
+                    super::prepare::MIN_PEER_MODULUS_BITS
+                ));
+            }
+            if ntj.bit_len() < super::prepare::MIN_PEER_MODULUS_BITS {
+                return self.fail(format!(
+                    "resharing: peer NTilde bit length {} < {}",
+                    ntj.bit_len(),
+                    super::prepare::MIN_PEER_MODULUS_BITS
+                ));
+            }
             if bn::to_be(&h1) == bn::to_be(&h2) {
                 return self.fail("resharing: H1 == H2");
             }

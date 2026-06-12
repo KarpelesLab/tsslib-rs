@@ -16,6 +16,18 @@ use purecrypto::rng::RngCore;
 /// Production safe-prime bit length (so `Ñ` and the Paillier modulus are 2048-bit).
 pub const SAFE_PRIME_BITS: usize = 1024;
 
+/// Minimum accepted bit length for a *peer's* Paillier modulus `N` and
+/// ring-Pedersen `Ñ`, checked where peer parameters are first received (keygen
+/// round 2 and resharing). Mirrors Go's `paillierModulusLen` (= 2048) checks in
+/// `ecdsatss/keygen.go` and `ecdsatss/resharing.go`: a short modulus weakens
+/// the MtA range proofs and the Paillier encryption itself.
+#[cfg(not(test))]
+pub(crate) const MIN_PEER_MODULUS_BITS: usize = 2 * SAFE_PRIME_BITS;
+/// In the crate's own test build the floor is lowered, because the slow keygen
+/// and resharing tests generate deliberately small (insecure) pre-params.
+#[cfg(test)]
+pub(crate) const MIN_PEER_MODULUS_BITS: usize = 512;
+
 /// One party's pre-parameters: Paillier secret key plus ring-Pedersen setup.
 #[derive(Clone)]
 pub struct LocalPreParams {

@@ -225,6 +225,23 @@ impl Shared {
             let ntildej = bn::from_be(&r1.ntilde.0);
             let h1jv = bn::from_be(&r1.h1.0);
             let h2jv = bn::from_be(&r1.h2.0);
+            // Mirror Go keygen round 2: reject short peer moduli (BitLen() <
+            // 2048 in production). A short Paillier N or ring-Pedersen Ñ
+            // weakens the MtA range proofs and the Paillier encryption itself.
+            if paillier_n.bit_len() < super::prepare::MIN_PEER_MODULUS_BITS {
+                return self.deliver(Err(Error::Validation(format!(
+                    "keygen: peer Paillier modulus bit length {} < {}",
+                    paillier_n.bit_len(),
+                    super::prepare::MIN_PEER_MODULUS_BITS
+                ))));
+            }
+            if ntildej.bit_len() < super::prepare::MIN_PEER_MODULUS_BITS {
+                return self.deliver(Err(Error::Validation(format!(
+                    "keygen: peer NTilde bit length {} < {}",
+                    ntildej.bit_len(),
+                    super::prepare::MIN_PEER_MODULUS_BITS
+                ))));
+            }
             if bn::to_be(&h1jv) == bn::to_be(&h2jv) {
                 return self.deliver(Err(Error::Validation("keygen: H1j == H2j".into())));
             }
