@@ -59,14 +59,25 @@ pub(crate) fn parse_secrets(secrets: &[BoxedUint]) -> Option<Vec<Vec<BoxedUint>>
     let mut next_len = 0usize;
     while el < secrets.len() {
         if is_len {
-            next_len = bn::to_u64(&secrets[el]) as usize;
-            el += 1;
-        } else {
-            if el + next_len > secrets.len() {
+            // The committed length must actually fit in 64 bits before calling
+            // `bn::to_u64` (which silently keeps only the low 64 bits), and in
+            // usize; otherwise a huge length prefix could be truncated into a
+            // small, bogus value.
+            if secrets[el].bit_len() > 64 {
                 return None;
             }
-            parts.push(secrets[el..el + next_len].to_vec());
-            el += next_len;
+            next_len = usize::try_from(bn::to_u64(&secrets[el])).ok()?;
+            el += 1;
+        } else {
+            // Checked add: `el + next_len` could otherwise wrap usize in
+            // release builds, bypassing the bound check and panicking on the
+            // slice below.
+            let end = el.checked_add(next_len)?;
+            if end > secrets.len() {
+                return None;
+            }
+            parts.push(secrets[el..end].to_vec());
+            el = end;
         }
         is_len = !is_len;
     }
