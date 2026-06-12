@@ -13,6 +13,7 @@ use super::ed::{self, EcPointJson};
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 /// One party's threshold-EdDSA key share (save format). Mirrors Go `eddsatss.Key`.
 #[derive(Clone, Serialize, Deserialize)]
@@ -27,6 +28,25 @@ pub struct Key {
     pub big_xj: Vec<EcPointJson>,
     #[serde(rename = "EDDSAPub")]
     pub eddsa_pub: EcPointJson,
+}
+
+impl Zeroize for Key {
+    /// Wipes the long-lived secret share `Xi` in place (overwrites the backing
+    /// bytes, then leaves it as the canonical zero value). The remaining fields
+    /// (`ShareID`, `Ks`, `BigXj`, `EDDSAPub`) are public values and are left
+    /// untouched. Serialization is unaffected: this only runs on an owned,
+    /// mutable key (normally via `Drop`).
+    fn zeroize(&mut self) {
+        self.xi.0.zeroize();
+    }
+}
+
+impl Drop for Key {
+    /// Ensures the secret share `Xi` does not linger in freed heap memory.
+    /// Each `Clone` owns its own buffer and wipes it independently.
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 impl Key {
