@@ -12,7 +12,6 @@
 //! - Proactive share + OT-extension refresh
 //! - Resharing to a new committee preserving the public key
 //! - HD wallet derivation (BIP32 non-hardened) at sign time
-//! - Malicious-secure signing (Mul-then-check) with identifiable abort
 //! - Versioned key save/load for persistence
 //!
 //! Peer **authentication** is out of scope (the broker is trusted to
@@ -20,6 +19,33 @@
 //! cryptographically by an echo-broadcast phase in keygen/refresh/reshare:
 //! disagreeing SHA-256 digests abort with the offending dealer in
 //! [`crate::tss::TssError::culprits`].
+//!
+//! # Security: malicious signers and selective-failure aborts
+//!
+//! Signing is **not yet fully malicious-secure**. The OT-based Gilboa
+//! multiplication in [`ole`] uses Alice's raw secret bits as OT choice bits
+//! and does **not** implement the πMul input-consistency / multiplication
+//! check from DKLs23 (ePrint 2023/765); Bob's correction values are
+//! unverified. A malicious co-signer can therefore mount a
+//! **selective-failure attack**: by corrupting a single chosen OT row or
+//! correction value, the session either produces a valid signature or aborts
+//! at the final `ecdsa_verify` gate depending on one bit of the victim's
+//! secret share/nonce — leaking roughly one bit per aborted signing session.
+//!
+//! Mitigations that *are* in place: echo-broadcast consistency checks in
+//! keygen/refresh/reshare, single-use enforcement of presignatures, the KOS
+//! consistency check against a malicious OT-extension *receiver*, and the
+//! final verification gate (no invalid signature is ever released).
+//!
+//! Until the πMul check lands — it requires a coordinated wire-format change
+//! with the Go implementation, so it is deferred — operators MUST:
+//! - treat **repeated signing failures with the same participant set as a
+//!   potential attack**, not a transient error;
+//! - **not retry indefinitely**: bound retries, and after a small number of
+//!   unexplained aborts stop signing with that set;
+//! - rotate the key (reshare to exclude the suspect, or generate a fresh key)
+//!   once an attack is suspected, since each abort may have leaked a share
+//!   bit.
 //!
 //! # Status
 //!
