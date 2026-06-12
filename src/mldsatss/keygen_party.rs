@@ -225,6 +225,9 @@ impl Shared {
             for (j, p) in s2.iter_mut().enumerate() {
                 *p = hazmat::sample_bounded_poly(&sseed, eta, (j + L) as u16);
             }
+            // The seed alone reproduces the whole share; wipe it as soon as
+            // sampling is done (best-effort, Go `ZeroizeBytes(sSeed)`).
+            zeroize::Zeroize::zeroize(&mut sseed);
             let t_m = compute_t_m(&a, &s1, &s2);
             let commit = commit_share(mask, &s1, &s2);
             {

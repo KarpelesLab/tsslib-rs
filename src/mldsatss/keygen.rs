@@ -86,7 +86,20 @@ pub fn trusted_dealer_keygen44(
                 key.shares.insert(mask, share.clone());
             }
         }
+        // Wipe the dealer-side local copies of this share's polynomials; the
+        // distributed shares are independent copies (and `Share44`'s `Drop`
+        // wipes `share` itself at the end of this iteration). Best-effort,
+        // mirrors Go `zeroizeRing(s1)/zeroizeRing(s2)`.
+        for p in s1.iter_mut().chain(s1h.iter_mut()) {
+            zeroize::Zeroize::zeroize(&mut p.c);
+        }
+        for p in s2.iter_mut().chain(s2h.iter_mut()) {
+            zeroize::Zeroize::zeroize(&mut p.c);
+        }
     }
+    // The tail of `stream` holds every share's sSeed; wipe it now that all
+    // shares are derived (best-effort, mirrors Go `ZeroizeBytes(sSeed)`).
+    zeroize::Zeroize::zeroize(&mut stream);
 
     // t = A·s1 + s2 ; t1 = high bits of t (Power2Round).
     let mut t1 = [Poly::zero(); K];
@@ -101,6 +114,14 @@ pub fn trusted_dealer_keygen44(
             let (hi, _) = hazmat::power2_round(tpoly.c[jj]);
             t1i.c[jj] = hi;
         }
+    }
+    // Wipe the dealer's aggregate secret accumulators (best-effort, mirrors
+    // Go `zeroizeNtt(s1hTotal)/zeroizeRing(s2Total)`).
+    for p in s1h_total.iter_mut() {
+        zeroize::Zeroize::zeroize(&mut p.c);
+    }
+    for p in s2_total.iter_mut() {
+        zeroize::Zeroize::zeroize(&mut p.c);
     }
 
     // Pack the FIPS 204 public key: rho || pack_t1 per row.
@@ -192,6 +213,31 @@ mod tests {
         let (_pk, keys) = trusted_dealer_keygen44(&[9u8; 32], &params).unwrap();
         assert_eq!(keys.len(), 5);
         check_secret_reconstructs(&keys);
+    }
+
+    #[test]
+    fn share_zeroize_clears_secrets() {
+        let params = get_threshold_params44(2, 2).unwrap();
+        let (_pk, keys) = trusted_dealer_keygen44(&[3u8; 32], &params).unwrap();
+        let mut share = keys[0].shares.values().next().unwrap().clone();
+        assert!(
+            share
+                .s1
+                .iter()
+                .chain(share.s2.iter())
+                .any(|p| p.c.iter().any(|&c| c != 0)),
+            "share must hold non-zero secret material before zeroize"
+        );
+        share.zeroize();
+        for p in share
+            .s1
+            .iter()
+            .chain(share.s2.iter())
+            .chain(share.s1h.iter())
+            .chain(share.s2h.iter())
+        {
+            assert!(p.c.iter().all(|&c| c == 0), "zeroize must clear every lane");
+        }
     }
 
     #[test]

@@ -159,6 +159,13 @@ impl FVec {
         }
     }
 
+    /// Best-effort wipe of every float lane. The vector holds the secret
+    /// hyperball mask `y` during signing; call this once the sample is no
+    /// longer needed. Mirrors Go `zeroizeFVec44`.
+    pub fn zeroize(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.v);
+    }
+
     /// Reports whether the ν-scaled L2 norm exceeds `r`. The first `L`
     /// polynomial-worths of lanes are re-divided by `ν²` before accumulation.
     pub fn excess(&self, r: f64, nu: f64) -> bool {

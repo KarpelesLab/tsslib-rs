@@ -19,6 +19,26 @@ pub struct Share44 {
     pub s2h: [Poly; K],
 }
 
+impl Share44 {
+    /// Best-effort wipe of the secret share polynomials (plain and NTT
+    /// domains). Also runs automatically on drop. Note `Poly` is `Copy`, so
+    /// copies handed out before zeroizing are not affected.
+    pub fn zeroize(&mut self) {
+        for p in self.s1.iter_mut().chain(self.s1h.iter_mut()) {
+            zeroize::Zeroize::zeroize(&mut p.c);
+        }
+        for p in self.s2.iter_mut().chain(self.s2h.iter_mut()) {
+            zeroize::Zeroize::zeroize(&mut p.c);
+        }
+    }
+}
+
+impl Drop for Share44 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 /// One party's threshold ML-DSA-44 key: public material (`rho`, `tr`, `t1`) plus
 /// the shares whose subset mask includes this party's `id`.
 #[derive(Clone)]
