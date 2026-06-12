@@ -339,6 +339,16 @@ pub(crate) fn verify_bob(
     pf: &ProofBob,
     x_point: Option<&ProjectivePoint>,
 ) -> bool {
+    // "With check" verification requires the proof to carry U. Without it the
+    // point-binding equation (4) below would be silently skipped, letting a
+    // malicious Bob present a basic (10-part) proof for the WC slot and avoid
+    // proving his MtA input matches the public point X (e.g. W_j in GG18
+    // signing round 2). Go's ProofBobWCFromBytes always requires the full
+    // field set, so honest WC proofs always carry U; reject its absence.
+    if x_point.is_some() && pf.u.is_none() {
+        return false;
+    }
+
     let q = bn::secp256k1_order();
     let q3 = bn::mul(&bn::mul(&q, &q), &q);
     let q7 = bn::mul(&bn::mul(&q3, &q3), &q);
@@ -633,6 +643,72 @@ mod tests {
         let lhs = Modulus::new(&q).add(&alpha, &beta);
         let rhs = bn::rem(&bn::mul(&a, &b), &q);
         assert_eq!(bn::to_be(&lhs), bn::to_be(&rhs));
+    }
+
+    /// A 10-part (U-less) ProofBob presented for "with check" verification
+    /// must be rejected. Without this, a malicious Bob can send a basic proof
+    /// in the WC slot: the challenge then matches the non-WC transcript, all
+    /// algebraic checks pass, and the binding of his input to the public
+    /// point X (W_j in signing) is silently skipped.
+    #[test]
+    fn wc_verification_rejects_proof_without_u() {
+        let mut rng = purecrypto::rng::OsRng;
+        let session = b"mta-wc-no-u";
+
+        // Small test-only Paillier key; the ring-Pedersen modulus reuses N
+        // (the proof algebra is size- and setup-agnostic).
+        let p = bn::generate_safe_prime(128, &mut rng);
+        let q = bn::generate_safe_prime(128, &mut rng);
+        let sk = PrivateKey::from_primes(p, q);
+        let pk = sk.pk.clone();
+        let nt = pk.n.clone();
+        let h1 = bn::rand_unit(&nt, &mut rng);
+        let h2 = bn::rand_unit(&nt, &mut rng);
+
+        // Bob builds a valid *basic* proof for x over real ciphertexts.
+        let x = bn::u64(42);
+        let y = bn::u64(5);
+        let (ca, _) = pk.encrypt(&bn::u64(7), &mut rng).unwrap();
+        let (cy, r) = pk.encrypt(&y, &mut rng).unwrap();
+        let cb = pk.homo_add(&pk.homo_mult(&x, &ca), &cy);
+        let pf = prove_bob(
+            session, &pk, &nt, &h1, &h2, &ca, &cb, &x, &y, &r, None, &mut rng,
+        );
+        assert!(pf.u.is_none());
+        assert_eq!(pf.to_parts().len(), 10);
+
+        // It verifies as a basic (no-check) proof...
+        assert!(verify_bob(session, &pk, &nt, &h1, &h2, &ca, &cb, &pf, None));
+
+        // ...but must be rejected when presented for WC verification, where
+        // the verifier expects the proof to bind x to a public point.
+        let x_point = secp::mul_base(&bn::u64(31337));
+        assert!(!verify_bob(
+            session,
+            &pk,
+            &nt,
+            &h1,
+            &h2,
+            &ca,
+            &cb,
+            &pf,
+            Some(&x_point)
+        ));
+
+        // The 10-part wire form parses with u = None and is likewise rejected.
+        let reparsed = ProofBob::from_parts(&pf.to_parts()).unwrap();
+        assert!(reparsed.u.is_none());
+        assert!(!verify_bob(
+            session,
+            &pk,
+            &nt,
+            &h1,
+            &h2,
+            &ca,
+            &cb,
+            &reparsed,
+            Some(&x_point)
+        ));
     }
 
     #[test]

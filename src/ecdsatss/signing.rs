@@ -389,7 +389,15 @@ impl Shared {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e)),
             };
-            let pi_bob_wc = match ProofBob::from_parts(&parts_bytes(&r2.proof_bob_wc)) {
+            // The WC proof must be the full 12-part form (incl. U); a 10-part
+            // proof would parse with u = None and downgrade alice_end_wc to a
+            // verification without the W_j point-binding check (Go's
+            // ProofBobWCFromBytes likewise requires all 12 parts).
+            let wc_parts = parts_bytes(&r2.proof_bob_wc);
+            if wc_parts.len() != 12 {
+                return self.fail("signing: proof_bob_wc must have 12 parts");
+            }
+            let pi_bob_wc = match ProofBob::from_parts(&wc_parts) {
                 Some(v) => v,
                 None => return self.fail("signing: bad proof_bob_wc"),
             };
