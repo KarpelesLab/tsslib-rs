@@ -314,6 +314,11 @@ impl Shared {
         if self.params.threshold() + 1 > ks.len() {
             return Err(Error::Validation("signing: t+1 > parties".into()));
         }
+        if i >= ks.len() {
+            return Err(Error::Validation(
+                "signing: party index out of range of key Ks".into(),
+            ));
+        }
         let mut wi = self.key.xi_scalar();
         for (j, ksj) in ks.iter().enumerate() {
             if j == i {
@@ -479,6 +484,39 @@ mod tests {
             msg,
             &sigs[0].signature
         ));
+    }
+
+    #[test]
+    fn short_ks_returns_error_not_panic() {
+        // A key whose Ks is shorter than the committee must yield a Validation
+        // error from prepare_wi, not an out-of-bounds panic.
+        let f = fixtures();
+        let key: Key =
+            serde_json::from_value(f["signing_keys"].as_array().unwrap()[0].clone()).unwrap();
+        assert_eq!(key.ks.len(), 2);
+
+        // Committee of 3: the key's two share ids plus an extra id whose key
+        // sorts last, so the extra party's index (2) is out of range of Ks.
+        let extra_key = vec![0xffu8; 33];
+        let mut ids: Vec<PartyId> = (0..key.ks.len())
+            .map(|i| {
+                let be = key.ks[i].as_be_bytes().to_vec();
+                PartyId::new((i + 1).to_string(), format!("P{i}"), be)
+            })
+            .collect();
+        ids.push(PartyId::new("3", "P-extra", extra_key.clone()));
+        let ids = PartyId::sort(ids, 0);
+        let me = ids.iter().position(|p| p.key == extra_key).unwrap();
+        assert!(me >= key.ks.len());
+
+        let hub = TestHub::new(&ids);
+        // t+1 = 2 <= ks.len(), so only the new bounds check can reject this.
+        let params = Parameters::new(ids.to_vec(), &ids[me], 1, hub.broker(me));
+        match SigningParty::new(params, key, b"msg") {
+            Err(Error::Validation(m)) => assert!(m.contains("out of range"), "{m}"),
+            Err(e) => panic!("unexpected error kind: {e:?}"),
+            Ok(_) => panic!("expected validation error for short Ks"),
+        }
     }
 
     #[test]

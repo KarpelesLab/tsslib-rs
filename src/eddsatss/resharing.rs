@@ -432,6 +432,11 @@ impl Shared {
         if self.params.old_threshold() + 1 > ks.len() {
             return Err(Error::Validation("resharing: old t+1 > parties".into()));
         }
+        if i >= ks.len() {
+            return Err(Error::Validation(
+                "resharing: old party index out of range of key Ks".into(),
+            ));
+        }
         let mut wi = self.input.xi_scalar();
         for (j, ksj) in ks.iter().enumerate() {
             if j == i {
