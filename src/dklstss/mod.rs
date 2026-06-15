@@ -22,30 +22,57 @@
 //!
 //! # Security: malicious signers and selective-failure aborts
 //!
-//! Signing is **not yet fully malicious-secure**. The OT-based Gilboa
-//! multiplication in [`ole`] uses Alice's raw secret bits as OT choice bits
-//! and does **not** implement the πMul input-consistency / multiplication
-//! check from DKLs23 (ePrint 2023/765); Bob's correction values are
-//! unverified. A malicious co-signer can therefore mount a
+//! The **default** signing path ([`sign`] / [`SigningParty`]) uses the *plain*
+//! OT-based Gilboa multiplication in [`ole`]: Alice's raw secret bits are the
+//! OT choice bits and Bob's correction values are unverified. It implements no
+//! πMul input-consistency check, so a malicious co-signer can mount a
 //! **selective-failure attack**: by corrupting a single chosen OT row or
 //! correction value, the session either produces a valid signature or aborts
 //! at the final `ecdsa_verify` gate depending on one bit of the victim's
 //! secret share/nonce — leaking roughly one bit per aborted signing session.
+//! This default path is kept **byte-compatible with Go tss-lib's default
+//! (unchecked) signing** on purpose, so it is not changed.
 //!
-//! Mitigations that *are* in place: echo-broadcast consistency checks in
-//! keygen/refresh/reshare, single-use enforcement of presignatures, the KOS
+//! ## Opt-in malicious-security: the *checked* signing path
+//!
+//! An **opt-in** Mul-then-check variant (DKLs23 §5) is now available and
+//! **SHOULD be used whenever co-signers are not mutually trusted**:
+//! - [`sign_checked`] / [`sign_checked_with_tweak`] — synchronous in-process;
+//! - [`CheckedSigningParty`] — broker-driven, the security-relevant one
+//!   (a genuinely remote malicious peer can only deviate over the wire).
+//!
+//! Each cross-term ΠMul is run **twice in parallel** under sub-session-ids
+//! `sid|1` and `sid|2` with the same `α`; Bob attaches a cross-run consistency
+//! value `Z = u_B1 − u_B2` and Alice rejects unless `Z_A + Z ≡ 0 (mod n)`
+//! (see [`ole_check`]). A peer who uses inconsistent `β` across the two runs —
+//! the lever of the selective-failure attack — is caught, and in
+//! [`CheckedSigningParty`] the offending peer is named in
+//! [`crate::tss::TssError::culprits`] (identifiable abort). Cost is roughly
+//! 2× the wire/CPU of the default path.
+//!
+//! **Inherited limitation (matches Go):** this simplified check catches an
+//! *inconsistent* `β` across the two runs but **not** a *consistently wrong*
+//! `β` (same wrong value in both runs); that residual class is caught only at
+//! the signing layer by the final ECDSA verification gate. The full
+//! identifiable-abort variant with a Pedersen-style `β` commitment is Go's
+//! task #17 and is intentionally not ported.
+//!
+//! Mitigations that apply to **both** paths: echo-broadcast consistency checks
+//! in keygen/refresh/reshare, single-use enforcement of presignatures, the KOS
 //! consistency check against a malicious OT-extension *receiver*, and the
 //! final verification gate (no invalid signature is ever released).
 //!
-//! Until the πMul check lands — it requires a coordinated wire-format change
-//! with the Go implementation, so it is deferred — operators MUST:
+//! When the **default** (unchecked) path is used with untrusted peers,
+//! operators MUST:
 //! - treat **repeated signing failures with the same participant set as a
 //!   potential attack**, not a transient error;
 //! - **not retry indefinitely**: bound retries, and after a small number of
 //!   unexplained aborts stop signing with that set;
 //! - rotate the key (reshare to exclude the suspect, or generate a fresh key)
 //!   once an attack is suspected, since each abort may have leaked a share
-//!   bit.
+//!   bit;
+//! - or switch to the opt-in checked path above, which closes the
+//!   selective-failure oracle for the inconsistent-`β` case.
 //!
 //! # Status
 //!
@@ -89,7 +116,7 @@ pub use presign::{
 pub use refresh_party::RefreshParty;
 pub use resharing::{refresh, reshare};
 pub use resharing_party::ResharingParty;
-pub use signing::{sign, sign_with_tweak};
+pub use signing::{sign, sign_checked, sign_checked_with_tweak, sign_with_tweak};
 pub use signing_party::SigningParty;
 
 /// Errors raised by the `dklstss` protocols.

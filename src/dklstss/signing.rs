@@ -4,8 +4,8 @@
 
 use super::Error;
 use super::key::{Key, Signature};
-use super::ole;
 use super::secp::{self, ProjectivePoint, Scalar};
+use super::{ole, ole_check};
 use purecrypto::rng::RngCore;
 
 /// Signs `hash` with the `t+1` parties named by `signer_idx`.
@@ -15,7 +15,7 @@ pub fn sign(
     hash: &[u8],
     rng: &mut impl RngCore,
 ) -> Result<Signature, Error> {
-    sign_core(keys, signer_idx, None, hash, rng)
+    sign_core(keys, signer_idx, None, hash, false, rng)
 }
 
 /// Like [`sign`], adding `tweak` to the effective key (HD derivation). The first
@@ -27,7 +27,41 @@ pub fn sign_with_tweak(
     hash: &[u8],
     rng: &mut impl RngCore,
 ) -> Result<Signature, Error> {
-    sign_core(keys, signer_idx, Some(tweak), hash, rng)
+    sign_core(keys, signer_idx, Some(tweak), hash, false, rng)
+}
+
+/// Opt-in malicious-secure variant of [`sign`]: every cross-term ΠMul uses the
+/// Mul-then-check pattern of [`super::ole_check`] (DKLs23 §5). If a peer uses
+/// inconsistent `β` across the two parallel multiplications the call aborts
+/// with [`ole_check::MUL_CHECK_FAILED`] instead of producing a possibly-leaky
+/// abort. Mirrors Go `dklstss.SignChecked`.
+///
+/// Cost is roughly 2× the CPU of [`sign`] (each ΠMul runs twice). See the
+/// module docs of [`super`] for the inherited simplified-check limitation.
+///
+/// Note: in this synchronous in-process API all parties are honest (driven by
+/// the same caller), so the check is a correctness/regression guard here; the
+/// security-relevant deployment is the broker-driven
+/// [`super::CheckedSigningParty`], where a peer can genuinely deviate.
+pub fn sign_checked(
+    keys: &[Key],
+    signer_idx: &[usize],
+    hash: &[u8],
+    rng: &mut impl RngCore,
+) -> Result<Signature, Error> {
+    sign_core(keys, signer_idx, None, hash, true, rng)
+}
+
+/// [`sign_checked`] with an optional HD tweak, analogous to [`sign_with_tweak`].
+/// Mirrors Go `dklstss.SignCheckedWithTweak`.
+pub fn sign_checked_with_tweak(
+    keys: &[Key],
+    signer_idx: &[usize],
+    tweak: &Scalar,
+    hash: &[u8],
+    rng: &mut impl RngCore,
+) -> Result<Signature, Error> {
+    sign_core(keys, signer_idx, Some(tweak), hash, true, rng)
 }
 
 fn sign_core(
@@ -35,6 +69,7 @@ fn sign_core(
     signer_idx: &[usize],
     tweak: Option<&Scalar>,
     hash: &[u8],
+    checked: bool,
     rng: &mut impl RngCore,
 ) -> Result<Signature, Error> {
     if keys.is_empty() {
@@ -77,13 +112,24 @@ fn sign_core(
         sx[0] = sx[0].add(tw);
     }
 
-    // Session id bound to the message.
+    // Session id bound to the message. The checked path uses a distinct
+    // domain prefix and ΠMul-kind tags so checked and unchecked sessions can
+    // never collide on an OT-extension sub-sid.
     let mut nonce = [0u8; 16];
     rng.fill_bytes(&mut nonce);
-    let mut ssid = b"DKLS23-sign-v1-".to_vec();
+    let mut ssid = if checked {
+        b"DKLS23-signchecked-v1-".to_vec()
+    } else {
+        b"DKLS23-sign-v1-".to_vec()
+    };
     ssid.extend_from_slice(&nonce);
     ssid.push(b'|');
     ssid.extend_from_slice(hash);
+    let (kind_k, kind_x) = if checked {
+        ("signchecked-kxrho", "signchecked-xxrho")
+    } else {
+        ("kxrho", "xxrho")
+    };
 
     // Round 1: per-party nonce k_i, masking ρ_i; K_i = k_i·G; R = Σ K_i.
     let mut k: Vec<Scalar> = Vec::with_capacity(sgn);
@@ -124,18 +170,28 @@ fn sign_core(
                 .ok_or_else(|| Error::Validation("missing OT state".into()))?;
 
             // ΠMul(k_ai, ρ_bj).
-            let sid_k = make_sid(&ssid, "kxrho", alice.idx, bob.idx);
-            let (a_msg, a_state) = ole::alice_step1(&sid_k, &alice_pair.as_alice, &k[ai])?;
-            let (b_msg, u_b) = ole::bob_step1(&sid_k, &bob_pair.as_bob, &rho[bj], &a_msg)?;
-            let u_a = ole::alice_step2(&a_state, &b_msg)?;
+            let sid_k = make_sid(&ssid, kind_k, alice.idx, bob.idx);
+            let (u_a, u_b) = run_mul(
+                checked,
+                &sid_k,
+                &alice_pair.as_alice,
+                &bob_pair.as_bob,
+                &k[ai],
+                &rho[bj],
+            )?;
             k_rho[ai] = k_rho[ai].add(&u_a);
             k_rho[bj] = k_rho[bj].add(&u_b);
 
             // ΠMul(sx_ai, ρ_bj).
-            let sid_x = make_sid(&ssid, "xxrho", alice.idx, bob.idx);
-            let (a_msg, a_state) = ole::alice_step1(&sid_x, &alice_pair.as_alice, &sx[ai])?;
-            let (b_msg, u_b) = ole::bob_step1(&sid_x, &bob_pair.as_bob, &rho[bj], &a_msg)?;
-            let u_a = ole::alice_step2(&a_state, &b_msg)?;
+            let sid_x = make_sid(&ssid, kind_x, alice.idx, bob.idx);
+            let (u_a, u_b) = run_mul(
+                checked,
+                &sid_x,
+                &alice_pair.as_alice,
+                &bob_pair.as_bob,
+                &sx[ai],
+                &rho[bj],
+            )?;
             x_rho[ai] = x_rho[ai].add(&u_a);
             x_rho[bj] = x_rho[bj].add(&u_b);
         }
@@ -188,6 +244,34 @@ fn sign_core(
         s: pad32(&secp::scalar_to_be_min(&s)),
         v,
     })
+}
+
+/// Runs one (alice plays `alpha`, bob plays `beta`) ΠMul under `sid`,
+/// returning `(u_a, u_b)` with `u_a + u_b ≡ alpha·beta (mod n)`. When
+/// `checked` is set it uses the opt-in Mul-then-check path of
+/// [`super::ole_check`] (two parallel runs + cross-run consistency check),
+/// otherwise the plain unchecked path. Since all three steps run in-process
+/// here, the checked path's only observable difference is that it aborts on an
+/// internally-inconsistent multiplication rather than silently accepting it.
+fn run_mul(
+    checked: bool,
+    sid: &[u8],
+    alice: &super::otext::ExtReceiver,
+    bob: &super::otext::ExtSender,
+    alpha: &Scalar,
+    beta: &Scalar,
+) -> Result<(Scalar, Scalar), Error> {
+    if checked {
+        let (m1, m2, state) = ole_check::checked_alice_step1(sid, alice, alpha)?;
+        let (bmsg, u_b) = ole_check::checked_bob_step1(sid, bob, beta, &m1, &m2)?;
+        let u_a = ole_check::checked_alice_step2(&state, &bmsg)?;
+        Ok((u_a, u_b))
+    } else {
+        let (a_msg, a_state) = ole::alice_step1(sid, alice, alpha)?;
+        let (b_msg, u_b) = ole::bob_step1(sid, bob, beta, &a_msg)?;
+        let u_a = ole::alice_step2(&a_state, &b_msg)?;
+        Ok((u_a, u_b))
+    }
 }
 
 /// Lagrange coefficient `λ_i = Π_{j≠i} id_j / (id_j − id_i)` (mod n) at x=0.
@@ -308,5 +392,55 @@ mod tests {
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);
         assert!(ecdsa_verify(&keys[0].ecdsa_pub, &e, &r, &s));
+    }
+
+    /// Positive: the opt-in checked sync path produces a valid signature.
+    /// (All parties honest in-process, so this is a correctness/regression
+    /// guard; the security-relevant flow is the broker `CheckedSigningParty`.)
+    #[test]
+    fn keygen_sign_checked_verify_2_of_3() {
+        let ids = party_ids(3);
+        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let msg = sha256(b"hello dkls checked");
+        let sig = sign_checked(&keys, &[0, 2], &msg, &mut OsRng).unwrap();
+
+        let e = hash_to_scalar(&msg);
+        let r = secp::scalar_from_be_reduce(&sig.r);
+        let s = secp::scalar_from_be_reduce(&sig.s);
+        assert!(ecdsa_verify(&keys[0].ecdsa_pub, &e, &r, &s));
+        assert!(!is_high_s(&s), "checked signature must be low-S");
+    }
+
+    #[test]
+    fn keygen_sign_checked_verify_3_of_5() {
+        let ids = party_ids(5);
+        let keys = keygen(5, 2, &ids, &mut OsRng).unwrap();
+        let msg = sha256(b"checked another message");
+        let sig = sign_checked(&keys, &[1, 3, 4], &msg, &mut OsRng).unwrap();
+        let e = hash_to_scalar(&msg);
+        let r = secp::scalar_from_be_reduce(&sig.r);
+        let s = secp::scalar_from_be_reduce(&sig.s);
+        assert!(ecdsa_verify(&keys[0].ecdsa_pub, &e, &r, &s));
+    }
+
+    /// The checked path agrees with the default path on a valid signature for
+    /// the same message+committee (both verify under the joint key). The two
+    /// use independent ssids/nonces so the (r,s) values differ, but both are
+    /// valid ECDSA signatures — confirming the checked wrapper does not corrupt
+    /// the multiplication output.
+    #[test]
+    fn sign_checked_matches_default_validity() {
+        let ids = party_ids(3);
+        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let msg = sha256(b"checked vs default");
+        let e = hash_to_scalar(&msg);
+
+        let def = sign(&keys, &[0, 1], &msg, &mut OsRng).unwrap();
+        let chk = sign_checked(&keys, &[0, 1], &msg, &mut OsRng).unwrap();
+        for sig in [&def, &chk] {
+            let r = secp::scalar_from_be_reduce(&sig.r);
+            let s = secp::scalar_from_be_reduce(&sig.s);
+            assert!(ecdsa_verify(&keys[0].ecdsa_pub, &e, &r, &s));
+        }
     }
 }
