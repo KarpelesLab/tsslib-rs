@@ -120,8 +120,8 @@ pub(crate) fn prove<R: RngCore>(
                 yi = modn.mul(&w, &yi); // W·Y[i] mod N
             }
             if is_qr(&yi, p) && is_qr(&yi, q) {
-                x[i] = modn.pow(&yi, &expo); // fourth root
-                z[i] = modn.pow(&y[i], &inv_n);
+                x[i] = modn.pow_secret(&yi, &expo); // fourth root
+                z[i] = modn.pow_secret(&y[i], &inv_n);
                 a_bits |= (ab as u128) << i;
                 b_bits |= (bb as u128) << i;
                 found = true;

@@ -107,8 +107,8 @@ impl PrivateKey {
             let t = bn::sub(u, &bn::one());
             bn::divrem(&t, n).0
         };
-        let lc = l(&n2.pow(c, &self.lambda));
-        let lg = l(&n2.pow(&self.pk.gamma(), &self.lambda));
+        let lc = l(&n2.pow_secret(c, &self.lambda));
+        let lg = l(&n2.pow_secret(&self.pk.gamma(), &self.lambda));
         let modn = Modulus::new(n);
         let inv = modn
             .inv(&lg)
@@ -128,7 +128,7 @@ impl PrivateKey {
         let m = bn::mod_inv(&self.pk.n, &self.phi)
             .ok_or_else(|| Error::Validation("paillier: N not invertible mod φ(N)".into()))?;
         let modn = Modulus::new(&self.pk.n);
-        let pi: Vec<BoxedUint> = xs.iter().map(|x| modn.pow(x, &m)).collect();
+        let pi: Vec<BoxedUint> = xs.iter().map(|x| modn.pow_secret(x, &m)).collect();
         Ok(pi.try_into().map_err(|_| ()).expect("PROOF_ITERS items"))
     }
 }

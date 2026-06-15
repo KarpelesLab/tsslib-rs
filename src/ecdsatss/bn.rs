@@ -280,6 +280,15 @@ impl Modulus {
         self.mont.pow_public(&self.reduce(base), exp)
     }
 
+    /// `base^exp mod m` for a **secret** exponent — constant-time ladder.
+    /// `BoxedMontModulus::pow` is square-and-multiply-always with an iteration
+    /// count that depends only on the modulus width (a public quantity), not on
+    /// the exponent's bit pattern, so timing does not leak the exponent. Use
+    /// this for every φ/λ/inverse-mod-φ-derived exponent (side-channel finding).
+    pub(crate) fn pow_secret(&self, base: &BoxedUint, exp: &BoxedUint) -> BoxedUint {
+        self.mont.pow(&self.reduce(base), exp)
+    }
+
     /// `a⁻¹ mod m`, or `None` if not invertible.
     pub(crate) fn inv(&self, a: &BoxedUint) -> Option<BoxedUint> {
         inv_mod_boxed(&self.reduce(a), &self.m)
