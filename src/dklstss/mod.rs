@@ -102,6 +102,7 @@ pub(crate) mod secp;
 mod serialize;
 mod setup;
 mod signing;
+mod signing_checked_party;
 mod signing_party;
 pub(crate) mod vss;
 
@@ -117,6 +118,7 @@ pub use refresh_party::RefreshParty;
 pub use resharing::{refresh, reshare};
 pub use resharing_party::ResharingParty;
 pub use signing::{sign, sign_checked, sign_checked_with_tweak, sign_with_tweak};
+pub use signing_checked_party::CheckedSigningParty;
 pub use signing_party::SigningParty;
 
 /// Errors raised by the `dklstss` protocols.
