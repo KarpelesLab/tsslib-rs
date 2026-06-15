@@ -2,26 +2,40 @@
 //! tss-lib `crypto/ot/ole` (mul). Two parties holding `α` (Alice) and `β`
 //! (Bob) end with additive shares `u_A + u_B ≡ α·β (mod n)`.
 //!
-//! # SECURITY (known gap)
+//! # SECURITY (known gap in the *default* path)
 //!
-//! This is the *plain* Gilboa multiplier: Alice's OT choice bits are the raw
-//! bits of her secret `α` (no randomized encoding / gadget vector), and Bob's
-//! correction values `c_i` are used without any consistency verification. The
-//! πMul input-consistency / multiplication check of DKLs23 (ePrint 2023/765,
-//! §πMul — "check coordinates" appended to the multiplication and verified
-//! post-hoc) is **not implemented**. Consequently a malicious counterparty
-//! can flip a chosen `m_1[i]`/correction so the multiplication output is
-//! correct iff a specific bit of `α` has a guessed value; the resulting
-//! signature then verifies or aborts accordingly, giving a selective-failure
-//! oracle of ~1 bit of the honest party's share/nonce per aborted session.
-//! The KOS check in [`super::otext`] only protects the *sender* from a
-//! malicious receiver; it does not authenticate the sender's inputs here.
+//! These primitives are the *plain* Gilboa multiplier: Alice's OT choice bits
+//! are the raw bits of her secret `α` (no randomized encoding / gadget
+//! vector), and Bob's correction values `c_i` are used without any consistency
+//! verification. On their own they implement no πMul input-consistency check,
+//! so a malicious counterparty can flip a chosen `m_1[i]`/correction such that
+//! the multiplication output is correct iff a specific bit of `α` has a guessed
+//! value; the resulting signature then verifies or aborts accordingly, giving
+//! a selective-failure oracle of ~1 bit of the honest party's share/nonce per
+//! aborted session. The KOS check in [`super::otext`] only protects the
+//! *sender* from a malicious receiver; it does not authenticate the sender's
+//! inputs here.
 //!
-//! Fixing this changes the OT-extension message sizes (wire format) and must
-//! be coordinated with the Go tss-lib implementation; it is deferred. See the
-//! module docs of [`super`] (dklstss) for the operational guidance: bound
-//! retries and rotate/reshare the key on repeated unexplained signing aborts
-//! with the same participant set.
+//! The default [`super::sign`] / [`super::signing_party`] path uses these
+//! primitives directly and is kept **byte-compatible with Go tss-lib's default
+//! (unchecked) signing** on purpose, so it is not changed.
+//!
+//! ## Opt-in fix: Mul-then-check
+//!
+//! The opt-in **Mul-then-check** wrapper in [`super::ole_check`] composes these
+//! exact primitives into a DKLs23 §5 consistency-checked multiplication (two
+//! parallel runs under `sid|1`/`sid|2` with a cross-run check value `Z`). It
+//! closes the selective-failure oracle for an *inconsistent-`β`* deviation and
+//! is wired into [`super::sign_checked`] and
+//! [`super::CheckedSigningParty`]. That wrapper requires no change to the
+//! OT-extension message sizes — it simply runs the unchecked multiplication
+//! twice — so the default wire format is untouched. It inherits Go's
+//! simplified-check limitation (a *consistently* wrong `β` is caught only by
+//! the final ECDSA verification gate; full identifiable abort is Go's task
+//! #17). See [`super`] (dklstss) module docs for operational guidance on the
+//! default path: bound retries and rotate/reshare the key on repeated
+//! unexplained signing aborts with the same participant set, or use the checked
+//! path with untrusted peers.
 
 use super::Error;
 use super::otext::{self, ExtReceiver, ExtSender, ExtendMsg1};

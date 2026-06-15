@@ -64,6 +64,7 @@ mod key;
 mod keygen;
 mod keygen_party;
 pub(crate) mod ole;
+pub(crate) mod ole_check;
 pub(crate) mod otext;
 mod presign;
 mod refresh_party;
