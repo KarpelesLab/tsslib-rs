@@ -17,13 +17,24 @@
 //! supplied by the caller. The broker MUST provide confidentiality on
 //! per-recipient messages, authenticity on per-sender messages (peer
 //! authentication is out of scope here), and reliable ordered delivery within
-//! a single protocol instance. Round-2 DKG shares are additionally encrypted at
-//! the application layer (X25519 + ChaCha20-Poly1305).
+//! a single protocol instance. Round-2 DKG (keygen) shares are additionally
+//! encrypted at the application layer (X25519 + ChaCha20-Poly1305).
 //!
-//! # Status
+//! ## Resharing shares rely on broker confidentiality
 //!
-//! Not yet implemented — this is a scaffold. Group and scalar arithmetic will
-//! be provided by `purecrypto`'s Edwards25519 primitives.
+//! Unlike keygen, [`Resharing`] transmits each new party's secret sub-share in
+//! **cleartext** (round 3), so its confidentiality depends *entirely* on the
+//! broker's per-recipient confidentiality guarantee above — there is no
+//! application-layer AEAD on the resharing path. An observer able to collect
+//! `new_threshold + 1` sub-shares for a single old dealer recovers that dealer's
+//! Lagrange-weighted share. This matches the Go `frosttss` resharing on the wire
+//! (`frosttss/resharing.go`, `round3Old`), so it is a *symmetric* gap, not a Rust
+//! divergence; the Go/Rust `frostristretto255tss` resharing is the outlier that
+//! does wrap shares in the same AEAD envelope. Adding the envelope here would
+//! change the round-3 wire format and break interop with the Go `frosttss`, so it
+//! is deferred to a coordinated Go+Rust protocol-version bump. Until then, deploy
+//! `frosttss` resharing only over a transport that actually enforces the
+//! per-recipient confidentiality the broker contract requires.
 //!
 //! References:
 //! - RFC 9591: <https://www.rfc-editor.org/rfc/rfc9591.html>
