@@ -49,8 +49,13 @@ const TYPE_R3: &str = "dkls:csign:r3";
 const TYPE_R4: &str = "dkls:csign:r4";
 const TYPE_R4ECHO: &str = "dkls:csign:r4echo";
 
-const ECHO_TAG_SIGN: &str = "DKLS23-echo-csign-v1";
-const ECHO_TAG_SIGN_R4: &str = "DKLS23-echo-csign-r4-v1";
+// Echo digest tags: Go's CheckedSigningParty reuses the unchecked sign-phase
+// digest helpers (kIDigest/r4Digest in signing_party.go), so these MUST be the
+// `-sign-` tags, not `-csign-`, for cross-implementation checked signing to
+// agree on echo digests. The message-type strings and echo-source string below
+// are independently `csign` to match Go's checkedSign* / echoSourceCheckedSign.
+const ECHO_TAG_SIGN: &str = "DKLS23-echo-sign-v1";
+const ECHO_TAG_SIGN_R4: &str = "DKLS23-echo-sign-r4-v1";
 const ECHO_SOURCE_SIGN: &str = "dklstss-csign";
 
 /// A running opt-in Mul-then-check DKLs23 signing session. Construct with
