@@ -7,8 +7,11 @@
 //! its commitment); round 3 broadcasts the packed responses; combine aggregates
 //! and emits a FIPS-204-verifiable signature. The per-phase lattice work is the
 //! shared [`sample_w`]/[`compute_response`]/[`combine_try`] from
-//! [`signing`](super::signing). Wire-compatible with Go `mldsatss`
-//! (`mldsa44:sign:round{1,2,3}`).
+//! [`signing`](super::signing). Wire-compatible with Go `mldsatss`: round
+//! message types are `mldsa44:sign:round{1,2,3}#<attempt_id>`, where
+//! `attempt_id` (a u32, 0 by default; see [`SigningParty44::new_with_attempt_id`])
+//! mirrors Go's `Parameters.SetAttemptID` and is also bound into the round-1
+//! commitment.
 //!
 //! Each session is a single attempt: if every one of the `k` tries is rejected,
 //! [`SigningParty44::wait`] returns an error and the caller retries with fresh
@@ -50,6 +53,12 @@ struct Shared {
     params: Parameters,
     key: Key44,
     key_ids: Vec<u8>, // Key44.id of params.parties()[slot]
+    attempt_id: u32,
+    // Per-session message types: `TYPE_R{1,2,3}#<attempt_id>`, matching Go's
+    // `Parameters.msgType` (`fmt.Sprintf("%s#%d", base, attemptID)`).
+    type_r1: String,
+    type_r2: String,
+    type_r3: String,
     act: u8,
     my_rank: usize,
     mu: [u8; 64],
@@ -91,6 +100,24 @@ impl SigningParty44 {
         msg: &[u8],
         ctx: &[u8],
     ) -> Result<SigningParty44, Error> {
+        Self::new_with_attempt_id(params, th, key, key_ids, msg, ctx, 0)
+    }
+
+    /// Like [`SigningParty44::new`] but with an explicit `attempt_id`, matching
+    /// Go's `Parameters.SetAttemptID`. The id is appended to every round's
+    /// message type (`mldsa44:sign:roundN#<attempt_id>`) and bound into the
+    /// round-1 commitment, so several signing sessions can share one broker
+    /// without message-type collisions. `new` (attempt_id 0) is wire-identical
+    /// to a Go session that never calls `SetAttemptID`.
+    pub fn new_with_attempt_id(
+        params: Parameters,
+        th: ThresholdParams44,
+        key: Key44,
+        key_ids: Vec<u8>,
+        msg: &[u8],
+        ctx: &[u8],
+        attempt_id: u32,
+    ) -> Result<SigningParty44, Error> {
         key.validate()?;
         if ctx.len() > 255 {
             return Err(Error::Validation("context longer than 255 bytes".into()));
@@ -103,6 +130,13 @@ impl SigningParty44 {
         }
         if key_ids.len() != params.parties().len() {
             return Err(Error::Validation("key_ids length mismatch".into()));
+        }
+        // Go `NewParameters` requires key_ids strictly increasing, so they align
+        // with the ascending-sorted committee (parties().IDs()). Reject otherwise.
+        if key_ids.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(Error::Validation(
+                "key_ids must be strictly increasing (aligned with the sorted committee)".into(),
+            ));
         }
         let my_rank = params.party_index();
         if key_ids[my_rank] != key.id {
@@ -125,6 +159,10 @@ impl SigningParty44 {
             params,
             key,
             key_ids,
+            attempt_id,
+            type_r1: format!("{TYPE_R1}#{attempt_id}"),
+            type_r2: format!("{TYPE_R2}#{attempt_id}"),
+            type_r3: format!("{TYPE_R3}#{attempt_id}"),
             act,
             my_rank,
             mu,
@@ -195,7 +233,7 @@ impl Shared {
         }
 
         self.broadcast(
-            TYPE_R1,
+            &self.type_r1,
             &SignR1 {
                 commit: B64Bytes(commit),
             },
@@ -204,11 +242,11 @@ impl Shared {
         let me = Arc::clone(self);
         let others = self.params.other_parties();
         let exp = JsonExpect::new(
-            TYPE_R1,
+            self.type_r1.clone(),
             others.clone(),
             Box::new(move |msgs| me.on_r1(&others, msgs)),
         );
-        self.params.broker().connect(TYPE_R1, Arc::new(exp));
+        self.params.broker().connect(&self.type_r1, Arc::new(exp));
         Ok(())
     }
 
@@ -241,7 +279,7 @@ impl Shared {
             wbuf
         };
         if let Err(e) = self.broadcast(
-            TYPE_R2,
+            &self.type_r2,
             &SignR2 {
                 wbuf: B64Bytes(wbuf),
             },
@@ -251,11 +289,11 @@ impl Shared {
         let me = Arc::clone(self);
         let others_owned = others.to_vec();
         let exp = JsonExpect::new(
-            TYPE_R2,
+            self.type_r2.clone(),
             others.to_vec(),
             Box::new(move |msgs| me.on_r2(&others_owned, msgs)),
         );
-        self.params.broker().connect(TYPE_R2, Arc::new(exp));
+        self.params.broker().connect(&self.type_r2, Arc::new(exp));
     }
 
     fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
@@ -334,7 +372,7 @@ impl Shared {
             st.r3resps[self.my_rank] = Some(respbuf.clone());
         }
         if let Err(e) = self.broadcast(
-            TYPE_R3,
+            &self.type_r3,
             &SignR3 {
                 resp: B64Bytes(respbuf),
             },
@@ -344,11 +382,11 @@ impl Shared {
         let me = Arc::clone(self);
         let others_owned = others.to_vec();
         let exp = JsonExpect::new(
-            TYPE_R3,
+            self.type_r3.clone(),
             others.to_vec(),
             Box::new(move |msgs| me.combine(&others_owned, msgs)),
         );
-        self.params.broker().connect(TYPE_R3, Arc::new(exp));
+        self.params.broker().connect(&self.type_r3, Arc::new(exp));
     }
 
     fn combine(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
@@ -401,12 +439,13 @@ impl Shared {
         )));
     }
 
-    /// SHAKE256(tr ‖ act ‖ attempt(0) ‖ μ ‖ keyId ‖ wbuf) → 32 bytes.
+    /// SHAKE256(tr ‖ act ‖ attempt_id ‖ μ ‖ keyId ‖ wbuf) → 32 bytes.
+    /// `attempt_id` is a big-endian u32 (Go `computeCommitment`), 0 by default.
     fn compute_commitment(&self, key_id: u8, wbuf: &[u8]) -> Vec<u8> {
         let mut input = Vec::with_capacity(64 + 1 + 4 + 64 + 1 + wbuf.len());
         input.extend_from_slice(&self.key.tr);
         input.push(self.act);
-        input.extend_from_slice(&0u32.to_be_bytes()); // attempt id (single attempt)
+        input.extend_from_slice(&self.attempt_id.to_be_bytes()); // big-endian u32
         input.extend_from_slice(&self.mu);
         input.push(key_id);
         input.extend_from_slice(wbuf);
@@ -652,6 +691,32 @@ mod tests {
         };
 
         assert!(pk.verify(&sig, msg, ctx), "broker signature must verify");
+    }
+
+    /// Round message types must carry Go's `#<attempt_id>` suffix
+    /// (`Parameters.msgType` = `fmt.Sprintf("%s#%d", base, attemptID)`). Without
+    /// it a mixed Go↔Rust session mis-routes even at the default attempt 0. Pins
+    /// the exact Go wire strings so the suffix can't be dropped again.
+    #[test]
+    fn message_types_carry_go_attempt_suffix() {
+        assert_eq!(format!("{TYPE_R1}#{}", 0u32), "mldsa44:sign:round1#0");
+        assert_eq!(format!("{TYPE_R2}#{}", 0u32), "mldsa44:sign:round2#0");
+        assert_eq!(format!("{TYPE_R3}#{}", 0u32), "mldsa44:sign:round3#0");
+        assert_eq!(format!("{TYPE_R1}#{}", 5u32), "mldsa44:sign:round1#5");
+    }
+
+    /// Go `NewParameters` rejects non-strictly-increasing key_ids; so must we.
+    #[test]
+    fn rejects_non_increasing_key_ids() {
+        let params = get_threshold_params44(2, 3).unwrap();
+        let (_pk, keys) = trusted_dealer_keygen44(&[7u8; 32], &params).unwrap();
+        let pids = committee_ids(3);
+        let committee = PartyId::sort(vec![pids[0].clone(), pids[1].clone()], 0);
+        let hub = TestHub::new(&committee);
+        let prm = Parameters::new(committee.clone(), &committee[0], 1, hub.broker(0));
+        // key_ids descending → must be rejected, not silently accepted.
+        let err = SigningParty44::new(prm, params, keys[0].clone(), vec![1, 0], b"m", b"");
+        assert!(err.is_err(), "non-increasing key_ids must be rejected");
     }
 
     /// FIX 2 (identifiable abort): a garbage z_i block with grossly
