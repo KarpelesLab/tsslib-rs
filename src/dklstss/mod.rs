@@ -23,7 +23,7 @@
 //! # Security: malicious signers and selective-failure aborts
 //!
 //! The **default** signing path ([`sign`] / [`SigningParty`]) uses the *plain*
-//! OT-based Gilboa multiplication in [`ole`]: Alice's raw secret bits are the
+//! OT-based Gilboa multiplication in the `ole` module: Alice's raw secret bits are the
 //! OT choice bits and Bob's correction values are unverified. It implements no
 //! πMul input-consistency check, so a malicious co-signer can mount a
 //! **selective-failure attack**: by corrupting a single chosen OT row or
@@ -44,7 +44,7 @@
 //! Each cross-term ΠMul is run **twice in parallel** under sub-session-ids
 //! `sid|1` and `sid|2` with the same `α`; Bob attaches a cross-run consistency
 //! value `Z = u_B1 − u_B2` and Alice rejects unless `Z_A + Z ≡ 0 (mod n)`
-//! (see [`ole_check`]). A peer who uses inconsistent `β` across the two runs —
+//! (see the `ole_check` module). A peer who uses inconsistent `β` across the two runs —
 //! the lever of the selective-failure attack — is caught, and in
 //! [`CheckedSigningParty`] the offending peer is named in
 //! [`crate::tss::TssError::culprits`] (identifiable abort). Cost is roughly

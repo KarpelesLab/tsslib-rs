@@ -965,8 +965,8 @@ fn validate_sorted_subset(subset: &[PartyId]) -> Result<(), Error> {
 mod tests {
     use super::super::keygen_party::KeygenParty;
     use super::*;
-    use crate::tss::{BrokerResult, MessageBroker, MessageReceiver};
     use crate::tss::testhub::TestHub;
+    use crate::tss::{BrokerResult, MessageBroker, MessageReceiver};
 
     fn party_ids(n: usize) -> Vec<PartyId> {
         PartyId::sort(
@@ -1059,8 +1059,7 @@ mod tests {
                 if let Ok(mut r3) = json_get::<CheckedSignR3>(msg) {
                     if let Some(last) = r3.bob_kz.0.last_mut() {
                         *last ^= 0x01;
-                        let rewritten =
-                            json_wrap(&msg.typ, &r3, msg.from.clone(), msg.to.clone())?;
+                        let rewritten = json_wrap(&msg.typ, &r3, msg.from.clone(), msg.to.clone())?;
                         return self.inner.receive(&rewritten);
                     }
                 }

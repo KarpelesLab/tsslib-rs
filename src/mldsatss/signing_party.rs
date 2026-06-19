@@ -29,10 +29,10 @@ use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::hazmat::{ML_DSA_44, Poly, inf_norm, unpack_z};
 use purecrypto::rng::{OsRng, RngCore};
-use zeroize::Zeroize;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroize;
 
 const TYPE_R1: &str = "mldsa44:sign:round1";
 const TYPE_R2: &str = "mldsa44:sign:round2";
@@ -418,9 +418,13 @@ impl Shared {
             // rejected" for the whole committee with no attribution (a silent
             // DoS). On failure we name the offending committee slot instead of
             // silently summing.
-            if let Err(e) =
-                validate_party_responses(&st.r3resps, self.kk, self.th.nu, self.th.rp, &self.key_ids)
-            {
+            if let Err(e) = validate_party_responses(
+                &st.r3resps,
+                self.kk,
+                self.th.nu,
+                self.th.rp,
+                &self.key_ids,
+            ) {
                 return self.deliver(Err(e));
             }
             (

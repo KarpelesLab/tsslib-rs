@@ -31,10 +31,10 @@ pub fn sign_with_tweak(
 }
 
 /// Opt-in malicious-secure variant of [`sign`]: every cross-term ΠMul uses the
-/// Mul-then-check pattern of [`super::ole_check`] (DKLs23 §5). If a peer uses
+/// Mul-then-check pattern of the `ole_check` module (DKLs23 §5). If a peer uses
 /// inconsistent `β` across the two parallel multiplications the call aborts
-/// with [`ole_check::MUL_CHECK_FAILED`] instead of producing a possibly-leaky
-/// abort. Mirrors Go `dklstss.SignChecked`.
+/// with a `MUL_CHECK_FAILED` validation error instead of producing a
+/// possibly-leaky abort. Mirrors Go `dklstss.SignChecked`.
 ///
 /// Cost is roughly 2× the CPU of [`sign`] (each ΠMul runs twice). See the
 /// module docs of [`super`] for the inherited simplified-check limitation.
