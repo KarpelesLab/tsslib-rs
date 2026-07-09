@@ -107,6 +107,28 @@ impl SigningParty {
         })
     }
 
+    /// Like [`SigningParty::new`], but signs under an additively-derived child
+    /// key.
+    ///
+    /// `key_derivation_delta` (a big-endian scalar, reduced mod the group order
+    /// `L`) shifts a clone of `key` by `delta·G` via [`Key::with_kdd`]; the
+    /// master key is left untouched. The resulting threshold signature is a
+    /// stock Ed25519 signature under the child public key
+    /// `key.EDDSAPub + delta·G`. A `None` delta is identical to
+    /// [`SigningParty::new`].
+    pub fn new_with_kdd(
+        params: Parameters,
+        key: Key,
+        message: &[u8],
+        key_derivation_delta: Option<&[u8]>,
+    ) -> Result<SigningParty, Error> {
+        let key = match key_derivation_delta {
+            Some(delta) => key.with_kdd(delta)?,
+            None => key,
+        };
+        Self::new(params, key, message)
+    }
+
     /// Blocks until signing completes.
     pub fn wait(&self) -> Result<SignatureData, Error> {
         self.result_rx
@@ -490,6 +512,64 @@ mod tests {
             msg,
             &sigs[0].signature
         ));
+    }
+
+    #[test]
+    fn kdd_sign_verifies_under_child_key() {
+        let ids = PartyId::sort(
+            (1..=2)
+                .map(|i| PartyId::new(i.to_string(), format!("P{i}"), vec![i as u8]))
+                .collect(),
+            0,
+        );
+        let t = 1;
+        let hub = TestHub::new(&ids);
+        let kparties: Vec<KeygenParty> = (0..ids.len())
+            .map(|i| {
+                KeygenParty::new(Parameters::new(ids.to_vec(), &ids[i], t, hub.broker(i))).unwrap()
+            })
+            .collect();
+        let keys: Vec<Key> = kparties.iter().map(|p| p.wait().unwrap()).collect();
+
+        let msg = b"child-key threshold eddsa";
+        let delta: &[u8] = &[0x00, 0xde, 0xad, 0xbe, 0xef];
+
+        // Sign with the derived child key on every party.
+        let shub = TestHub::new(&ids);
+        let sigs: Vec<SignatureData> = (0..ids.len())
+            .map(|i| {
+                let params = Parameters::new(ids.to_vec(), &ids[i], t, shub.broker(i));
+                SigningParty::new_with_kdd(params, keys[i].clone(), msg, Some(delta)).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|p| p.wait().expect("KDD signing succeeds"))
+            .collect();
+        for s in &sigs[1..] {
+            assert_eq!(s.signature, sigs[0].signature);
+        }
+
+        // Valid stock Ed25519 signature under the child key A + delta·G, and
+        // not under the untouched master key.
+        let master = keys[0].eddsa_pub_point().unwrap();
+        let child = ed::add(&master, &ed::mul_base(&ed::scalar_from_be(delta)));
+        assert!(ed_verify(&child, msg, &sigs[0].signature));
+        assert!(!ed_verify(&master, msg, &sigs[0].signature));
+
+        // A None delta behaves like plain signing: the result verifies under
+        // the untouched master key. (Signatures use random nonces, so two runs
+        // differ byte-for-byte; validity, not equality, is the invariant.)
+        let shub2 = TestHub::new(&ids);
+        let none_sig = {
+            let parties: Vec<SigningParty> = (0..ids.len())
+                .map(|i| {
+                    let params = Parameters::new(ids.to_vec(), &ids[i], t, shub2.broker(i));
+                    SigningParty::new_with_kdd(params, keys[i].clone(), msg, None).unwrap()
+                })
+                .collect();
+            parties[0].wait().unwrap()
+        };
+        assert!(ed_verify(&master, msg, &none_sig.signature));
     }
 
     #[test]

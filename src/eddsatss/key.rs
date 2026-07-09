@@ -154,6 +154,37 @@ impl Key {
             eddsa_pub: self.eddsa_pub.clone(),
         })
     }
+
+    /// Returns a clone of this key shifted by an additive key-derivation delta
+    /// `delta` (a big-endian scalar, reduced mod the group order `L`): `EDDSAPub`
+    /// and every `BigXj[j]` are offset by `delta·G`, and the local share `Xi`
+    /// has `delta` added mod `L`. The receiver (master key) is left untouched.
+    ///
+    /// Because the Ed25519 challenge `SHA-512(R‖A‖M)` binds the shifted
+    /// `A = EDDSAPub + delta·G`, a threshold signature produced with the shifted
+    /// key is a valid, stock Ed25519 signature under that child public key.
+    /// Consistency is preserved: as the Lagrange weights sum to 1,
+    /// `Σ λ_j (X_j + delta·G) = EDDSAPub + delta·G`.
+    pub fn with_kdd(&self, delta: &[u8]) -> Result<Key, Error> {
+        let d = ed::scalar_from_be(delta);
+        let delta_g = ed::mul_base(&d);
+        let pub_pt = self
+            .eddsa_pub_point()
+            .ok_or_else(|| Error::Validation("key: EDDSAPub is off curve".into()))?;
+        let big_xj = self
+            .big_xj_points()
+            .ok_or_else(|| Error::Validation("key: a BigXj is off curve".into()))?;
+        Ok(Key {
+            xi: BigUintDec::from_be_bytes(&ed::scalar_to_be(&self.xi_scalar().add(&d))),
+            share_id: self.share_id.clone(),
+            ks: self.ks.clone(),
+            big_xj: big_xj
+                .iter()
+                .map(|p| ed::point_to_json(&ed::add(p, &delta_g)))
+                .collect(),
+            eddsa_pub: ed::point_to_json(&ed::add(&pub_pt, &delta_g)),
+        })
+    }
 }
 
 /// Big-endian magnitude with leading zero bytes removed (matches
@@ -213,6 +244,44 @@ mod tests {
         assert_eq!(sub.xi, key.xi);
         assert_eq!(sub.share_id, key.share_id);
         sub.validate_basic().unwrap();
+    }
+
+    #[test]
+    fn with_kdd_shifts_pub_share_and_secret() {
+        let key = load_key();
+        let delta_be = [0x00u8, 0x11, 0x22, 0x33];
+        let child = key.with_kdd(&delta_be).unwrap();
+
+        let d = ed::scalar_from_be(&delta_be);
+        let delta_g = ed::mul_base(&d);
+
+        // EDDSAPub' = EDDSAPub + delta·G.
+        let want_pub = ed::add(&key.eddsa_pub_point().unwrap(), &delta_g);
+        assert!(ed::eq(&child.eddsa_pub_point().unwrap(), &want_pub));
+
+        // Every BigXj'[j] = BigXj[j] + delta·G.
+        let old_pts = key.big_xj_points().unwrap();
+        let new_pts = child.big_xj_points().unwrap();
+        for (o, n) in old_pts.iter().zip(new_pts.iter()) {
+            assert!(ed::eq(n, &ed::add(o, &delta_g)));
+        }
+
+        // Xi' = Xi + delta (mod L).
+        assert!(child.xi_scalar() == key.xi_scalar().add(&d));
+
+        // Master key untouched (with_kdd borrows &self).
+        assert_ne!(child.public_key().unwrap(), key.public_key().unwrap());
+    }
+
+    #[test]
+    fn with_kdd_zero_delta_is_identity() {
+        let key = load_key();
+        let child = key.with_kdd(&[0u8]).unwrap();
+        assert!(ed::eq(
+            &child.eddsa_pub_point().unwrap(),
+            &key.eddsa_pub_point().unwrap()
+        ));
+        assert!(child.xi_scalar() == key.xi_scalar());
     }
 
     #[test]
