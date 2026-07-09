@@ -240,6 +240,39 @@ impl Key {
         Ok(subset)
     }
 
+    /// Returns a clone of this key shifted by a BIP32-style key-derivation delta
+    /// `delta` (a big-endian scalar, reduced mod the curve order): `ECDSAPub`
+    /// and every `BigXj[j]` are offset by `delta·G`, and the local share `Xi`
+    /// has `delta` added mod the order. Threshold signatures produced with the
+    /// shifted key verify under the child public key `ECDSAPub + delta·G`; the
+    /// receiver (master key) is left untouched.
+    ///
+    /// Consistency is preserved: because the Lagrange weights sum to 1,
+    /// `Σ λ_j (X_j + delta·G) = ECDSAPub + delta·G`, so the result still passes
+    /// [`Key::validate_consistency`].
+    pub fn with_kdd(&self, delta: &[u8]) -> Result<Key, Error> {
+        let q = bn::secp256k1_order();
+        let modq = bn::Modulus::new(&q);
+        let d = modq.reduce(&bn::from_be(delta));
+        let delta_g = secp::mul_base(&d);
+
+        let pub_pt = self
+            .ecdsa_pub_point()
+            .ok_or_else(|| Error::Validation("key: ECDSAPub is off curve".into()))?;
+        let big_xj = self
+            .big_xj_points()
+            .ok_or_else(|| Error::Validation("key: a BigXj is off curve".into()))?;
+
+        let mut out = self.clone();
+        out.ecdsa_pub = ec_point(&secp::add(&pub_pt, &delta_g));
+        out.big_xj = big_xj
+            .iter()
+            .map(|p| ec_point(&secp::add(p, &delta_g)))
+            .collect();
+        out.xi = BigUintDec::from_be_bytes(&bn::to_be(&modq.add(&d, &self.xi())));
+        Ok(out)
+    }
+
     /// Re-verifies, on a `Key` loaded from (possibly untrusted) serialized save
     /// data, that the per-party public shares `BigXj` are mutually consistent
     /// with the stored `ECDSAPub`.
@@ -295,6 +328,18 @@ impl Key {
                 "key: BigXj do not interpolate to ECDSAPub".into(),
             )),
         }
+    }
+}
+
+/// A secp256k1 point in the `EcPointJson` wire shape Go uses.
+fn ec_point(p: &secp::ProjectivePoint) -> EcPointJson {
+    let (x, y) = secp::coords(p);
+    EcPointJson {
+        curve: "secp256k1".into(),
+        coords: [
+            BigUintDec::from_be_bytes(&bn::to_be(&x)),
+            BigUintDec::from_be_bytes(&bn::to_be(&y)),
+        ],
     }
 }
 
@@ -414,6 +459,50 @@ mod tests {
             Err(e) => assert!(format!("{e}").contains("not found")),
             Ok(_) => panic!("expected unknown-party error"),
         }
+    }
+
+    #[test]
+    fn with_kdd_shifts_pub_share_and_secret() {
+        let key = load_key();
+        let delta_be = [0x00u8, 0x11, 0x22, 0x33];
+        let child = key.with_kdd(&delta_be).unwrap();
+
+        let q = bn::secp256k1_order();
+        let modq = bn::Modulus::new(&q);
+        let d = modq.reduce(&bn::from_be(&delta_be));
+        let delta_g = secp::mul_base(&d);
+
+        // ECDSAPub' = ECDSAPub + delta·G.
+        let want_pub = secp::add(&key.ecdsa_pub_point().unwrap(), &delta_g);
+        assert!(secp::eq(&child.ecdsa_pub_point().unwrap(), &want_pub));
+
+        // Every BigXj'[j] = BigXj[j] + delta·G.
+        let old_pts = key.big_xj_points().unwrap();
+        let new_pts = child.big_xj_points().unwrap();
+        for (o, n) in old_pts.iter().zip(new_pts.iter()) {
+            assert!(secp::eq(n, &secp::add(o, &delta_g)));
+        }
+
+        // Xi' = Xi + delta (mod q).
+        assert_eq!(bn::to_be(&child.xi()), bn::to_be(&modq.add(&d, &key.xi())));
+
+        // The shifted key is still internally consistent (interpolates to the
+        // child pub), so signing's subset/validate path accepts it.
+        child.subset_for_parties(&party_ids(&key, &[0, 1])).unwrap();
+
+        // Master key is untouched (with_kdd borrows &self).
+        assert_ne!(child.public_key().unwrap(), key.public_key().unwrap());
+    }
+
+    #[test]
+    fn with_kdd_zero_delta_is_identity() {
+        let key = load_key();
+        let child = key.with_kdd(&[0u8]).unwrap();
+        assert!(secp::eq(
+            &child.ecdsa_pub_point().unwrap(),
+            &key.ecdsa_pub_point().unwrap()
+        ));
+        assert_eq!(bn::to_be(&child.xi()), bn::to_be(&key.xi()));
     }
 
     #[test]

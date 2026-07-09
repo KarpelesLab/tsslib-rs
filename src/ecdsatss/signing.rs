@@ -182,6 +182,26 @@ impl SigningParty {
         })
     }
 
+    /// Like [`SigningParty::new`], but signs under a BIP32-derived child key.
+    ///
+    /// `key_derivation_delta` (a big-endian scalar, reduced mod the curve order)
+    /// shifts a clone of `key` by `delta·G` via [`Key::with_kdd`]; the master
+    /// key is left untouched. The resulting threshold signature verifies under
+    /// the child public key `key.ECDSAPub + delta·G`. A `None` delta is
+    /// identical to [`SigningParty::new`].
+    pub fn new_with_kdd(
+        params: Parameters,
+        key: Key,
+        message_hash: &[u8],
+        key_derivation_delta: Option<&[u8]>,
+    ) -> Result<SigningParty, Error> {
+        let key = match key_derivation_delta {
+            Some(delta) => key.with_kdd(delta)?,
+            None => key,
+        };
+        Self::new(params, key, message_hash)
+    }
+
     /// Blocks until signing completes.
     pub fn wait(&self) -> Result<SignatureData, Error> {
         match self.result_rx.recv() {
@@ -1244,5 +1264,48 @@ mod tests {
         let m = bn::from_be(&digest);
         let pk = keys[0].ecdsa_pub_point().unwrap();
         assert!(ecdsa_verify(&m, &r, &s, &pk));
+    }
+
+    #[test]
+    #[ignore = "2048-bit MtA signing is slow with the current bignum"]
+    fn go_keys_sign_with_kdd_and_verify() {
+        let (keys, ids) = load_signing_keys();
+        let t = 1;
+
+        let mut digest = [0u8; 32];
+        digest[31] = 0x2a;
+        digest[0] = 0x11;
+
+        // An arbitrary BIP32-style child derivation delta.
+        let delta: &[u8] = &[0x00, 0xde, 0xad, 0xbe, 0xef];
+
+        let shub = TestHub::new(&ids);
+        let sparties: Vec<SigningParty> = (0..ids.len())
+            .map(|i| {
+                let params = Parameters::new(ids.to_vec(), &ids[i], t, shub.broker(i));
+                SigningParty::new_with_kdd(params, keys[i].clone(), &digest, Some(delta)).unwrap()
+            })
+            .collect();
+        let sigs: Vec<SignatureData> = sparties
+            .iter()
+            .map(|p| p.wait().expect("KDD signing succeeds"))
+            .collect();
+
+        for s in &sigs[1..] {
+            assert_eq!(s.r, sigs[0].r);
+            assert_eq!(s.s, sigs[0].s);
+        }
+        let r = bn::from_be(&sigs[0].r);
+        let s = bn::from_be(&sigs[0].s);
+        let m = bn::from_be(&digest);
+
+        // The signature verifies under the CHILD key ECDSAPub + delta·G, and not
+        // under the untouched master key.
+        let q = bn::secp256k1_order();
+        let d = bn::Modulus::new(&q).reduce(&bn::from_be(delta));
+        let master = keys[0].ecdsa_pub_point().unwrap();
+        let child = secp::add(&master, &secp::mul_base(&d));
+        assert!(ecdsa_verify(&m, &r, &s, &child));
+        assert!(!ecdsa_verify(&m, &r, &s, &master));
     }
 }
