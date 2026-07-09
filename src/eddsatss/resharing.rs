@@ -6,7 +6,9 @@
 //! zero-knowledge proofs: the new committee verifies each old party's VSS share
 //! against the committed (hash-opened) polynomial and checks `Vc[0] == EDDSAPub`.
 //!
-//! The old committee is assumed to be exactly the input key's party set.
+//! Old-committee members' input key may still carry the full keygen party set:
+//! [`ResharingParty::new`] transparently narrows it to the old committee via
+//! [`Key::subset_for_parties`].
 //!
 //! Rounds: (old) round1 broadcasts `EDDSAPub` + a VSS commitment; (new) round2
 //! acks; (old) round3 unicasts each new party its share and opens the VSS
@@ -72,6 +74,17 @@ impl ResharingParty {
     /// Starts resharing.
     pub fn new(params: ReSharingParameters, input: Key) -> Result<ResharingParty, Error> {
         let (tx, rx) = channel();
+        // Old-committee members reindex their input to the old committee so the
+        // Lagrange lookup in prepare_wi uses old-committee indices rather than
+        // keygen-party indices (mirrors Go round1Old's SubsetForParties). The
+        // full keygen key may thus be passed as-is. New-only members never index
+        // the input's per-party slices (they take EDDSAPub from round-1
+        // messages), so their input is left untouched.
+        let input = if params.is_old_committee() {
+            input.subset_for_parties(params.old_parties())?
+        } else {
+            input
+        };
         let shared = Arc::new(Shared {
             params,
             input,

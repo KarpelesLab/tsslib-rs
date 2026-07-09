@@ -5,8 +5,9 @@
 //! `ECDSAPub`; the new committee generates fresh pre-parameters. A party may be
 //! in both committees.
 //!
-//! The old committee is assumed to be exactly the input key's party set (no
-//! subset narrowing); pass a key already narrowed to the participating signers.
+//! Old-committee members' input key may still carry the full keygen party set:
+//! [`ResharingParty::new`] transparently narrows it to the old committee via
+//! [`Key::subset_for_parties`].
 //!
 //! Rounds: (old) round1 broadcasts `ECDSAPub` + a commitment to the re-sharing
 //! VSS; (new) round2 broadcasts fresh Paillier/ring-Pedersen params with DLN +
@@ -104,6 +105,17 @@ impl ResharingParty {
     ) -> Result<ResharingParty, Error> {
         let (tx, rx) = channel();
         let nc = params.new_party_count();
+        // Old-committee members reindex their input to the old committee so the
+        // per-party lookups in SSID/w_i use old-committee indices rather than
+        // keygen-party indices (mirrors Go round1Old's SubsetForParties). The
+        // full keygen key may thus be passed as-is. New-only members never index
+        // the input's per-party slices (they take ECDSAPub from round-1
+        // messages), so their input is left untouched.
+        let input = if params.is_old_committee() {
+            input.subset_for_parties(params.old_parties())?
+        } else {
+            input
+        };
         let shared = Arc::new(Shared {
             params,
             input,
