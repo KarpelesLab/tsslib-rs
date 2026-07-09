@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.3...v0.2.4) - 2026-07-09
+
+### Other
+
+- transparently subset the old-committee key in resharing
+- transparently subset the key in SigningParty::new
+- add Key::subset_for_parties and public_key
+
 ## [0.2.3](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.2...v0.2.3) - 2026-06-19
 
 ### Fixed

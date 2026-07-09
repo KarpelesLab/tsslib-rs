@@ -1,6 +1,6 @@
 [package]
 name = "tsslib"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.85"
 description = "Easy-to-use threshold signature schemes (FROST, ML-DSA, DKLs23) — wire- and save-data-compatible with the Go tss-lib."
