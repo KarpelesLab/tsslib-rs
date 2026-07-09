@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.4...v0.2.5) - 2026-07-09
+
+### Other
+
+- add SigningParty::new_with_kdd for additive child-key signing
+- add SigningParty::new_with_kdd for BIP32 child-key signing
+
 ## [0.2.4](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.3...v0.2.4) - 2026-07-09
 
 ### Other
