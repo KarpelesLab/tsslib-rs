@@ -7,8 +7,9 @@
 //! `s_i = λ·w_i + r_i`, and finalize sums the partials into a stock Ed25519
 //! signature `(R, S)` verifiable by any Ed25519 verifier.
 //!
-//! The committee must be exactly the parties of the supplied [`Key`] (aligned by
-//! index); narrow the key to the signing subset first if needed.
+//! The committee is the parties of `params`; the supplied [`Key`] may still
+//! carry the full keygen party set — [`SigningParty::new`] transparently
+//! narrows it to the committee via [`Key::subset_for_parties`].
 
 #![allow(dead_code)]
 
@@ -71,11 +72,16 @@ struct State {
 }
 
 impl SigningParty {
-    /// Starts signing `message` with this party's share. The committee is the
-    /// parties of `params`, aligned to `key`.
+    /// Starts signing `message` with this party's share.
+    ///
+    /// `key` may have been produced by a keygen with more parties than the
+    /// current committee: the per-party slices (`Ks`, `BigXj`) are transparently
+    /// reindexed to `params.parties()` via [`Key::subset_for_parties`], so
+    /// callers can pass the full keygen key as-is.
     pub fn new(params: Parameters, key: Key, message: &[u8]) -> Result<SigningParty, Error> {
         let (tx, rx) = channel();
         let n = params.party_count();
+        let key = key.subset_for_parties(params.parties())?;
         let ssid = compute_ssid(&params, &key)
             .ok_or_else(|| Error::Validation("signing: BigXj off curve".into()))?;
         let shared = Arc::new(Shared {
@@ -488,8 +494,10 @@ mod tests {
 
     #[test]
     fn short_ks_returns_error_not_panic() {
-        // A key whose Ks is shorter than the committee must yield a Validation
-        // error from prepare_wi, not an out-of-bounds panic.
+        // A key whose Ks does not cover the whole committee must yield a
+        // Validation error, not an out-of-bounds panic. The transparent
+        // subset_for_parties reindex rejects the unknown committee member up
+        // front (before any slice is indexed by party position).
         let f = fixtures();
         let key: Key =
             serde_json::from_value(f["signing_keys"].as_array().unwrap()[0].clone()).unwrap();
@@ -513,7 +521,7 @@ mod tests {
         // t+1 = 2 <= ks.len(), so only the new bounds check can reject this.
         let params = Parameters::new(ids.to_vec(), &ids[me], 1, hub.broker(me));
         match SigningParty::new(params, key, b"msg") {
-            Err(Error::Validation(m)) => assert!(m.contains("out of range"), "{m}"),
+            Err(Error::Validation(m)) => assert!(m.contains("not found"), "{m}"),
             Err(e) => panic!("unexpected error kind: {e:?}"),
             Ok(_) => panic!("expected validation error for short Ks"),
         }

@@ -1,9 +1,10 @@
 //! GG18 threshold ECDSA signing over a `MessageBroker` (9 rounds + finalize).
 //!
 //! Port of Go `ecdsatss/signing.go`. Produces a standard ECDSA signature
-//! `(r, s)` verifiable against the group public key. The committee must be
-//! exactly the parties of the supplied [`Key`] (indices aligned); to sign with a
-//! strict subset, first narrow the key to that subset.
+//! `(r, s)` verifiable against the group public key. The committee is the
+//! parties of `params`; the supplied [`Key`] may still carry the full keygen
+//! party set — [`SigningParty::new`] transparently narrows it to the committee
+//! via [`Key::subset_for_parties`].
 //!
 //! Outline: round 1 runs the MtA `AliceInit` to every peer and commits to
 //! `Γ_i = γ_i·G`; round 2 answers each peer's MtA with `BobMid`/`BobMidWC`;
@@ -100,7 +101,15 @@ struct State {
 
 impl SigningParty {
     /// Starts signing `message_hash` (a 32-byte digest, big-endian) with this
-    /// party's share. The committee is the parties of `params`, aligned to `key`.
+    /// party's share.
+    ///
+    /// `key` may have been produced by a keygen with more parties than the
+    /// current committee: the per-party slices (`Ks`, `NTildej`, `H1j`, `H2j`,
+    /// `BigXj`, `PaillierPKs`) are transparently reindexed to `params.parties()`
+    /// via [`Key::subset_for_parties`], so callers can pass the full keygen key
+    /// as-is. That call also verifies the `BigXj` interpolate to `ECDSAPub`;
+    /// here we additionally tie the local secret to that set by checking
+    /// `Xi·G == BigXj[localIdx]`.
     pub fn new(params: Parameters, key: Key, message_hash: &[u8]) -> Result<SigningParty, Error> {
         let (tx, rx) = channel();
         let n = params.party_count();
@@ -108,6 +117,21 @@ impl SigningParty {
         let q = bn::secp256k1_order();
         if m.is_zero() || !m.lt(&q) {
             return Err(Error::Validation("signing: invalid message hash".into()));
+        }
+        let key = key.subset_for_parties(params.parties())?;
+        let local_idx = params.party_index();
+        let big_xj = key
+            .big_xj_points()
+            .ok_or_else(|| Error::Validation("signing: BigXj off curve".into()))?;
+        if local_idx >= big_xj.len() {
+            return Err(Error::Validation(
+                "signing: local party index out of range".into(),
+            ));
+        }
+        if !secp::eq(&secp::mul_base(&key.xi()), &big_xj[local_idx]) {
+            return Err(Error::Validation(
+                "signing: local share Xi is inconsistent with BigXj[localIdx]".into(),
+            ));
         }
         let ssid = compute_ssid(&params, &key);
         let shared = Arc::new(Shared {
