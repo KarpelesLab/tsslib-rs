@@ -10,6 +10,7 @@
 
 use super::Error;
 use super::ed::{self, EcPointJson};
+use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
@@ -102,5 +103,125 @@ impl Key {
             return Err(Error::Validation("key: a point is off-curve".into()));
         }
         Ok(())
+    }
+
+    /// The group public key `EDDSAPub` in RFC 8032 compressed form (32-byte
+    /// little-endian `y` with the sign bit of `x`) — the standard Ed25519
+    /// public-key encoding an external verifier uses. Errors if the stored
+    /// point is off-curve.
+    pub fn public_key(&self) -> Result<[u8; 32], Error> {
+        let p = self
+            .eddsa_pub_point()
+            .ok_or_else(|| Error::Validation("key: EDDSAPub is off curve".into()))?;
+        Ok(ed::encode_point(&p))
+    }
+
+    /// Returns a new [`Key`] whose `Ks` and `BigXj` slices are reordered to
+    /// match the given sorted party IDs. Parties are matched by their `ShareID`
+    /// — i.e. the `Ks` value stored by keygen, compared to `PartyId.key`.
+    ///
+    /// This reindexing is required whenever the active party set is a strict
+    /// subset of the parties that participated in keygen (for example, a `t+1`
+    /// signing committee picked out of an `n`-party keygen, or resharing's old
+    /// committee): the signing and resharing rounds index these slices by the
+    /// current-party index, so they must be in current-party order.
+    ///
+    /// `Xi`, `ShareID`, and `EDDSAPub` are carried over unchanged; only `Ks`
+    /// and `BigXj` are rebuilt.
+    pub fn subset_for_parties(&self, sorted_ids: &[PartyId]) -> Result<Key, Error> {
+        let mut ks = Vec::with_capacity(sorted_ids.len());
+        let mut big_xj = Vec::with_capacity(sorted_ids.len());
+        for id in sorted_ids {
+            let want = strip_leading_zeros(&id.key);
+            let saved = self
+                .ks
+                .iter()
+                .position(|k| k.as_be_bytes() == want)
+                .ok_or_else(|| {
+                    Error::Validation(format!(
+                        "subset_for_parties: party 0x{} not found in keygen save data",
+                        hex_lower(want)
+                    ))
+                })?;
+            ks.push(self.ks[saved].clone());
+            big_xj.push(self.big_xj[saved].clone());
+        }
+        Ok(Key {
+            xi: self.xi.clone(),
+            share_id: self.share_id.clone(),
+            ks,
+            big_xj,
+            eddsa_pub: self.eddsa_pub.clone(),
+        })
+    }
+}
+
+/// Big-endian magnitude with leading zero bytes removed (matches
+/// `BigUintDec::as_be_bytes`, so party keys compare canonically).
+fn strip_leading_zeros(b: &[u8]) -> &[u8] {
+    let start = b.iter().position(|&x| x != 0).unwrap_or(b.len());
+    &b[start..]
+}
+
+/// Lower-case hex, for identifying an unmatched party in error messages.
+fn hex_lower(b: &[u8]) -> String {
+    let mut s = String::with_capacity(b.len() * 2);
+    for byte in b {
+        s.push_str(&format!("{byte:02x}"));
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::testvec::fixtures;
+    use super::*;
+
+    fn load_key() -> Key {
+        let f = fixtures();
+        serde_json::from_value(f["signing_keys"][0].clone()).expect("load Go eddsa key")
+    }
+
+    fn party_ids(key: &Key, order: &[usize]) -> Vec<PartyId> {
+        order
+            .iter()
+            .map(|&i| {
+                PartyId::new(
+                    (i + 1).to_string(),
+                    format!("P{i}"),
+                    key.ks[i].as_be_bytes().to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn public_key_is_32_bytes() {
+        let key = load_key();
+        assert_eq!(key.public_key().unwrap().len(), 32);
+    }
+
+    #[test]
+    fn subset_reorders_ks_and_bigxj() {
+        let key = load_key();
+        let sub = key.subset_for_parties(&party_ids(&key, &[1, 0])).unwrap();
+        assert_eq!(sub.ks[0], key.ks[1]);
+        assert_eq!(sub.ks[1], key.ks[0]);
+        assert_eq!(sub.big_xj[0].coords, key.big_xj[1].coords);
+        // EDDSAPub, Xi, ShareID carried over unchanged.
+        assert_eq!(sub.eddsa_pub.coords, key.eddsa_pub.coords);
+        assert_eq!(sub.xi, key.xi);
+        assert_eq!(sub.share_id, key.share_id);
+        sub.validate_basic().unwrap();
+    }
+
+    #[test]
+    fn subset_unknown_party_errors() {
+        let key = load_key();
+        let stranger = PartyId::new("x", "x", vec![0xde, 0xad]);
+        match key.subset_for_parties(&[stranger]) {
+            Err(e) => assert!(format!("{e}").contains("not found")),
+            Ok(_) => panic!("expected unknown-party error"),
+        }
     }
 }
