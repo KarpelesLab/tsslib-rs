@@ -33,7 +33,11 @@ hand-rolled field arithmetic.
 The FROST protocols and `dklstss` provide keygen, signing, resharing/refresh,
 and HD derivation routed through a caller-supplied [`tss::MessageBroker`];
 `dklstss` also offers a synchronous in-process API plus offline pre-signing
-(`presign` / `sign_with_presign` with single-use enforcement). `mldsatss`
+(`presign` / `sign_with_presign` with single-use enforcement). `frosttss` and
+`dklstss` additionally expose `KeyImageParty`, a one-round threshold PRF
+(`V = x·P` from per-party key-image shares) whose output is a secret only
+`t+1` share holders can compute — the building block for **hardened**
+derivation, which BIP32's `HMAC(chain_code, priv)` cannot give a threshold key. `mldsatss`
 (`2 ≤ t ≤ n ≤ 6`) provides trusted-dealer keygen, sync + broker-driven threshold
 signing, and an **experimental** dealerless DKG (`DkgParty44` — no trusted
 dealer; not independently reviewed). `ecdsatss` is a broker-driven port of the

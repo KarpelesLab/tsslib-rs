@@ -1,7 +1,10 @@
 //! FROST(Ed25519, SHA-512) threshold signatures — RFC 9591.
 //!
 //! A broker-based implementation providing keygen, signing, and resharing that
-//! produce signatures verifiable by any standard Ed25519 verifier.
+//! produce signatures verifiable by any standard Ed25519 verifier, plus BIP32
+//! non-hardened derivation ([`derive_chain_code`]) and threshold key images
+//! ([`KeyImageParty`]) — a distributed PRF on the shared secret, the building
+//! block for hardened derivation.
 //!
 //! FROST is a Schnorr-based threshold scheme: keygen uses a Pedersen DKG
 //! (RFC 9591 Appendix D) and signing uses two preprocessing+signing rounds with
@@ -43,6 +46,7 @@
 mod hd;
 mod key;
 mod keygen;
+mod keyimage;
 mod point;
 mod resharing;
 mod schnorr;
@@ -52,6 +56,7 @@ mod signing;
 pub use hd::{HARDENED_KEY_START, derive_chain_code, import_key};
 pub use key::{KEY_VERSION, Key};
 pub use keygen::Keygen;
+pub use keyimage::{KeyImageParty, KeyImageSecret, hash_to_point};
 pub use point::PointError;
 pub use resharing::Resharing;
 pub use signature::SignatureData;

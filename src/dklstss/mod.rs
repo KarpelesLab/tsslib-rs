@@ -12,6 +12,8 @@
 //! - Proactive share + OT-extension refresh
 //! - Resharing to a new committee preserving the public key
 //! - HD wallet derivation (BIP32 non-hardened) at sign time
+//! - Threshold key images ([`KeyImageParty`]) — a distributed PRF on the shared
+//!   secret, the building block for hardened derivation
 //! - Versioned key save/load for persistence
 //!
 //! Peer **authentication** is out of scope (the broker is trusted to
@@ -90,6 +92,7 @@ mod hd;
 mod key;
 mod keygen;
 mod keygen_party;
+mod keyimage_party;
 pub(crate) mod ole;
 pub(crate) mod ole_check;
 pub(crate) mod otext;
@@ -110,6 +113,7 @@ pub use hd::{HARDENED_KEY_START, derive_and_sign, derive_child, import_key};
 pub use key::{Key, PairOTState, Signature};
 pub use keygen::{derive_chain_code, keygen};
 pub use keygen_party::KeygenParty;
+pub use keyimage_party::{KeyImageParty, KeyImageSecret, hash_to_point};
 pub use presign::{
     InMemoryPresignStore, PresignOutput, UsedPresignStore, presign, sign_with_presign,
     sign_with_presign_durable,
