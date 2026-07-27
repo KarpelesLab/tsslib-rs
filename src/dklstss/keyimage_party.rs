@@ -975,10 +975,8 @@ mod vectors {
 
                 let mut partials = Vec::new();
                 let mut v = ProjectivePoint::identity();
-                for pos in 0..committee.len() {
-                    let w = lagrange_coefficient(&lambda_ids, pos)
-                        .unwrap()
-                        .mul(&keys[pos].xi);
+                for (pos, key) in keys.iter().take(committee.len()).enumerate() {
+                    let w = lagrange_coefficient(&lambda_ids, pos).unwrap().mul(&key.xi);
                     let partial = point.mul(&w);
                     v = v.add(&partial);
                     partials.push(hex_point(&partial));

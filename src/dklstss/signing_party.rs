@@ -113,10 +113,10 @@ impl SigningParty {
             .collect();
         let lam = lagrange_coefficient(&ids, my_pos)?;
         let mut sx_mine = lam.mul(&key.xi);
-        if my_pos == 0 {
-            if let Some(tw) = &tweak {
-                sx_mine = sx_mine.add(tw);
-            }
+        if my_pos == 0
+            && let Some(tw) = &tweak
+        {
+            sx_mine = sx_mine.add(tw);
         }
 
         let other_subset = other_parties(&subset, &me);

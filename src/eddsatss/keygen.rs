@@ -413,7 +413,7 @@ fn flatten_points(vs: &[EdwardsPoint]) -> Vec<Vec<u8>> {
 }
 
 fn unflatten_points(flat: &[Vec<u8>]) -> Option<Vec<EdwardsPoint>> {
-    if flat.len() % 2 != 0 {
+    if !flat.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(flat.len() / 2);

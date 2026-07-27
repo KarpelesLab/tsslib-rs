@@ -134,10 +134,10 @@ impl CheckedSigningParty {
             .collect();
         let lam = lagrange_coefficient(&ids, my_pos)?;
         let mut sx_mine = lam.mul(&key.xi);
-        if my_pos == 0 {
-            if let Some(tw) = &tweak {
-                sx_mine = sx_mine.add(tw);
-            }
+        if my_pos == 0
+            && let Some(tw) = &tweak
+        {
+            sx_mine = sx_mine.add(tw);
         }
 
         let other_subset = other_parties(&subset, &me);
@@ -1063,14 +1063,12 @@ mod tests {
                     .as_ref()
                     .map(|f| f.cmp_key(&self.bob) == std::cmp::Ordering::Equal)
                     .unwrap_or(false)
+                && let Ok(mut r3) = json_get::<CheckedSignR3>(msg)
+                && let Some(last) = r3.bob_kz.0.last_mut()
             {
-                if let Ok(mut r3) = json_get::<CheckedSignR3>(msg) {
-                    if let Some(last) = r3.bob_kz.0.last_mut() {
-                        *last ^= 0x01;
-                        let rewritten = json_wrap(&msg.typ, &r3, msg.from.clone(), msg.to.clone())?;
-                        return self.inner.receive(&rewritten);
-                    }
-                }
+                *last ^= 0x01;
+                let rewritten = json_wrap(&msg.typ, &r3, msg.from.clone(), msg.to.clone())?;
+                return self.inner.receive(&rewritten);
             }
             self.inner.receive(msg)
         }
@@ -1127,13 +1125,12 @@ mod tests {
             if pos == 0 {
                 continue;
             }
-            if let Err(Error::Tss(e)) = p.wait() {
-                if e.culprits()
+            if let Err(Error::Tss(e)) = p.wait()
+                && e.culprits()
                     .iter()
                     .any(|c| c.cmp_key(&bob) == std::cmp::Ordering::Equal)
-                {
-                    saw_attribution = true;
-                }
+            {
+                saw_attribution = true;
             }
         }
         assert!(

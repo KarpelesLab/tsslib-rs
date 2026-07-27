@@ -330,10 +330,10 @@ impl Shared {
             let lhs = Ed25519::mul_base(&zj);
             let mut rhs = Ed25519::add(&commit_share, &Ed25519::scalar_mul(&yj, &clambda));
             // HD augmentation for committee signer-0's partial.
-            if let Some(td) = tweak_delta.as_ref() {
-                if cmp_eq(&cm.identifier, &signer0_id) {
-                    rhs = Ed25519::add(&rhs, &Ed25519::scalar_mul(td, &c));
-                }
+            if let Some(td) = tweak_delta.as_ref()
+                && cmp_eq(&cm.identifier, &signer0_id)
+            {
+                rhs = Ed25519::add(&rhs, &Ed25519::scalar_mul(td, &c));
             }
             if !Ed25519::eq(&lhs, &rhs) {
                 return self.deliver(Err(Error::Validation(format!(

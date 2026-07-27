@@ -710,7 +710,7 @@ fn flatten_points(vs: &[ProjectivePoint]) -> Vec<BoxedUint> {
 }
 
 fn unflatten_points(flat: &[BoxedUint]) -> Option<Vec<ProjectivePoint>> {
-    if flat.len() % 2 != 0 {
+    if !flat.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(flat.len() / 2);

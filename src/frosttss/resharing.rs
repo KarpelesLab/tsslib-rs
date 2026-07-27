@@ -272,10 +272,10 @@ impl Shared {
         // ACK every old party (except self if dual).
         let ack = Round2Msg {};
         for pj in self.params.old_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal {
-                if let Err(e) = self.send_to(ROUND2, &ack, pj) {
-                    return self.deliver(Err(e));
-                }
+            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+                && let Err(e) = self.send_to(ROUND2, &ack, pj)
+            {
+                return self.deliver(Err(e));
             }
         }
 
@@ -519,10 +519,10 @@ impl Shared {
         // ACK all old+new parties (except self).
         let ack = Round4Msg {};
         for pj in self.params.old_and_new_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal {
-                if let Err(e) = self.send_to(ROUND4, &ack, &pj) {
-                    return self.deliver(Err(e));
-                }
+            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+                && let Err(e) = self.send_to(ROUND4, &ack, &pj)
+            {
+                return self.deliver(Err(e));
             }
         }
 
@@ -604,7 +604,7 @@ fn flatten(points: &[EdwardsPoint]) -> Vec<Vec<u8>> {
 
 /// Inverse of [`flatten`]: rebuilds points from coordinate pairs.
 fn unflatten(flat: &[Vec<u8>]) -> Option<Vec<EdwardsPoint>> {
-    if flat.len() % 2 != 0 {
+    if !flat.len().is_multiple_of(2) {
         return None;
     }
     flat.chunks(2)

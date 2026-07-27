@@ -308,10 +308,10 @@ impl Shared {
             session_nonce: my_nonce.to_vec(),
         };
         for pj in self.params.old_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal {
-                if let Err(e) = self.send_to(ROUND2, &r2, pj) {
-                    return self.deliver(Err(e));
-                }
+            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+                && let Err(e) = self.send_to(ROUND2, &r2, pj)
+            {
+                return self.deliver(Err(e));
             }
         }
         self.setup_new_round3_receivers();
@@ -560,10 +560,10 @@ impl Shared {
 
         let ack = Round4Msg {};
         for pj in self.params.old_and_new_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal {
-                if let Err(e) = self.send_to(ROUND4, &ack, &pj) {
-                    return self.deliver(Err(e));
-                }
+            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+                && let Err(e) = self.send_to(ROUND4, &ack, &pj)
+            {
+                return self.deliver(Err(e));
             }
         }
 

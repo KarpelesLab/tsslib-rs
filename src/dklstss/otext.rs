@@ -300,7 +300,7 @@ fn xor_selected_rows(chi: &[u8], rows: &[Vec<u8>], l: usize, out: &mut [u8; DELT
 }
 
 fn validate_l(l: usize) -> Result<(), Error> {
-    if l == 0 || l % 8 != 0 {
+    if l == 0 || !l.is_multiple_of(8) {
         return Err(Error::Validation(
             "otext: l must be a positive multiple of 8".into(),
         ));
@@ -379,7 +379,7 @@ fn derive_challenges(sid: &[u8], u: &[Vec<u8>], l: usize) -> Vec<Vec<u8>> {
 #[allow(clippy::needless_range_loop)]
 fn transpose_bits(input: &[Vec<u8>], rows: usize, cols: usize) -> Vec<Vec<u8>> {
     assert!(
-        rows % 8 == 0 && cols % 8 == 0,
+        rows.is_multiple_of(8) && cols.is_multiple_of(8),
         "transpose dims must be multiples of 8"
     );
     assert_eq!(input.len(), rows);

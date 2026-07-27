@@ -193,7 +193,7 @@ pub(crate) fn flatten_point_xy(pts: &[ProjectivePoint]) -> Vec<B64Bytes> {
 /// Inverse of [`flatten_point_xy`]: parses `(x, y)` pairs into curve points,
 /// rejecting odd-length input and off-curve coordinates.
 pub(crate) fn unflatten_point_xy(flat: &[B64Bytes]) -> Result<Vec<ProjectivePoint>, Error> {
-    if flat.len() % 2 != 0 {
+    if !flat.len().is_multiple_of(2) {
         return Err(Error::Validation(format!(
             "flat point slice length {} not even",
             flat.len()
