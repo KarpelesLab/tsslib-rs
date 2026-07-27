@@ -180,6 +180,14 @@ impl CheckedSigningParty {
     /// Blocks until signing completes, returning the signature or an error.
     /// On a caught β-inconsistency the error is a [`Error::Tss`] whose
     /// `culprits` names the deviating peer.
+    /// Non-blocking peek at the ceremony result: `Some(_)` once the result (or
+    /// error) is ready, `None` while rounds are still pending. Unlike [`wait`](Self::wait)
+    /// it never blocks, so a single-threaded async driver (e.g. wasm/browser) can
+    /// poll it after feeding each inbound message.
+    pub fn try_result(&self) -> Option<Result<Signature, Error>> {
+        self.result_rx.try_recv().ok()
+    }
+
     pub fn wait(&self) -> Result<Signature, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,

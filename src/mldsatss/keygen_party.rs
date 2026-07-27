@@ -130,6 +130,14 @@ impl DkgParty44 {
     }
 
     /// Blocks until the DKG completes, returning this party's key.
+    /// Non-blocking peek at the ceremony result: `Some(_)` once the result (or
+    /// error) is ready, `None` while rounds are still pending. Unlike [`wait`](Self::wait)
+    /// it never blocks, so a single-threaded async driver (e.g. wasm/browser) can
+    /// poll it after feeding each inbound message.
+    pub fn try_result(&self) -> Option<DkgResult> {
+        self.result_rx.try_recv().ok()
+    }
+
     pub fn wait(&self) -> DkgResult {
         match self.result_rx.recv() {
             Ok(r) => r,

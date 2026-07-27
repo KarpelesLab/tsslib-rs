@@ -138,6 +138,14 @@ impl Resharing {
     }
 
     /// Blocks until resharing completes. `Some(key)` for new members, `None` otherwise.
+    /// Non-blocking peek at the ceremony result: `Some(_)` once the result (or
+    /// error) is ready, `None` while rounds are still pending. Unlike [`wait`](Self::wait)
+    /// it never blocks, so a single-threaded async driver (e.g. wasm/browser) can
+    /// poll it after feeding each inbound message.
+    pub fn try_result(&self) -> Option<ReshareResult> {
+        self.result_rx.try_recv().ok()
+    }
+
     pub fn wait(&self) -> ReshareResult {
         match self.result_rx.recv() {
             Ok(r) => r,
