@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.6...v0.2.7) - 2026-07-27
+
+### Added
+
+- caller-selected hash + frozen test vectors for key images
+- threshold key images for frosttss and dklstss
+
+### Other
+
+- clear clippy warnings unlocked by the 1.88 MSRV
+- restore trailing newlines in ceremony party modules
+
 ## [0.2.6](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.5...v0.2.6) - 2026-07-27
 
 ### Added
