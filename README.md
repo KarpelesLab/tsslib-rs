@@ -37,7 +37,10 @@ and HD derivation routed through a caller-supplied [`tss::MessageBroker`];
 `dklstss` additionally expose `KeyImageParty`, a one-round threshold PRF
 (`V = x·P` from per-party key-image shares) whose output is a secret only
 `t+1` share holders can compute — the building block for **hardened**
-derivation, which BIP32's `HMAC(chain_code, priv)` cannot give a threshold key. `mldsatss`
+derivation, which BIP32's `HMAC(chain_code, priv)` cannot give a threshold key.
+The digest is the caller's (`purecrypto::hash::HashAlgorithm`: SHA-2, SHA-3,
+Keccak-256, BLAKE2/3, …), mixed into the domain separation and frozen by
+checked-in test vectors covering every accepted algorithm. `mldsatss`
 (`2 ≤ t ≤ n ≤ 6`) provides trusted-dealer keygen, sync + broker-driven threshold
 signing, and an **experimental** dealerless DKG (`DkgParty44` — no trusted
 dealer; not independently reviewed). `ecdsatss` is a broker-driven port of the

@@ -9,11 +9,13 @@ pub(crate) mod b64;
 pub(crate) mod bigint;
 mod error;
 pub(crate) mod expect;
+pub(crate) mod keyimage_hash;
 mod message;
 mod params;
 mod party_id;
 
 pub use error::TssError;
+pub use keyimage_hash::HashAlgorithm;
 pub use message::{BrokerResult, JsonMessage, MessageBroker, MessageReceiver, json_get, json_wrap};
 pub use params::{Parameters, ReSharingParameters};
 pub use party_id::PartyId;
