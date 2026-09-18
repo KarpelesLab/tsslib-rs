@@ -492,6 +492,15 @@ impl Shared {
             )
         };
 
+        // Every party's ring-Pedersen generators must be its own: Go rejects
+        // an h1/h2 already used by another party (`h1H2Map`, seeded with ours).
+        // The DLN proofs are not session-bound, so a replayed (Ñ, h1, h2,
+        // proofs) tuple would otherwise be accepted.
+        let mut seen_h: Vec<Vec<u8>> = match &self.pre {
+            Some(pre) => vec![bn::to_be(&pre.h1i), bn::to_be(&pre.h2i)],
+            None => Vec::new(),
+        };
+
         // Verify each new peer's DLN + mod proofs and record its public params.
         for (k, msg) in r2msg1.iter().enumerate() {
             let jidx = index_of(&new_ids, &r2msg1_from[k]);
@@ -509,6 +518,12 @@ impl Shared {
             }
             if bn::to_be(&h1) == bn::to_be(&h2) {
                 return self.fail("resharing: H1 == H2");
+            }
+            for h in [bn::to_be(&h1), bn::to_be(&h2)] {
+                if seen_h.contains(&h) {
+                    return self.fail("resharing: h1j/h2j already used by another party");
+                }
+                seen_h.push(h);
             }
             let context_j = context_bytes(&ssid, jidx);
             let mp = match ProofMod::from_parts(&parts_bytes(&msg.mod_proof)) {
