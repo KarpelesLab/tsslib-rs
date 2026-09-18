@@ -107,14 +107,18 @@ pub fn compute_group_challenge<C: Ciphersuite>(
 
 /// Returns the Lagrange coefficient `lambda_i` for identifier `id` within the
 /// signing set `signers`, computed mod `L` (standard Shamir formula at x=0).
-/// Identifiers are big-endian and reduced mod `L`. Returns `None` on a
-/// duplicate identifier (zero denominator).
+/// Identifiers are big-endian and reduced mod `L`. Returns `None` if another
+/// signer's identifier is congruent to `id` mod `L` (zero denominator).
 pub fn lagrange_coefficient<C: Ciphersuite>(id: &[u8], signers: &[Vec<u8>]) -> Option<Scalar> {
     let id_s = scalar_from_be_mod_l(id);
     let mut lambda = Scalar::ONE;
+    // `signers` lists `id` itself once; only that one entry is skipped, so a
+    // second identifier congruent to it reaches the zero-denominator check.
+    let mut skipped_self = false;
     for xj in signers {
         let xj_s = scalar_from_be_mod_l(xj);
-        if bool::from(xj_s.ct_eq(&id_s)) {
+        if !skipped_self && bool::from(xj_s.ct_eq(&id_s)) {
+            skipped_self = true;
             continue;
         }
         let den = xj_s.sub(&id_s);
@@ -168,6 +172,17 @@ mod tests {
         let mut b = [0u8; 32];
         b[0] = n;
         Scalar::from_bytes_canonical(&b).unwrap()
+    }
+
+    #[test]
+    fn lagrange_detects_identifier_congruent_to_self() {
+        // L + 3, big-endian: byte-distinct from [3] but the same scalar.
+        let mut dup =
+            hex::decode("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
+                .unwrap();
+        *dup.last_mut().unwrap() += 3;
+        let signers = vec![vec![3u8], dup, vec![5u8]];
+        assert!(lagrange_coefficient::<Ed25519>(&[3], &signers).is_none());
     }
 
     #[test]

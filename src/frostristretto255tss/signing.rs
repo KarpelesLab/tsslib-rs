@@ -73,6 +73,9 @@ impl Key {
                 params.threshold() + 1
             )));
         }
+        let ids: Vec<Vec<u8>> = params.parties().iter().map(|p| p.key.clone()).collect();
+        crate::frost::vss::check_indexes(params.threshold(), &ids)
+            .map_err(|e| Error::Validation(format!("signing committee: {e}")))?;
         let subset = self.subset_for_parties(params.parties())?;
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {

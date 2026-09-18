@@ -109,6 +109,11 @@ impl Resharing {
     /// Starts a resharing session. `input` is the old key for old-committee
     /// members and `None` for pure new members.
     pub fn new(params: ReSharingParameters, input: Option<Key>) -> Result<Resharing, Error> {
+        let keys = |ps: &[PartyId]| ps.iter().map(|p| p.key.clone()).collect::<Vec<_>>();
+        vss::check_indexes(params.old_threshold(), &keys(params.old_parties()))
+            .map_err(|e| Error::Validation(format!("old committee: {e}")))?;
+        vss::check_indexes(params.new_threshold(), &keys(params.new_parties()))
+            .map_err(|e| Error::Validation(format!("new committee: {e}")))?;
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {
             params,
@@ -181,7 +186,8 @@ impl Shared {
             .map(|p| p.key.clone())
             .collect();
         let (vi, new_shares) =
-            vss::create::<Ed25519>(self.params.new_threshold(), &wi, &new_ks, &mut rng);
+            vss::create::<Ed25519>(self.params.new_threshold(), &wi, &new_ks, &mut rng)
+                .map_err(|e| Error::Validation(format!("new committee: {e}")))?;
 
         // Commit to the flattened polynomial points; decommitment follows in round 3.
         let flat = flatten(&vi);

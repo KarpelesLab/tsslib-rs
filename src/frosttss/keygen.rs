@@ -86,6 +86,9 @@ impl Keygen {
     /// Starts the FROST Pedersen DKG for this party. Returns immediately after
     /// round 1 is broadcast; the result is delivered once all rounds complete.
     pub fn new(params: Parameters) -> Result<Keygen, Error> {
+        let ks: Vec<Vec<u8>> = params.parties().iter().map(|p| p.key.clone()).collect();
+        vss::check_indexes(params.threshold(), &ks)
+            .map_err(|e| Error::Validation(format!("keygen committee: {e}")))?;
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {
             params,
@@ -149,7 +152,8 @@ impl Shared {
         let me_idx = self.params.party_index();
 
         let a_i_0 = random_scalar(&mut rng);
-        let (vs, shares) = vss::create::<Ed25519>(threshold, &a_i_0, &ks, &mut rng);
+        let (vs, shares) = vss::create::<Ed25519>(threshold, &a_i_0, &ks, &mut rng)
+            .expect("committee checked in Keygen::new");
 
         let mut session_nonce = [0u8; SESSION_NONCE_LEN];
         rng.fill_bytes(&mut session_nonce);

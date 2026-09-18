@@ -185,6 +185,9 @@ impl Key {
                 params.threshold() + 1
             )));
         }
+        let ids: Vec<Vec<u8>> = params.parties().iter().map(|p| p.key.clone()).collect();
+        crate::frost::vss::check_indexes(params.threshold(), &ids)
+            .map_err(|e| Error::Validation(format!("key-image committee: {e}")))?;
         let subset = self.subset_for_parties(params.parties())?;
 
         let point = hash_to_point(&identifier, &subset.group_public_key, hash)?;
