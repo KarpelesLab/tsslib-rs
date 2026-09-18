@@ -16,6 +16,8 @@
 //! | [`frostristretto255tss`]   | FROST(ristretto255, SHA-512), RFC 9591   | Ristretto255 signatures |
 //! | [`mldsatss`]               | Threshold ML-DSA-44 (FIPS 204)           | ML-DSA signatures       |
 //! | [`dklstss`]                | Threshold ECDSA / secp256k1 (DKLs23)     | ECDSA signatures        |
+//! | [`ecdsatss`]               | Legacy threshold ECDSA (GG18/GG20)       | ECDSA signatures        |
+//! | [`eddsatss`]               | Legacy threshold EdDSA (GG18-style)      | Ed25519 signatures      |
 //!
 //! Each protocol is gated behind a like-named cargo feature (all enabled by
 //! default).

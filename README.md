@@ -56,7 +56,7 @@ cargo feature, all enabled by default:
 
 ```toml
 [dependencies]
-tsslib = { version = "0.1", default-features = false, features = ["frosttss"] }
+tsslib = { version = "0.2", default-features = false, features = ["frosttss"] }
 ```
 
 ## Layout
