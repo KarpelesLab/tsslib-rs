@@ -22,6 +22,23 @@
 //! disagreeing SHA-256 digests abort with the offending dealer in
 //! [`crate::tss::TssError::culprits`].
 //!
+//! # Security: keygen with a dishonest majority of dealers (known limitation)
+//!
+//! Keygen round 1 reveals each dealer's Feldman commitments directly: there is
+//! no commit-then-reveal and no proof of knowledge of `V_i[0]`. The echo phase
+//! stops a dealer from *equivocating*, but not from choosing its `V` after
+//! seeing everyone else's. `n − t` colluding dealers who move last can therefore
+//! set `V[0] = a·G − Σ V_honest[0]` and deal shares consistent with it, so every
+//! party finishes with `ECDSAPub = a·G` for an `a` the colluders know outright.
+//! This needs `n − t ≤ t`, i.e. **`n ≤ 2t`** (2-of-2, 3-of-3, 3-of-4, …; with
+//! the `t+1`-signers convention that is every "all parties must sign" setup).
+//! The protocol is inherited from Go tss-lib and the fix (a hash-commit round
+//! or a Schnorr PoK of `v_0` bound to the session and dealer) changes the wire
+//! format, so it has to land in both implementations together. Until then, run
+//! keygen only among parties that do not collude at that scale, or use
+//! `n > 2t`. (An identity `ECDSAPub`, the degenerate variant, is rejected by
+//! [`Key::validate_basic`].)
+//!
 //! # Security: malicious signers and selective-failure aborts
 //!
 //! The **default** signing path ([`sign`] / [`SigningParty`]) uses the *plain*
