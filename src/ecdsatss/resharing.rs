@@ -205,7 +205,8 @@ impl Shared {
             .iter()
             .map(|p| secp::scalar_from_be(&p.key))
             .collect();
-        let (vi, shares) = vss::create(new_t, &wi, &new_ks, &mut rng);
+        let (vi, shares) = vss::create(new_t, &wi, &new_ks, &mut rng)
+            .map_err(|e| Error::Validation(format!("new committee: {e}")))?;
         let flat = flatten_points(&vi);
         let (vc, vd) = super::commit::commit(&flat, &mut rng);
 
@@ -790,6 +791,7 @@ impl Shared {
             .old_index()
             .ok_or_else(|| Error::Validation("resharing: not an old-committee member".into()))?;
         let ks: Vec<Scalar> = self.input.ks().iter().map(secp::scalar).collect();
+        vss::check_indexes(&ks).map_err(|e| Error::Validation(format!("resharing: {e}")))?;
         if self.params.old_threshold() + 1 > ks.len() {
             return Err(Error::Validation("resharing: old t+1 > parties".into()));
         }

@@ -107,20 +107,29 @@ pub fn decode_scalar(b: &[u8; 32]) -> Option<Scalar> {
     Scalar::from_bytes_canonical(b)
 }
 
-/// Reduces a big-endian integer (e.g. a participant identifier / `PartyId` key,
-/// which may be `>= L`) into a scalar mod `L`. Inputs longer than 64 bytes are
-/// reduced from their low 64 bytes — identifiers are always far shorter.
+/// Reduces a big-endian integer of any length (e.g. a participant identifier /
+/// `PartyId` key, which may be `>= L`) into a scalar mod `L`, matching Go's
+/// reduce-then-use of identifiers.
 pub fn scalar_from_be_mod_l(be: &[u8]) -> Scalar {
-    // Convert big-endian -> little-endian, into a 64-byte buffer for the wide
-    // mod-L reduction (matching Go's reduce-then-use of identifiers).
-    let mut le = [0u8; 64];
-    for (i, &byte) in be.iter().rev().enumerate() {
-        if i >= 64 {
-            break;
+    // 2^512 mod L: folds inputs longer than one wide reduction 64 bytes at a
+    // time. Identifiers are normally far shorter and take a single pass.
+    let mut two256 = [0u8; 64];
+    two256[32] = 1;
+    let two256 = Scalar::from_bytes_mod_order(&two256);
+    let two512 = two256.mul(&two256);
+
+    let mut acc = Scalar::ZERO;
+    let head = be.len() % 64;
+    let (first, rest) = be.split_at(head);
+    for chunk in std::iter::once(first).chain(rest.chunks(64)) {
+        // Big-endian -> little-endian, into the 64-byte wide-reduction buffer.
+        let mut le = [0u8; 64];
+        for (i, &byte) in chunk.iter().rev().enumerate() {
+            le[i] = byte;
         }
-        le[i] = byte;
+        acc = acc.mul(&two512).add(&Scalar::from_bytes_mod_order(&le));
     }
-    Scalar::from_bytes_mod_order(&le)
+    acc
 }
 
 #[cfg(test)]

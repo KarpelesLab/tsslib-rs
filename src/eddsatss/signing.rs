@@ -347,6 +347,7 @@ impl Shared {
     fn prepare_wi(&self) -> Result<Scalar, Error> {
         let i = self.params.party_index();
         let ks = self.key.ks_scalars();
+        vss::check_indexes(&ks).map_err(|e| Error::Validation(format!("signing: {e}")))?;
         if self.params.threshold() + 1 > ks.len() {
             return Err(Error::Validation("signing: t+1 > parties".into()));
         }

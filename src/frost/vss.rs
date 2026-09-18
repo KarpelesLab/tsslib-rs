@@ -30,9 +30,6 @@ impl std::fmt::Display for VssError {
 
 impl std::error::Error for VssError {}
 
-/// Longest identifier [`scalar_from_be_mod_l`] reduces in full.
-const MAX_ID_LEN: usize = 64;
-
 /// Port of tss-lib `vss.CheckIndexes` plus the `Create` threshold checks:
 /// rejects `threshold < 1`, fewer than `threshold + 1` identifiers, and any
 /// identifier that is zero or a duplicate mod `L`.
@@ -50,9 +47,6 @@ pub fn check_indexes(threshold: usize, ids: &[Vec<u8>]) -> Result<(), VssError> 
     }
     let mut seen: Vec<Scalar> = Vec::with_capacity(ids.len());
     for id in ids {
-        if id.len() > MAX_ID_LEN {
-            return Err(VssError("identifier longer than 64 bytes"));
-        }
         let x = scalar_from_be_mod_l(id);
         if bool::from(x.ct_eq(&Scalar::ZERO)) {
             return Err(VssError("identifier is zero mod the group order"));
@@ -177,8 +171,13 @@ mod tests {
         assert!(check_indexes(1, &[vec![1], one_plus_l, vec![3]]).is_err());
         // Leading zeros do not make an identifier distinct.
         assert!(check_indexes(1, &[vec![1], vec![0, 1], vec![3]]).is_err());
-        // Only the low 64 bytes would be reduced.
-        assert!(check_indexes(1, &[vec![1], vec![2; 65]]).is_err());
+        // Long identifiers are reduced in full: L·2^304 + 1 is 1 mod L.
+        let mut long = order_be();
+        long.extend_from_slice(&[0u8; 38]);
+        *long.last_mut().unwrap() = 1;
+        assert_eq!(long.len(), 70);
+        assert!(check_indexes(1, &[vec![1], long.clone()]).is_err());
+        assert!(check_indexes(1, &[vec![2], long]).is_ok());
     }
 
     #[test]

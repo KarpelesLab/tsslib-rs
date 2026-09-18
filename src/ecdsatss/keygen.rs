@@ -153,7 +153,8 @@ impl Shared {
             .collect();
 
         let u = vss::random_scalar(&mut rng);
-        let (vs, share_objs) = vss::create(t, &u, &ids, &mut rng);
+        let (vs, share_objs) = vss::create(t, &u, &ids, &mut rng)
+            .map_err(|e| Error::Validation(format!("keygen committee: {e}")))?;
         let shares: Vec<Scalar> = share_objs.iter().map(|s| s.value.clone()).collect();
 
         // Commit to the flattened VSS commitment points.

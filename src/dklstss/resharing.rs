@@ -279,7 +279,8 @@ fn verify_zero_const(vs: &[ProjectivePoint], id: &Scalar, share: &Scalar) -> boo
     }
 }
 
-fn check_indexes(ids: &[Scalar]) -> Result<(), Error> {
+/// Rejects zero or duplicate (mod n) party identifiers.
+pub(crate) fn check_indexes(ids: &[Scalar]) -> Result<(), Error> {
     for (i, a) in ids.iter().enumerate() {
         if bool::from(a.is_zero()) {
             return Err(Error::Validation("party index must not be zero".into()));

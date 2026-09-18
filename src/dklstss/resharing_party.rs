@@ -113,6 +113,15 @@ impl ResharingParty {
                 ));
             }
         }
+        // Every role checks both committees (Go `vss.CheckIndexes`): a new id of
+        // 0 mod n would be dealt f(0) by each dealer, i.e. the whole key.
+        for committee in [params.old_parties(), params.new_parties()] {
+            let ids: Vec<Scalar> = committee
+                .iter()
+                .map(|p| secp::scalar_from_be_reduce(&p.key))
+                .collect();
+            super::resharing::check_indexes(&ids)?;
+        }
         let new_t = params.new_threshold();
         if is_new && (new_t < 1 || new_t >= params.new_parties().len()) {
             return Err(Error::Validation(format!("invalid new threshold {new_t}")));
@@ -716,6 +725,36 @@ mod tests {
                 .collect(),
             0,
         )
+    }
+
+    /// A new member whose key is the group order has id 0 and would be dealt
+    /// f(0) — the whole private key — by every old dealer.
+    #[test]
+    fn rejects_new_member_with_zero_id() {
+        let old_ids = party_ids(&[1, 2, 3]);
+        let old_keys = keygen(old_ids.len(), 1, &old_ids, &mut OsRng).unwrap();
+        let order = hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+            .unwrap();
+        let mut new = vec![
+            PartyId::new("11", "P11", vec![11]),
+            PartyId::new("12", "P12", vec![12]),
+        ];
+        new.push(PartyId::new("evil", "evil", order));
+        let new_ids = PartyId::sort(new, 0);
+
+        let mut all = old_ids.clone();
+        all.extend(new_ids.iter().cloned());
+        let hub = ReshareHub::new(&all);
+        let params = ReSharingParameters::new(
+            old_ids.clone(),
+            new_ids,
+            1,
+            1,
+            old_ids[0].clone(),
+            hub.broker(&old_ids[0]),
+        );
+        let r = ResharingParty::new(params, old_keys[0].ecdsa_pub, Some(old_keys[0].clone()));
+        assert!(r.is_err());
     }
 
     #[test]

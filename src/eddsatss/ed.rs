@@ -22,15 +22,25 @@ pub struct EcPointJson {
 
 /// A big-endian integer (Go `big.Int.Bytes()`) reduced into the scalar field `L`.
 pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
-    // Reverse to little-endian into a 64-byte buffer, then reduce mod L.
-    let mut le = [0u8; 64];
-    for (i, &b) in be.iter().rev().enumerate() {
-        if i >= 64 {
-            break;
+    // 2^512 mod L: folds inputs longer than one wide reduction 64 bytes at a
+    // time, so any length reduces as Go's `new(big.Int).Mod(key, L)` does.
+    let mut two256 = [0u8; 64];
+    two256[32] = 1;
+    let two256 = Scalar::from_bytes_mod_order(&two256);
+    let two512 = two256.mul(&two256);
+
+    let mut acc = Scalar::ZERO;
+    let head = be.len() % 64;
+    let (first, rest) = be.split_at(head);
+    for chunk in std::iter::once(first).chain(rest.chunks(64)) {
+        // Reverse to little-endian into a 64-byte buffer, then reduce mod L.
+        let mut le = [0u8; 64];
+        for (i, &b) in chunk.iter().rev().enumerate() {
+            le[i] = b;
         }
-        le[i] = b;
+        acc = acc.mul(&two512).add(&Scalar::from_bytes_mod_order(&le));
     }
-    Scalar::from_bytes_mod_order(&le)
+    acc
 }
 
 /// A scalar as its minimal big-endian bytes (Go `big.Int.Bytes()`).
@@ -172,6 +182,18 @@ mod tests {
         let mut b = [0u8; 32];
         b[0] = n;
         Scalar::from_bytes_canonical(&b).unwrap()
+    }
+
+    #[test]
+    fn scalar_from_be_reduces_any_length() {
+        // L·2^304 + 5 (70 bytes) is 5 mod L.
+        let mut be =
+            hex::decode("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
+                .unwrap();
+        be.extend_from_slice(&[0u8; 38]);
+        *be.last_mut().unwrap() = 5;
+        assert!(bool::from(scalar_from_be(&be).ct_eq(&scalar_from_be(&[5]))));
+        assert!(bool::from(scalar_from_be(&be[..32]).ct_eq(&Scalar::ZERO)));
     }
 
     #[test]

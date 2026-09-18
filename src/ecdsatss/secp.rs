@@ -23,12 +23,10 @@ pub(crate) fn scalar_to_be(s: &Scalar) -> Vec<u8> {
     b[off..].to_vec()
 }
 
-/// A scalar from big-endian bytes, reduced mod the group order.
+/// A scalar from big-endian bytes of any length, reduced mod the group order
+/// (Go `new(big.Int).Mod(key, q)`).
 pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
-    let mut b = [0u8; 32];
-    let n = be.len().min(32);
-    b[32 - n..].copy_from_slice(&be[be.len() - n..]);
-    Scalar::from_bytes_be_reduce(&b)
+    scalar(&bn::from_be(be))
 }
 
 /// A scalar as a `BoxedUint` (its canonical residue mod the group order).

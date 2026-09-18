@@ -19,13 +19,25 @@ pub fn random_scalar(rng: &mut impl RngCore) -> Scalar {
     }
 }
 
-/// Reduces a big-endian integer (≤ 32 bytes, e.g. a `PartyId` key) mod `n`.
+/// Reduces a big-endian integer of any length (e.g. a `PartyId` key) mod `n`,
+/// as Go's `new(big.Int).Mod(key, n)` does.
 pub fn scalar_from_be_reduce(be: &[u8]) -> Scalar {
-    let mut buf = [0u8; 32];
     let b = strip(be);
-    let n = b.len().min(32);
-    buf[32 - n..].copy_from_slice(&b[b.len() - n..]);
-    Scalar::from_bytes_be_reduce(&buf)
+    // 2^256 mod n, as (2^128)²: folds the input 32 bytes at a time.
+    let mut two128 = [0u8; 32];
+    two128[15] = 1;
+    let two128 = Scalar::from_bytes_be_reduce(&two128);
+    let two256 = two128.mul(&two128);
+
+    let mut acc = Scalar::from_bytes_be_reduce(&[0u8; 32]);
+    let head = b.len() % 32;
+    let (first, rest) = b.split_at(head);
+    for chunk in std::iter::once(first).chain(rest.chunks(32)) {
+        let mut buf = [0u8; 32];
+        buf[32 - chunk.len()..].copy_from_slice(chunk);
+        acc = acc.mul(&two256).add(&Scalar::from_bytes_be_reduce(&buf));
+    }
+    acc
 }
 
 /// A scalar as its big-endian minimal magnitude (Go `big.Int.Bytes()`).
@@ -78,6 +90,18 @@ fn strip(b: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
     use purecrypto::rng::OsRng;
+
+    #[test]
+    fn reduce_handles_inputs_longer_than_32_bytes() {
+        // n·2^16 + 5 is 5 mod n; truncating to the low 32 bytes would not be.
+        let mut be =
+            hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+                .unwrap();
+        be.extend_from_slice(&[0, 5]);
+        let five = scalar_from_be_reduce(&[5]);
+        assert!(bool::from(scalar_from_be_reduce(&be).ct_eq(&five)));
+        assert!(bool::from(scalar_from_be_reduce(&be[..32]).is_zero()));
+    }
 
     #[test]
     fn sec1_roundtrip() {

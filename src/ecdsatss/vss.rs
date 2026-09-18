@@ -25,6 +25,21 @@ pub(crate) fn random_scalar<R: RngCore>(rng: &mut R) -> Scalar {
     }
 }
 
+/// Port of Go `vss.CheckIndexes`: rejects a share id that is zero or a
+/// duplicate mod the group order. An id of zero would be dealt `f(0)` — the
+/// secret itself — and two equal ids would hold the same share.
+pub(crate) fn check_indexes(ids: &[Scalar]) -> Result<(), &'static str> {
+    for (i, a) in ids.iter().enumerate() {
+        if bool::from(a.is_zero()) {
+            return Err("party key is zero mod the group order");
+        }
+        if ids[i + 1..].iter().any(|b| bool::from(a.ct_eq(b))) {
+            return Err("duplicate party keys mod the group order");
+        }
+    }
+    Ok(())
+}
+
 /// Creates a degree-`t` sharing of `secret` for recipient `ids`. Returns the
 /// Feldman commitments `v_0..v_t` (`v_0 = secret·G`) and one share per id.
 pub(crate) fn create<R: RngCore>(
@@ -32,7 +47,15 @@ pub(crate) fn create<R: RngCore>(
     secret: &Scalar,
     ids: &[Scalar],
     rng: &mut R,
-) -> (Vec<ProjectivePoint>, Vec<Share>) {
+) -> Result<(Vec<ProjectivePoint>, Vec<Share>), &'static str> {
+    if t < 1 {
+        return Err("threshold must be at least 1");
+    }
+    if ids.len() <= t {
+        return Err("fewer than threshold+1 share ids");
+    }
+    check_indexes(ids)?;
+
     let mut poly: Vec<Scalar> = Vec::with_capacity(t + 1);
     poly.push(secret.clone());
     for _ in 0..t {
@@ -47,7 +70,7 @@ pub(crate) fn create<R: RngCore>(
             value: eval(&poly, id),
         })
         .collect();
-    (commitments, shares)
+    Ok((commitments, shares))
 }
 
 /// Verifies `share = f(id)` against commitments: `share·G == Σ_c id^c · v_c`.
@@ -118,4 +141,26 @@ fn eval(poly: &[Scalar], x: &Scalar) -> Scalar {
         result = result.add(&a.mul(&xpow));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_rejects_ids_that_leak_or_collide() {
+        let mut rng = purecrypto::rng::OsRng;
+        let id = |b: &[u8]| secp::scalar_from_be(b);
+        let secret = random_scalar(&mut rng);
+        let order = hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+            .unwrap();
+        // A key equal to the group order is id 0 and would be dealt the secret.
+        assert!(create(1, &secret, &[id(&[1]), id(&order)], &mut rng).is_err());
+        // Equal ids hold the same share.
+        assert!(create(1, &secret, &[id(&[1]), id(&[0, 1])], &mut rng).is_err());
+        // Threshold 0 hands every party the secret; t+1 ids are needed.
+        assert!(create(0, &secret, &[id(&[1]), id(&[2])], &mut rng).is_err());
+        assert!(create(2, &secret, &[id(&[1]), id(&[2])], &mut rng).is_err());
+        assert!(create(1, &secret, &[id(&[1]), id(&[2])], &mut rng).is_ok());
+    }
 }
