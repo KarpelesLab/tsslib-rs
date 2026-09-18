@@ -14,9 +14,17 @@
 //! and no single party knows every mask's secret (the all-honest-parties mask is
 //! dealt by an honest party), so the trusted-dealer assumption is removed.
 //!
-//! Rounds: (1) broadcast a `rho` contribution → joint `rho = H(all)`; (2) deal
-//! owned masks (broadcast `t_M`+commit, unicast shares); finalize verifies each
-//! held mask against its commitment/bound and assembles this party's [`Key44`].
+//! Rounds: (1) broadcast a `rho` contribution → joint `rho = H(all)`; (2a) deal
+//! owned masks and broadcast only a hash commitment to the `t_M` payload; (2b)
+//! once every commitment is in, reveal it (broadcast `t_M`+share commit, unicast
+//! shares); (3) verify each held mask against its commitment/bound, assemble
+//! this party's [`Key44`], and confirm every party derived the same public key.
+//!
+//! The commit-then-reveal on `t_M` matters: `t = Σ_M t_M` is a plain sum, so a
+//! dealer who saw the honest `t_M` first could pick its own as `t* − Σ t_honest`
+//! for a key `t*` it knows entirely (a rogue-key attack; any mask held only by
+//! corrupt parties is never checked by an honest one). The round-3 confirmation
+//! catches a dealer that reveals different `t_M` to different parties.
 
 use super::Error;
 use super::key::{Key44, Share44, expand_matrix};
@@ -39,10 +47,14 @@ const L: usize = 4;
 const K: usize = 4;
 
 const TYPE_R1: &str = "mldsa44:dkg:round1";
+const TYPE_R2C: &str = "mldsa44:dkg:r2commit";
 const TYPE_R2BC: &str = "mldsa44:dkg:r2bc";
 const TYPE_R2SH: &str = "mldsa44:dkg:r2sh";
+const TYPE_R3: &str = "mldsa44:dkg:r3confirm";
 const RHO_DOMAIN: &[u8] = b"mldsatss-dkg-rho-v1";
 const COMMIT_DOMAIN: &[u8] = b"mldsatss-dkg-commit-v1";
+const T_COMMIT_DOMAIN: &[u8] = b"mldsatss-dkg-tcommit-v1";
+const CONFIRM_DOMAIN: &[u8] = b"mldsatss-dkg-confirm-v1";
 
 type DkgResult = Result<Key44, Error>;
 
@@ -72,6 +84,12 @@ struct State {
     received: HashMap<u8, ([Poly; L], [Poly; K])>,
     t_by_mask: HashMap<u8, [Poly; K]>,
     commit_by_mask: HashMap<u8, [u8; 32]>,
+    /// Joint `rho`, fixed at the end of round 1.
+    rho: [u8; 32],
+    /// This party's round-2 reveal, held back until every commitment is in.
+    own_reveal: Vec<MaskT>,
+    /// Each party's commitment to its round-2 reveal, by committee slot.
+    t_commits: Vec<Option<[u8; 32]>>,
     pending: u8,
 }
 
@@ -117,6 +135,9 @@ impl DkgParty44 {
                 received: HashMap::new(),
                 t_by_mask: HashMap::new(),
                 commit_by_mask: HashMap::new(),
+                rho: [0u8; 32],
+                own_reveal: Vec::new(),
+                t_commits: vec![None; n],
                 pending: 0,
             }),
             result_tx: Mutex::new(Some(tx)),
@@ -208,15 +229,18 @@ impl Shared {
             }
             let mut rho = [0u8; 32];
             shake256(&input, &mut rho);
+            st.rho = rho;
             rho
         };
 
-        if let Err(e) = self.round2(&rho, others) {
+        if let Err(e) = self.round2_commit(&rho, others) {
             self.deliver(Err(e));
         }
     }
 
-    fn round2(self: &Arc<Self>, rho: &[u8; 32], others: &[PartyId]) -> Result<(), Error> {
+    /// Round 2a: deal the owned masks, but broadcast only a commitment to the
+    /// `t_M` payload.
+    fn round2_commit(self: &Arc<Self>, rho: &[u8; 32], others: &[PartyId]) -> Result<(), Error> {
         let a = expand_matrix(rho);
         let eta = ML_DSA_44.params.eta;
 
@@ -250,12 +274,52 @@ impl Shared {
                 commit: B64Bytes(commit.to_vec()),
             });
         }
+        let t_commit = commit_reveal(rho, self.id, &bcast_entries);
+        {
+            let mut st = self.state.lock().unwrap();
+            st.own_reveal = bcast_entries;
+            st.t_commits[self.id as usize] = Some(t_commit);
+        }
         self.broadcast(
-            TYPE_R2BC,
-            &Dkg2Bcast {
-                entries: bcast_entries,
+            TYPE_R2C,
+            &Dkg2Commit {
+                commit: B64Bytes(t_commit.to_vec()),
             },
         )?;
+        let me = Arc::clone(self);
+        let from = others.to_vec();
+        let exp = JsonExpect::new(
+            TYPE_R2C,
+            others.to_vec(),
+            Box::new(move |msgs| me.on_r2commit(&from, msgs)),
+        );
+        self.params.broker().connect(TYPE_R2C, Arc::new(exp));
+        Ok(())
+    }
+
+    fn on_r2commit(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+        let cs: Vec<Dkg2Commit> = match msgs.iter().map(|m| Ok(json_get(m)?)).collect() {
+            Ok(v) => v,
+            Err(e) => return self.deliver(Err::<Key44, Error>(e)),
+        };
+        {
+            let mut st = self.state.lock().unwrap();
+            for (pid, c) in others.iter().zip(cs.iter()) {
+                let Ok(commit) = <[u8; 32]>::try_from(c.commit.0.as_slice()) else {
+                    return self.deliver(Err(Error::Validation("bad t_M commitment".into())));
+                };
+                st.t_commits[self.committee_slot(pid)] = Some(commit);
+            }
+        }
+        if let Err(e) = self.round2_reveal(others) {
+            self.deliver(Err(e));
+        }
+    }
+
+    /// Round 2b: every commitment is in — reveal `t_M` and hand out the shares.
+    fn round2_reveal(self: &Arc<Self>, others: &[PartyId]) -> Result<(), Error> {
+        let entries = std::mem::take(&mut self.state.lock().unwrap().own_reveal);
+        self.broadcast(TYPE_R2BC, &Dkg2Bcast { entries })?;
 
         // Unicast shares to co-holders, grouped by recipient.
         for pj in others {
@@ -331,6 +395,13 @@ impl Shared {
             let mut st = self.state.lock().unwrap();
             for (from, bc) in &bcs {
                 let dealer = self.committee_slot(from) as u8;
+                // The reveal must be what this party committed to in round 2a.
+                let rho = st.rho;
+                if Some(commit_reveal(&rho, dealer, &bc.entries)) != st.t_commits[dealer as usize] {
+                    return self.deliver(Err(Error::Validation(format!(
+                        "party {dealer} revealed t_M that does not match its commitment"
+                    ))));
+                }
                 for e in &bc.entries {
                     // The sender must be the rightful (lowest-id) dealer of this mask.
                     if e.mask.trailing_zeros() as u8 != dealer {
@@ -348,7 +419,12 @@ impl Shared {
                     }
                     let mut c = [0u8; 32];
                     c.copy_from_slice(&e.commit.0);
-                    st.t_by_mask.insert(e.mask, t_m);
+                    if st.t_by_mask.insert(e.mask, t_m).is_some() {
+                        return self.deliver(Err(Error::Validation(format!(
+                            "party {dealer} dealt mask {} twice",
+                            e.mask
+                        ))));
+                    }
                     st.commit_by_mask.insert(e.mask, c);
                 }
             }
@@ -357,14 +433,32 @@ impl Shared {
     }
 
     fn on_r2share(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
-        let shares: Vec<Dkg2Share> = match msgs.iter().map(|m| Ok(json_get(m)?)).collect() {
+        let shares: Vec<(PartyId, Dkg2Share)> = match msgs
+            .iter()
+            .map(|m| Ok((m.from.clone().unwrap(), json_get(m)?)))
+            .collect()
+        {
             Ok(v) => v,
             Err(e) => return self.deliver(Err::<Key44, Error>(e)),
         };
         {
             let mut st = self.state.lock().unwrap();
-            for sh in &shares {
+            for (from, sh) in &shares {
+                let dealer = self.committee_slot(from) as u8;
                 for e in &sh.entries {
+                    // Only the rightful dealer may supply a mask's share, and
+                    // only for a mask we hold — otherwise any share sender
+                    // could overwrite an honest dealer's entry and get it
+                    // blamed for the commitment mismatch.
+                    if e.mask.trailing_zeros() as u8 != dealer
+                        || !self.masks_hold.contains(&e.mask)
+                        || st.received.contains_key(&e.mask)
+                    {
+                        return self.deliver(Err(Error::Validation(format!(
+                            "party {dealer} sent an unexpected share for mask {}",
+                            e.mask
+                        ))));
+                    }
                     let s1 = match unpack_vec_l(&e.s1.0) {
                         Some(v) => v,
                         None => return self.deliver(Err(Error::Validation("bad s1 share".into()))),
@@ -392,7 +486,7 @@ impl Shared {
     }
 
     fn finalize(self: &Arc<Self>) {
-        let st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap();
         let rho_input = {
             let mut input = RHO_DOMAIN.to_vec();
             for c in &st.contribs {
@@ -488,7 +582,6 @@ impl Shared {
         let mut tr = [0u8; 64];
         shake256(&pk_bytes, &mut tr);
 
-        *self.pk.lock().unwrap() = Some(pk);
         let key = Key44 {
             id: self.id,
             rho,
@@ -496,11 +589,62 @@ impl Shared {
             t1,
             shares,
         };
+        // The plaintext shares now live in `key` (which wipes itself on drop);
+        // clear the session's copies.
+        {
+            let st = &mut *st;
+            for (s1, s2) in st.dealt.values_mut().chain(st.received.values_mut()) {
+                for p in s1.iter_mut().chain(s2.iter_mut()) {
+                    zeroize::Zeroize::zeroize(&mut p.c);
+                }
+            }
+            st.dealt.clear();
+            st.received.clear();
+        }
         drop(st);
         if let Err(e) = key.validate() {
             return self.deliver(Err(e));
         }
-        self.deliver(Ok(key));
+
+        // Round 3: all parties must have derived the same public key. The
+        // round-2 broadcasts are not reliable broadcasts, so a dealer could
+        // have revealed a different (committed) `t_M` to different parties.
+        let mut input = CONFIRM_DOMAIN.to_vec();
+        input.extend_from_slice(&pk_bytes);
+        let mut digest = [0u8; 32];
+        shake256(&input, &mut digest);
+        if let Err(e) = self.broadcast(
+            TYPE_R3,
+            &Dkg3Confirm {
+                digest: B64Bytes(digest.to_vec()),
+            },
+        ) {
+            return self.deliver(Err(e));
+        }
+        let me = Arc::clone(self);
+        let others = self.params.other_parties();
+        let from = others.clone();
+        let exp = JsonExpect::new(
+            TYPE_R3,
+            others,
+            Box::new(move |msgs| {
+                for (pid, m) in from.iter().zip(msgs.iter()) {
+                    match json_get::<Dkg3Confirm>(m) {
+                        Ok(c) if c.digest.0 == digest => {}
+                        Ok(_) => {
+                            return me.deliver(Err(Error::Validation(format!(
+                                "party {} derived a different public key",
+                                me.committee_slot(pid)
+                            ))));
+                        }
+                        Err(e) => return me.deliver(Err(e.into())),
+                    }
+                }
+                *me.pk.lock().unwrap() = Some(pk);
+                me.deliver(Ok(key));
+            }),
+        );
+        self.params.broker().connect(TYPE_R3, Arc::new(exp));
     }
 
     fn committee_slot(&self, p: &PartyId) -> usize {
@@ -539,6 +683,18 @@ impl Shared {
 struct Dkg1 {
     #[serde(rename = "contrib")]
     contrib: B64Bytes,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Dkg2Commit {
+    #[serde(rename = "commit")]
+    commit: B64Bytes,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Dkg3Confirm {
+    #[serde(rename = "digest")]
+    digest: B64Bytes,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -612,6 +768,26 @@ fn commit_share(mask: u8, s1: &[Poly; L], s2: &[Poly; K]) -> [u8; 32] {
     out
 }
 
+/// Commitment to a party's whole round-2 reveal, bound to the session (`rho`)
+/// and the dealer: SHAKE256(domain ‖ rho ‖ dealer ‖ count ‖ Σ (mask ‖ |t| ‖ t ‖
+/// |commit| ‖ commit)) → 32 bytes.
+fn commit_reveal(rho: &[u8; 32], dealer: u8, entries: &[MaskT]) -> [u8; 32] {
+    let mut input = T_COMMIT_DOMAIN.to_vec();
+    input.extend_from_slice(rho);
+    input.push(dealer);
+    input.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for e in entries {
+        input.push(e.mask);
+        for field in [&e.t.0, &e.commit.0] {
+            input.extend_from_slice(&(field.len() as u32).to_le_bytes());
+            input.extend_from_slice(field);
+        }
+    }
+    let mut out = [0u8; 32];
+    shake256(&input, &mut out);
+    out
+}
+
 /// Packs a poly vector with `pack_polyq` (one 736-byte block per poly).
 fn pack_vec(v: &[Poly]) -> Vec<u8> {
     let mut out = vec![0u8; v.len() * PACK_POLYQ_SIZE];
@@ -628,6 +804,10 @@ fn unpack_vec_k(b: &[u8]) -> Option<[Poly; K]> {
     let mut out = [Poly::zero(); K];
     for (i, oi) in out.iter_mut().enumerate() {
         *oi = unpack_polyq(&b[i * PACK_POLYQ_SIZE..(i + 1) * PACK_POLYQ_SIZE]);
+        // 23-bit fields can hold values ≥ q; `Poly` arithmetic requires < q.
+        if oi.c.iter().any(|&c| c >= hazmat::Q) {
+            return None;
+        }
     }
     Some(out)
 }
@@ -639,6 +819,10 @@ fn unpack_vec_l(b: &[u8]) -> Option<[Poly; L]> {
     let mut out = [Poly::zero(); L];
     for (i, oi) in out.iter_mut().enumerate() {
         *oi = unpack_polyq(&b[i * PACK_POLYQ_SIZE..(i + 1) * PACK_POLYQ_SIZE]);
+        // 23-bit fields can hold values ≥ q; `Poly` arithmetic requires < q.
+        if oi.c.iter().any(|&c| c >= hazmat::Q) {
+            return None;
+        }
     }
     Some(out)
 }
@@ -676,6 +860,103 @@ mod tests {
         let keys: Vec<Key44> = parties.iter().map(|p| p.wait().expect("dkg ok")).collect();
         let pk = parties[0].public_key().unwrap();
         (pk, keys)
+    }
+
+    /// Broker for one honest party facing a scripted adversary: records what
+    /// the party sends, dispatches what the test injects.
+    #[derive(Default)]
+    struct Tap {
+        me: Vec<u8>,
+        out: Mutex<Vec<JsonMessage>>,
+        handlers: Mutex<HashMap<String, Arc<dyn crate::tss::MessageReceiver + Send + Sync>>>,
+        pending: Mutex<Vec<JsonMessage>>,
+    }
+
+    impl crate::tss::MessageReceiver for Tap {
+        fn receive(&self, m: &JsonMessage) -> crate::tss::BrokerResult {
+            if m.from.as_ref().map(|p| &p.key) == Some(&self.me) {
+                self.out.lock().unwrap().push(m.clone());
+                return Ok(());
+            }
+            let h = self.handlers.lock().unwrap().get(&m.typ).cloned();
+            match h {
+                Some(h) => h.receive(m),
+                None => {
+                    self.pending.lock().unwrap().push(m.clone());
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    impl crate::tss::MessageBroker for Tap {
+        fn connect(&self, typ: &str, dest: Arc<dyn crate::tss::MessageReceiver + Send + Sync>) {
+            self.handlers
+                .lock()
+                .unwrap()
+                .insert(typ.into(), dest.clone());
+            let queued: Vec<JsonMessage> = {
+                let mut p = self.pending.lock().unwrap();
+                let (mine, rest) = p.drain(..).partition(|m| m.typ == typ);
+                *p = rest;
+                mine
+            };
+            for m in queued {
+                let _ = dest.receive(&m);
+            }
+        }
+    }
+
+    /// The rogue-key attack: in a 2-of-2 DKG the second party waits for the
+    /// honest `t_M` and answers with `t* − t_honest`, making the group key a
+    /// key `t*` it holds alone. The commit round must deny it that view, and
+    /// bind it to whatever it committed to blind.
+    #[test]
+    fn rushing_dealer_cannot_choose_t_after_seeing_honest_t() {
+        let th = get_threshold_params44(2, 2).unwrap();
+        let ids = party_ids(2);
+        let (honest, evil) = (ids[0].clone(), ids[1].clone());
+        let tap = Arc::new(Tap {
+            me: honest.key.clone(),
+            ..Default::default()
+        });
+        let party =
+            DkgParty44::new(Parameters::new(ids.clone(), &honest, 2, tap.clone()), th).unwrap();
+        let sent = |typ: &str| tap.out.lock().unwrap().iter().any(|m| m.typ == typ);
+        let inject = |typ: &str, body: serde_json::Value| {
+            let m = json_wrap(typ, &body, Some(evil.clone()), None).unwrap();
+            crate::tss::MessageReceiver::receive(&*tap, &m).unwrap();
+        };
+        let b64 = |b: &[u8]| serde_json::to_value(B64Bytes(b.to_vec())).unwrap();
+
+        inject(TYPE_R1, serde_json::json!({ "contrib": b64(&[0x42; 32]) }));
+        // The honest party has committed, but revealed nothing to react to.
+        assert!(sent(TYPE_R2C));
+        assert!(
+            !sent(TYPE_R2BC),
+            "t_M revealed before the adversary committed"
+        );
+
+        // The adversary must commit blind; the honest reveal follows.
+        inject(TYPE_R2C, serde_json::json!({ "commit": b64(&[0x13; 32]) }));
+        assert!(sent(TYPE_R2BC));
+
+        // Now it picks its t_M — which cannot match the blind commitment.
+        let t_evil = pack_vec(&[Poly::zero(); K]);
+        inject(
+            TYPE_R2BC,
+            serde_json::json!({ "entries": [{ "mask": 2, "t": b64(&t_evil), "commit": b64(&[0; 32]) }] }),
+        );
+        let err = party
+            .try_result()
+            .expect("finished")
+            .err()
+            .expect("rejected");
+        assert!(
+            err.to_string().contains("does not match its commitment"),
+            "{err}"
+        );
+        assert!(party.public_key().is_none());
     }
 
     #[test]

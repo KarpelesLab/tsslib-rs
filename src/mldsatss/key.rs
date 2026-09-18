@@ -55,6 +55,37 @@ pub struct Key44 {
     pub shares: HashMap<u8, Share44>,
 }
 
+/// The signing-set bitmask for `ids`: exactly `t` distinct party ids, each
+/// below `n`. Anything else would shift past the mask or overrun the
+/// permutation in [`Key44::recover_share`].
+pub(crate) fn signing_set_mask(
+    ids: impl IntoIterator<Item = u8>,
+    params: &ThresholdParams44,
+) -> Result<u8, Error> {
+    let mut act = 0u8;
+    let mut count = 0u8;
+    for id in ids {
+        if id >= params.n {
+            return Err(Error::Validation(format!(
+                "signer id {id} is not below n={}",
+                params.n
+            )));
+        }
+        if act & (1 << id) != 0 {
+            return Err(Error::Validation(format!("duplicate signer id {id}")));
+        }
+        act |= 1 << id;
+        count += 1;
+    }
+    if count != params.t {
+        return Err(Error::Validation(format!(
+            "signing set has {count} parties, expected t={}",
+            params.t
+        )));
+    }
+    Ok(act)
+}
+
 impl Key44 {
     /// Expands the public matrix `A` (row-major, NTT domain) from `rho`.
     /// `A[i*L + j] = sample_ntt_poly(rho, j, i)` (FIPS 204 ExpandA).
@@ -67,6 +98,12 @@ impl Key44 {
     pub fn validate(&self) -> Result<(), Error> {
         if self.shares.is_empty() {
             return Err(Error::Validation("key has no shares".into()));
+        }
+        if self.id as usize >= MAX_PARTIES {
+            return Err(Error::Validation(format!(
+                "key id {} is not below {MAX_PARTIES}",
+                self.id
+            )));
         }
         for &mask in self.shares.keys() {
             if mask & (1 << self.id) == 0 {
@@ -86,6 +123,17 @@ impl Key44 {
     ) -> Result<([Poly; L], [Poly; K]), Error> {
         let mut s1h = [Poly::zero(); L];
         let mut s2h = [Poly::zero(); K];
+
+        // Exactly t signers, all with ids below n: the permutation below has
+        // t slots for signers and n−t for the rest, and would run past either
+        // end for any other shape of `act`.
+        let in_range = (act as u32) >> params.n == 0;
+        if !in_range || act.count_ones() != params.t as u32 {
+            return Err(Error::Validation(format!(
+                "signing set {act:#010b} is not {} distinct ids below {}",
+                params.t, params.n
+            )));
+        }
 
         // t == n: each party holds exactly the full-signer mask's share.
         if params.t == params.n {

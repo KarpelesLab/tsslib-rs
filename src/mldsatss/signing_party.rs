@@ -144,10 +144,7 @@ impl SigningParty44 {
                 "key.id does not match this party's committee slot".into(),
             ));
         }
-        let mut act = 0u8;
-        for &kid in &key_ids {
-            act |= 1 << kid;
-        }
+        let act = super::key::signing_set_mask(key_ids.iter().copied(), &th)?;
 
         let mu = compute_mu(&key.tr, ctx, msg);
         let a = key.matrix();

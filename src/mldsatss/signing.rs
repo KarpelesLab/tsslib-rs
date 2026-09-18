@@ -60,10 +60,7 @@ pub fn sign44(
     let a = signers[0].matrix();
     let t1 = signers[0].t1;
 
-    let mut act = 0u8;
-    for k in signers {
-        act |= 1 << k.id;
-    }
+    let act = super::key::signing_set_mask(signers.iter().map(|k| k.id), params)?;
     let mut s1h: Vec<[Poly; L]> = Vec::with_capacity(signers.len());
     let mut s2h: Vec<[Poly; K]> = Vec::with_capacity(signers.len());
     for k in signers {
@@ -395,6 +392,20 @@ mod tests {
             "threshold signature must verify under the FIPS 204 public key"
         );
         assert!(!pk.verify(&sig, b"other message", ctx));
+    }
+
+    /// A repeated signer left `act` with fewer than t bits, and recover_share
+    /// then wrote the non-signers past the end of its permutation.
+    #[test]
+    fn duplicate_or_out_of_range_signers_are_rejected() {
+        let params = get_threshold_params44(2, 6).unwrap();
+        let (_pk, keys) = trusted_dealer_keygen44(&[3u8; 32], &params).unwrap();
+        let mut rng = purecrypto::rng::OsRng;
+        assert!(sign44(&[&keys[0], &keys[0]], &params, b"m", b"", &mut rng).is_err());
+        // The share-level entry point enforces the same shape.
+        assert!(keys[0].recover_share(0b0000_0001, &params).is_err());
+        assert!(keys[0].recover_share(0b0100_0001, &params).is_err());
+        assert!(keys[0].recover_share(0b0000_0011, &params).is_ok());
     }
 
     #[test]
