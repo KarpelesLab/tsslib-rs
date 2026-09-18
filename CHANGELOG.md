@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.7...v0.2.8) - 2026-09-18
+
+### Fixed
+
+- *(ecdsatss)* reject reused ring-Pedersen h1/h2 in resharing
+- wipe secret byte copies the Go code wipes
+- *(dklstss)* name the peer on signing failures; stop over-claiming Mul-then-check
+- *(mldsatss)* DKG rogue-key attack, share spoofing, signer-set panics
+- panics reachable from peer input and mis-indexed committees
+- resharing hangs for a party in both committees (eddsatss, ecdsatss, dklstss)
+- port vss.CheckIndexes to eddsatss, ecdsatss and dklstss resharing
+- *(frost)* resharing with a party in both committees
+- *(frost)* reject zero / duplicate identifiers mod L before sharing
+- make every protocol feature build on its own
+
+### Other
+
+- *(dklstss)* document the keygen rogue-key limitation for n <= 2t
+- raise MSRV to 1.89 to match purecrypto 0.9
+- list the legacy GG18 modules in the crate table, fix README version
+- use as_chunks for constant-size chunking (clippy 1.98)
+- *(deps)* update purecrypto to 0.9
+
 ## [0.2.7](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.6...v0.2.7) - 2026-07-27
 
 ### Added
