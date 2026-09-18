@@ -200,8 +200,8 @@ pub(crate) fn unflatten_point_xy(flat: &[B64Bytes]) -> Result<Vec<ProjectivePoin
         )));
     }
     let mut out = Vec::with_capacity(flat.len() / 2);
-    for (i, pair) in flat.chunks_exact(2).enumerate() {
-        let p = point_from_be_xy(&pair[0].0, &pair[1].0)
+    for (i, [x, y]) in flat.as_chunks::<2>().0.iter().enumerate() {
+        let p = point_from_be_xy(&x.0, &y.0)
             .ok_or_else(|| Error::Validation(format!("point [{i}] off-curve")))?;
         out.push(p);
     }

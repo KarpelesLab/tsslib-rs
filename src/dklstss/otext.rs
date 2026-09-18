@@ -407,13 +407,7 @@ fn popcount_byte(b: u8) -> u8 {
 
 /// Splits a flat buffer into `KAPPA` 32-byte seeds.
 fn chunk_seeds(b: &[u8]) -> Vec<[u8; SEED_LEN]> {
-    b.chunks_exact(SEED_LEN)
-        .map(|c| {
-            let mut s = [0u8; SEED_LEN];
-            s.copy_from_slice(c);
-            s
-        })
-        .collect()
+    b.as_chunks::<SEED_LEN>().0.to_vec()
 }
 
 #[cfg(test)]
