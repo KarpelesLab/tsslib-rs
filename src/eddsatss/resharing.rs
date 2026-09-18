@@ -68,6 +68,8 @@ struct State {
     r3_join: u8,
 
     new_key: Option<Key>,
+    /// Dual (old+new) members: the other new parties' ROUND4 ACKs are all in.
+    acks_done: bool,
 }
 
 impl ResharingParty {
@@ -100,6 +102,7 @@ impl ResharingParty {
                 r3m2_from: Vec::new(),
                 r3_join: 0,
                 new_key: None,
+                acks_done: false,
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -173,11 +176,14 @@ impl Shared {
             eddsa_pub_y: B64Bytes(py),
             v_commitment: B64Bytes(vc),
         };
-        let new_others = self.new_others();
-        for pj in &new_others {
+        // Every new party, including ourselves when we sit on both committees:
+        // the new side expects round 1 from all old parties (Go sends the
+        // self-message explicitly).
+        for pj in self.params.new_parties() {
             self.send_to(TYPE_R1, &r1, pj)?;
         }
 
+        let new_others = self.new_others();
         if new_others.is_empty() {
             self.round3_old();
         } else {
@@ -224,12 +230,22 @@ impl Shared {
     }
 
     fn round5_old(self: &Arc<Self>) {
-        // New members deliver the new key from round4_new; old-only members
-        // retire their share.
+        // Old-only members retire their share.
         if !self.params.is_new_committee() {
             let mut retired = self.input.clone();
             retired.xi = BigUintDec::from_be_bytes(&[]);
-            self.deliver(Ok(retired));
+            return self.deliver(Ok(retired));
+        }
+        // Dual member: this is the one ROUND4 handler. The ACKs can complete
+        // before our own `round4_new` has produced the key; in that case
+        // `round4_new` delivers.
+        let new_key = {
+            let mut st = self.state.lock().unwrap();
+            st.acks_done = true;
+            st.new_key.clone()
+        };
+        if let Some(k) = new_key {
+            self.deliver(Ok(k));
         }
     }
 
@@ -419,16 +435,21 @@ impl Shared {
         self.state.lock().unwrap().new_key = Some(new_key.clone());
 
         // Ack round4 to every other old+new party.
-        let mut all = self.params.old_parties().to_vec();
-        all.extend(new_ids.iter().cloned());
-        for pj in &all {
+        for pj in &self.params.old_and_new_parties() {
             if pj.key != self.params.party_id().key {
                 let _ = self.send_to(TYPE_R4, &R4Msg {}, pj);
             }
         }
 
         let new_others = self.new_others();
-        if new_others.is_empty() {
+        if self.params.is_old_committee() {
+            // Dual member: `round3_old` owns the ROUND4 handler (a second
+            // `connect` would replace it and lose ACKs). Whichever of
+            // `round4_new` / `round5_old` finishes last delivers.
+            if self.state.lock().unwrap().acks_done {
+                self.deliver(Ok(new_key));
+            }
+        } else if new_others.is_empty() {
             self.deliver(Ok(new_key));
         } else {
             self.connect(TYPE_R4, &new_others, {
@@ -573,6 +594,45 @@ mod tests {
 
     fn pid(key: u8) -> PartyId {
         PartyId::new(key.to_string(), format!("P{key}"), vec![key])
+    }
+
+    /// The migration path: a 1-of-1 imported key reshares to a committee its
+    /// holder stays on. A party in both committees must finish with its new key
+    /// whichever side starts first.
+    #[test]
+    fn reshare_with_party_in_both_committees() {
+        let old = pid(5);
+        let input = import_key(&[0x42u8], &old.key).unwrap();
+        let eddsa_pub = input.eddsa_pub_point().unwrap();
+        let old_ids = vec![old.clone()];
+        let new_ids = PartyId::sort(vec![pid(5), pid(11), pid(12)], 0);
+        let all = new_ids.clone();
+
+        for order in [[0, 1, 2], [1, 2, 0], [2, 0, 1], [1, 0, 2]] {
+            let hub = ReshareHub::new(&all);
+            let sessions: Vec<ResharingParty> = order
+                .iter()
+                .map(|&i| {
+                    let params = ReSharingParameters::new(
+                        old_ids.clone(),
+                        new_ids.clone(),
+                        0,
+                        1,
+                        all[i].clone(),
+                        hub.broker(&all[i]),
+                    );
+                    ResharingParty::new(params, input.clone()).unwrap()
+                })
+                .collect();
+            for (s, i) in sessions.iter().zip(order) {
+                let k = s
+                    .try_result()
+                    .unwrap_or_else(|| panic!("order {order:?}: party {i} has no result"))
+                    .unwrap();
+                k.validate_basic().unwrap();
+                assert!(ed::eq(&k.eddsa_pub_point().unwrap(), &eddsa_pub));
+            }
+        }
     }
 
     #[test]

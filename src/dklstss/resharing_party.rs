@@ -258,6 +258,12 @@ impl Shared {
             vss_commitments: flatten_point_xy(&vs),
         };
         self.broadcast(TYPE_R1BC, &bcast)?;
+        // A broadcast is not looped back to its sender, but a hybrid (OLD+NEW)
+        // member's NEW role collects R1BC from every old dealer, itself
+        // included — as it does the self-addressed R1UC below.
+        if self.is_new {
+            self.send_to(TYPE_R1BC, &bcast, self.params.party_id())?;
+        }
 
         for (n, pj) in self.params.new_parties().iter().enumerate() {
             let uc = ReshareR1Unicast {
@@ -755,6 +761,51 @@ mod tests {
         );
         let r = ResharingParty::new(params, old_keys[0].ecdsa_pub, Some(old_keys[0].clone()));
         assert!(r.is_err());
+    }
+
+    /// Overlapping committees: party 3 is both an old dealer and a new member.
+    #[test]
+    fn reshare_with_party_in_both_committees() {
+        let old_ids = party_ids(&[1, 2, 3]);
+        let old_keys = keygen(old_ids.len(), 1, &old_ids, &mut OsRng).unwrap();
+        let group_pub = old_keys[0].ecdsa_pub;
+        let new_ids = party_ids(&[3, 11, 12]);
+        let all = party_ids(&[1, 2, 3, 11, 12]);
+
+        for order in [[0, 1, 2, 3, 4], [2, 3, 4, 0, 1], [4, 3, 2, 1, 0]] {
+            let hub = ReshareHub::new(&all);
+            let sessions: Vec<ResharingParty> = order
+                .iter()
+                .map(|&i| {
+                    let p = &all[i];
+                    let params = ReSharingParameters::new(
+                        old_ids.clone(),
+                        new_ids.clone(),
+                        1,
+                        1,
+                        p.clone(),
+                        hub.broker(p),
+                    );
+                    let old_key = old_ids
+                        .iter()
+                        .position(|o| o.cmp_key(p) == std::cmp::Ordering::Equal)
+                        .map(|j| old_keys[j].clone());
+                    ResharingParty::new(params, group_pub, old_key).unwrap()
+                })
+                .collect();
+            for (s, i) in sessions.iter().zip(order) {
+                let r = s
+                    .try_result()
+                    .unwrap_or_else(|| panic!("order {order:?}: party {i} has no result"))
+                    .unwrap();
+                // all[2..] = {3, 11, 12} is the new committee.
+                assert_eq!(r.is_some(), i >= 2, "order {order:?}: party {i}");
+                if let Some(k) = r {
+                    k.validate_basic().unwrap();
+                    assert!(secp::point_eq(&k.ecdsa_pub, &group_pub));
+                }
+            }
+        }
     }
 
     #[test]

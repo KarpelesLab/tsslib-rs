@@ -262,16 +262,19 @@ impl Shared {
                 return self.deliver(Err(e));
             }
         }
+        // Old-only members retire their share once the new committee ACKs.
+        // Hybrids deliver the new key from round5_new and must not register
+        // here: the broker keeps one handler per type, so this one would
+        // replace (or be replaced by) round4_new's and swallow its ACKs.
+        if self.params.is_new_committee() {
+            return;
+        }
         self.connect(TYPE_R4_2, &new_ids, {
             let me = Arc::clone(self);
             move |_msgs| {
-                // Old-only members retire their share here; hybrids deliver the
-                // new key from round5_new instead.
-                if !me.params.is_new_committee() {
-                    let mut retired = me.input.clone();
-                    retired.xi = BigUintDec::from_be_bytes(&[]);
-                    me.deliver(Ok(retired));
-                }
+                let mut retired = me.input.clone();
+                retired.xi = BigUintDec::from_be_bytes(&[]);
+                me.deliver(Ok(retired));
             }
         });
     }
@@ -652,10 +655,8 @@ impl Shared {
             }
         }
         // Round-4-2 ack to every other party (old and new).
-        let mut all = old_ids.clone();
-        all.extend(new_ids.iter().cloned());
-        for pj in &all {
-            if pj.index == self.params.party_id().index && pj.key == self.params.party_id().key {
+        for pj in &self.params.old_and_new_parties() {
+            if pj.key == self.params.party_id().key {
                 continue;
             }
             let _ = self.send_to(TYPE_R4_2, &R4Msg2 {}, pj);
@@ -1014,6 +1015,43 @@ mod tests {
 
     fn pid(key: u8) -> PartyId {
         PartyId::new(key.to_string(), format!("P{key}"), vec![key])
+    }
+
+    /// The migration path: the 1-of-1 holder stays on the new committee. A
+    /// party in both committees must finish with its new key.
+    #[test]
+    #[ignore = "resharing generates fresh safe primes (slow)"]
+    fn reshare_with_party_in_both_committees() {
+        let old = pid(5);
+        let input = import_key(&[0x42u8], &old.key).unwrap();
+        let ecdsa_pub = input.ecdsa_pub_point().unwrap();
+        let old_ids = vec![old.clone()];
+        let new_ids = PartyId::sort(vec![pid(5), pid(11)], 0);
+
+        let hub = ReshareHub::new(&new_ids);
+        let sessions: Vec<ResharingParty> = new_ids
+            .iter()
+            .map(|p| {
+                let params = ReSharingParameters::new(
+                    old_ids.clone(),
+                    new_ids.clone(),
+                    0,
+                    1,
+                    p.clone(),
+                    hub.broker(p),
+                );
+                let pre = LocalPreParams::generate(256, &mut OsRng);
+                ResharingParty::new(params, input.clone(), Some(pre)).unwrap()
+            })
+            .collect();
+        for (s, p) in sessions.iter().zip(&new_ids) {
+            let k = s
+                .try_result()
+                .unwrap_or_else(|| panic!("party {p} has no result"))
+                .unwrap();
+            k.validate_basic().unwrap();
+            assert!(secp::eq(&k.ecdsa_pub_point().unwrap(), &ecdsa_pub));
+        }
     }
 
     #[test]
