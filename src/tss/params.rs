@@ -18,19 +18,32 @@ pub struct Parameters {
     broker: Arc<dyn MessageBroker + Send + Sync>,
 }
 
+/// Sets every party's `index` to its position in `parties`.
+fn reindex(parties: &mut [PartyId]) {
+    for (i, p) in parties.iter_mut().enumerate() {
+        p.index = i as i32;
+    }
+}
+
 impl Parameters {
     /// Builds parameters from a sorted party set, this party's id, the
     /// threshold, and a broker. `parties` must be sorted (see
     /// [`PartyId::sort`]) and contain `self_id`.
     ///
+    /// Each party's `index` is reset to its position in `parties`: the
+    /// protocols index per-party state by it, and a committee picked out of a
+    /// larger sorted set (e.g. signers 0 and 2 of 3) would otherwise carry
+    /// stale indices that run past the end of that state.
+    ///
     /// # Panics
     /// If `self_id` is not present in `parties`.
     pub fn new(
-        parties: Vec<PartyId>,
+        mut parties: Vec<PartyId>,
         self_id: &PartyId,
         threshold: usize,
         broker: Arc<dyn MessageBroker + Send + Sync>,
     ) -> Self {
+        reindex(&mut parties);
         let self_index = parties
             .iter()
             .position(|p| p.cmp_key(self_id) == std::cmp::Ordering::Equal)
@@ -101,15 +114,18 @@ pub struct ReSharingParameters {
 
 impl ReSharingParameters {
     /// Builds resharing parameters. Both committees must be sorted; `self_id`
-    /// must belong to at least one of them.
+    /// must belong to at least one of them. As in [`Parameters::new`], each
+    /// party's `index` is reset to its position within its own committee.
     pub fn new(
-        old_parties: Vec<PartyId>,
-        new_parties: Vec<PartyId>,
+        mut old_parties: Vec<PartyId>,
+        mut new_parties: Vec<PartyId>,
         old_threshold: usize,
         new_threshold: usize,
         self_id: PartyId,
         broker: Arc<dyn MessageBroker + Send + Sync>,
     ) -> Self {
+        reindex(&mut old_parties);
+        reindex(&mut new_parties);
         ReSharingParameters {
             old_parties,
             new_parties,
@@ -177,5 +193,31 @@ impl ReSharingParameters {
             }
         }
         v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tss::testhub::TestHub;
+
+    /// A signing committee picked out of a larger sorted set keeps its keygen
+    /// indices (0 and 2 here); protocols index per-party state by `index`, so
+    /// the constructor must renumber to positions.
+    #[test]
+    fn subset_committee_is_reindexed_by_position() {
+        let all = PartyId::sort(
+            (1u8..=3)
+                .map(|k| PartyId::new(k.to_string(), format!("P{k}"), vec![k]))
+                .collect(),
+            0,
+        );
+        let subset = vec![all[0].clone(), all[2].clone()];
+        assert_eq!(subset[1].index, 2);
+        let hub = TestHub::new(&subset);
+        let params = Parameters::new(subset.clone(), &subset[1], 1, hub.broker(1));
+        let idx: Vec<i32> = params.parties().iter().map(|p| p.index).collect();
+        assert_eq!(idx, [0, 1]);
+        assert_eq!(params.party_id().index, 1);
     }
 }

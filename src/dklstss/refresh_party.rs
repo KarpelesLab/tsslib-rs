@@ -69,6 +69,17 @@ impl RefreshParty {
     /// Starts proactive refresh for this party using its current key.
     pub fn new(params: Parameters, old: Key) -> Result<RefreshParty, Error> {
         old.validate_basic()?;
+        // Refresh rotates every share in place, and per-party state (`big_xj`,
+        // OT pairings) is addressed by position: the committee must be exactly
+        // the key's party set, in order.
+        let same_set = params.parties().len() == old.party_ids.len()
+            && (params.parties().iter().zip(&old.party_ids))
+                .all(|(a, b)| a.cmp_key(b) == std::cmp::Ordering::Equal);
+        if !same_set {
+            return Err(Error::Validation(
+                "refresh committee must equal the key's party set".into(),
+            ));
+        }
         let ssid = refresh_session(&params, &old);
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {

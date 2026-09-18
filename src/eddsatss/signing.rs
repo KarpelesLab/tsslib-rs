@@ -493,6 +493,38 @@ mod tests {
         pk.verify(msg, &Ed25519Signature::from_bytes(s)).is_ok()
     }
 
+    /// Signers 0 and 2 of a 3-party key keep their keygen `index` (0, 2); the
+    /// per-party state has two slots, so indexing by it ran out of bounds.
+    #[test]
+    fn subset_of_larger_committee_signs() {
+        let ids = PartyId::sort(
+            (1..=3)
+                .map(|i| PartyId::new(i.to_string(), format!("P{i}"), vec![i as u8]))
+                .collect(),
+            0,
+        );
+        let hub = TestHub::new(&ids);
+        let kparties: Vec<KeygenParty> = (0..ids.len())
+            .map(|i| {
+                KeygenParty::new(Parameters::new(ids.to_vec(), &ids[i], 1, hub.broker(i))).unwrap()
+            })
+            .collect();
+        let keys: Vec<Key> = kparties.iter().map(|p| p.wait().unwrap()).collect();
+
+        let signers = vec![ids[0].clone(), ids[2].clone()];
+        let signer_keys: Vec<Key> = [0, 2]
+            .iter()
+            .map(|&i| keys[i].subset_for_parties(&signers).unwrap())
+            .collect();
+        let msg = b"subset committee";
+        let sigs = sign(&signer_keys, &signers, 1, msg);
+        assert!(ed_verify(
+            &keys[0].eddsa_pub_point().unwrap(),
+            msg,
+            &sigs[0].signature
+        ));
+    }
+
     #[test]
     fn keygen_then_sign_verifies() {
         let ids = PartyId::sort(

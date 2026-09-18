@@ -94,6 +94,16 @@ pub(crate) fn verify(proof: &DlnProof, h1: &BoxedUint, h2: &BoxedUint, ntilde: &
     if proof.alpha.len() != ITERATIONS || proof.t.len() != ITERATIONS {
         return false;
     }
+    // Ñ is a product of odd primes (and `Modulus` requires an odd modulus);
+    // honest proof elements are already reduced mod Ñ, and the `t` are used as
+    // exponents as sent, so wider ones are only a way to burn CPU.
+    if !ntilde.is_odd() {
+        return false;
+    }
+    let width = ntilde.bit_len();
+    if (proof.t.iter().chain(proof.alpha.iter())).any(|v| v.bit_len() > width) {
+        return false;
+    }
     // 1 < h1,h2 < Ñ and distinct.
     let in_range = |v: &BoxedUint| bn::gt(v, &bn::one()) && v.lt(ntilde);
     let h1m = bn::rem(h1, ntilde);
@@ -144,6 +154,30 @@ mod tests {
         // Tamper: flip one response.
         let mut bad = load(d);
         bad.t[5] = bn::add(&bad.t[5], &bn::one());
+        assert!(!verify(&bad, &h1, &h2, &nt));
+    }
+
+    /// A peer-supplied even Ñ used to reach the Montgomery "modulus must be
+    /// odd" assertion and panic inside the broker callback.
+    #[test]
+    fn even_ntilde_is_rejected_without_panicking() {
+        let f = fixtures();
+        let d = &f["dlnproof"];
+        let (h1, h2, nt) = (dec(&d["h1"]), dec(&d["h2"]), dec(&d["ntilde"]));
+        let even = bn::add(&nt, &bn::one());
+        assert!(!verify(&load(d), &h1, &h2, &even));
+    }
+
+    #[test]
+    fn oversized_response_is_rejected() {
+        let f = fixtures();
+        let d = &f["dlnproof"];
+        let (h1, h2, nt) = (dec(&d["h1"]), dec(&d["h2"]), dec(&d["ntilde"]));
+        // t + Ñ·2^8 is congruent to nothing useful and wider than Ñ.
+        let mut bad = load(d);
+        let mut wide = bn::to_be(&nt);
+        wide.push(0);
+        bad.t[0] = bn::add(&bad.t[0], &bn::from_be(&wide));
         assert!(!verify(&bad, &h1, &h2, &nt));
     }
 

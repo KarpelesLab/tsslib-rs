@@ -28,6 +28,33 @@ pub(crate) const MIN_PEER_MODULUS_BITS: usize = 2 * SAFE_PRIME_BITS;
 #[cfg(test)]
 pub(crate) const MIN_PEER_MODULUS_BITS: usize = 512;
 
+/// Maximum accepted bit length for a peer's `N` / `Ñ`. Honest parties send
+/// 2048-bit moduli; verification cost grows roughly cubically with the size, so
+/// an unbounded modulus lets one message pin the receive path for hours.
+pub(crate) const MAX_PEER_MODULUS_BITS: usize = 4 * SAFE_PRIME_BITS;
+
+/// Checks a modulus received from a peer before any arithmetic is done with it:
+/// within [`MIN_PEER_MODULUS_BITS`, `MAX_PEER_MODULUS_BITS`] and odd (an even
+/// modulus cannot be a product of odd primes, and the Montgomery arithmetic
+/// behind the proofs requires an odd one).
+pub(crate) fn check_peer_modulus(what: &str, n: &BoxedUint) -> Result<(), String> {
+    let bits = n.bit_len();
+    if bits < MIN_PEER_MODULUS_BITS {
+        return Err(format!(
+            "peer {what} bit length {bits} < {MIN_PEER_MODULUS_BITS}"
+        ));
+    }
+    if bits > MAX_PEER_MODULUS_BITS {
+        return Err(format!(
+            "peer {what} bit length {bits} > {MAX_PEER_MODULUS_BITS}"
+        ));
+    }
+    if !n.is_odd() {
+        return Err(format!("peer {what} is even"));
+    }
+    Ok(())
+}
+
 /// One party's pre-parameters: Paillier secret key plus ring-Pedersen setup.
 #[derive(Clone)]
 pub struct LocalPreParams {
@@ -87,6 +114,20 @@ mod tests {
     use super::*;
     use crate::ecdsatss::dlnproof;
     use purecrypto::rng::OsRng;
+
+    #[test]
+    fn peer_modulus_bounds() {
+        let odd = |bits: usize| {
+            let mut be = vec![0xffu8; bits / 8];
+            *be.last_mut().unwrap() = 0x01 | be.last().unwrap();
+            bn::from_be(&be)
+        };
+        assert!(check_peer_modulus("N", &odd(MIN_PEER_MODULUS_BITS)).is_ok());
+        assert!(check_peer_modulus("N", &odd(MIN_PEER_MODULUS_BITS - 8)).is_err());
+        assert!(check_peer_modulus("N", &odd(MAX_PEER_MODULUS_BITS + 8)).is_err());
+        let even = bn::add(&odd(MIN_PEER_MODULUS_BITS), &bn::one());
+        assert!(check_peer_modulus("N", &even).is_err());
+    }
 
     #[test]
     #[ignore = "safe-prime generation is slow"]

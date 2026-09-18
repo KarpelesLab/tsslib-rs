@@ -153,8 +153,13 @@ pub(crate) fn verify<R: RngCore>(
     if pf.x.len() != ITERATIONS || pf.z.len() != ITERATIONS {
         return false;
     }
-    // W: quadratic non-residue, unit, in (0, N).
-    if is_qr(&pf.w, n) || pf.w.is_zero() || !pf.w.lt(n) {
+    // N must be odd before any Jacobi symbol is taken over it.
+    if !n.is_odd() {
+        return false;
+    }
+    // W: quadratic non-residue, unit, in (0, N). Range first, so the Jacobi
+    // symbol is never taken over an oversized W.
+    if pf.w.is_zero() || !pf.w.lt(n) || is_qr(&pf.w, n) {
         return false;
     }
     if !bn::is_one(&bn::gcd(&pf.w, n)) {
