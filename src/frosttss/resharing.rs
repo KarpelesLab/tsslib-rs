@@ -102,7 +102,12 @@ struct State {
     r1: Option<Vec<JsonMessage>>,
     r3m1: Option<Vec<JsonMessage>>,
     r3m2: Option<Vec<JsonMessage>>,
+    /// Set once `round4_new` has been claimed, so it runs exactly once even if
+    /// the last round-3 messages land on two threads.
+    round4_started: bool,
     round5_new_key: Option<Key>,
+    /// Dual (old+new) members: the other new parties' ROUND4 ACKs are all in.
+    acks_done: bool,
 }
 
 impl Resharing {
@@ -400,8 +405,11 @@ impl Shared {
 
     fn try_round4(self: &Arc<Self>) {
         let ready = {
-            let st = self.state.lock().unwrap();
-            st.r1.is_some() && st.r3m1.is_some() && st.r3m2.is_some()
+            let mut st = self.state.lock().unwrap();
+            let ready =
+                !st.round4_started && st.r1.is_some() && st.r3m1.is_some() && st.r3m2.is_some();
+            st.round4_started |= ready;
+            ready
         };
         if ready {
             self.round4_new();
@@ -533,7 +541,13 @@ impl Shared {
         }
 
         if self.params.is_old_committee() {
-            return; // round5_old delivers on the dual path
+            // Dual path: the result needs both this key and the other new
+            // parties' ACKs. Whichever of `round4_new` / `round5_old` finishes
+            // last delivers.
+            if self.state.lock().unwrap().acks_done {
+                self.deliver(Ok(Some(new_key)));
+            }
+            return;
         }
 
         // New-only: wait for other new parties' ACKs, then deliver.
@@ -561,11 +575,18 @@ impl Shared {
     }
 
     fn round5_old(self: &Arc<Self>) {
-        let new_key = self.state.lock().unwrap().round5_new_key.clone();
-        if self.params.is_new_committee() {
-            self.deliver(Ok(new_key));
-        } else {
-            self.deliver(Ok(None));
+        if !self.params.is_new_committee() {
+            return self.deliver(Ok(None));
+        }
+        // Dual member: the ACKs can complete before our own `round4_new` has
+        // produced the key; in that case `round4_new` delivers.
+        let new_key = {
+            let mut st = self.state.lock().unwrap();
+            st.acks_done = true;
+            st.round5_new_key.clone()
+        };
+        if let Some(k) = new_key {
+            self.deliver(Ok(Some(k)));
         }
     }
 
@@ -730,6 +751,69 @@ mod tests {
             sb.copy_from_slice(&sig.signature);
             pk.verify(&msg, &Ed25519Signature::from_bytes(sb))
                 .expect("post-reshare signature verifies under preserved key");
+        }
+    }
+
+    /// Every start order of an overlapping old {1,2,3} → new {2,3,4} reshare
+    /// must hand each new member (dual or not) its key and each old-only member
+    /// `None`. The hub is synchronous, so the start order is the message order.
+    #[test]
+    fn reshare_overlapping_committees_any_start_order() {
+        let old_ids = ids(&[1, 2, 3]);
+        let new_ids = ids(&[2, 3, 4]);
+        let old_keys = keygen(&old_ids, 1);
+        let group_pub = old_keys[0].group_public_key;
+        let all = ids(&[1, 2, 3, 4]);
+
+        // All 24 permutations of the four participants.
+        let mut orders: Vec<Vec<usize>> = vec![vec![]];
+        for _ in 0..all.len() {
+            orders = orders
+                .into_iter()
+                .flat_map(|o| {
+                    (0..all.len())
+                        .filter(|i| !o.contains(i))
+                        .map(|i| [o.clone(), vec![i]].concat())
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+        }
+
+        for order in orders {
+            let hub = ReshareHub::new(&all);
+            let sessions: Vec<(usize, Resharing)> = order
+                .iter()
+                .map(|&i| {
+                    let p = &all[i];
+                    let params = ReSharingParameters::new(
+                        old_ids.clone(),
+                        new_ids.clone(),
+                        1,
+                        1,
+                        p.clone(),
+                        hub.broker(p),
+                    );
+                    let input = old_ids
+                        .iter()
+                        .position(|o| o.cmp_key(p) == std::cmp::Ordering::Equal)
+                        .map(|j| old_keys[j].clone());
+                    (i, Resharing::new(params, input).unwrap())
+                })
+                .collect();
+            for (i, s) in &sessions {
+                let r = s
+                    .try_result()
+                    .unwrap_or_else(|| panic!("order {order:?}: party {i} has no result"))
+                    .unwrap_or_else(|e| panic!("order {order:?}: party {i} failed: {e}"));
+                let is_new = new_ids
+                    .iter()
+                    .any(|n| n.cmp_key(&all[*i]) == std::cmp::Ordering::Equal);
+                assert_eq!(r.is_some(), is_new, "order {order:?}: party {i}");
+                if let Some(k) = r {
+                    k.validate_basic().unwrap();
+                    assert!(Ed25519::eq(&k.group_public_key, &group_pub));
+                }
+            }
         }
     }
 }

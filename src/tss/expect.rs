@@ -56,15 +56,13 @@ impl MessageReceiver for JsonExpect {
         // Locate the sender's slot; ignore duplicates of an already-filled slot.
         let cb = {
             let mut st = self.state.lock().unwrap();
-            if st.missing == 0 {
-                return Err("collection already complete".into());
-            }
             let idx = self
                 .from
                 .iter()
                 .position(|p| p.cmp_key(from) == std::cmp::Ordering::Equal)
                 .ok_or_else(|| "message from an unexpected sender".to_string())?;
-            if st.packets[idx].is_some() {
+            // Once complete every slot was filled, so this is a late duplicate.
+            if st.missing == 0 || st.packets[idx].is_some() {
                 return Ok(()); // duplicate; keep the first
             }
             st.packets[idx] = Some(msg.clone());

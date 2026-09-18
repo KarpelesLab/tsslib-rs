@@ -166,10 +166,16 @@ impl ReSharingParameters {
             .iter()
             .position(|p| p.cmp_key(&self.self_id) == std::cmp::Ordering::Equal)
     }
-    /// The old and new committees concatenated (old first), as in Go.
+    /// The old committee followed by the new-only parties: every participant
+    /// once. (Go concatenates the two lists; a member of both would then be
+    /// messaged twice.)
     pub fn old_and_new_parties(&self) -> Vec<PartyId> {
         let mut v = self.old_parties.clone();
-        v.extend(self.new_parties.iter().cloned());
+        for p in &self.new_parties {
+            if !v.iter().any(|q| q.cmp_key(p) == std::cmp::Ordering::Equal) {
+                v.push(p.clone());
+            }
+        }
         v
     }
 }
