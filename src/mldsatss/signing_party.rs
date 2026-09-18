@@ -533,7 +533,8 @@ fn aggregate_zfinal(r3resps: &[Option<Vec<u8>>], kk: usize) -> Vec<[Poly; L]> {
         for zf in zfinal.iter_mut() {
             for zfj in zf.iter_mut() {
                 let p =
-                    purecrypto::mldsa::hazmat::unpack_z(&resp[off..off + sz], &ML_DSA_44.params);
+                    purecrypto::mldsa::hazmat::unpack_z(&resp[off..off + sz], &ML_DSA_44.params)
+                        .expect("slice is exactly one packed z");
                 *zfj = zfj.add(&p);
                 off += sz;
             }
@@ -587,7 +588,8 @@ fn validate_party_responses(
             let mut l2 = 0.0f64; // Σ_L (z_i[j]/ν)² for this try's block
             let mut non_zero = false;
             for _j in 0..L {
-                let poly = unpack_z(&resp[off..off + sz], &ML_DSA_44.params);
+                let poly = unpack_z(&resp[off..off + sz], &ML_DSA_44.params)
+                    .expect("slice is exactly one packed z");
                 off += sz;
                 for &c in poly.c.iter() {
                     // Recenter to a signed magnitude in [0, Q/2].

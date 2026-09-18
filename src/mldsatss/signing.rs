@@ -311,7 +311,7 @@ pub(crate) fn combine_try(
     for j in 0..L {
         sig.extend_from_slice(&hazmat::pack_z(&zfinal_tri[j], &ML_DSA_44.params));
     }
-    sig.extend_from_slice(&hazmat::pack_hint(&hints, omega));
+    sig.extend_from_slice(&hazmat::pack_hint(&hints, omega)?);
     Some(sig)
 }
 
