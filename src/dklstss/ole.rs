@@ -55,6 +55,19 @@ pub struct AliceState {
     keys: Vec<[u8; otext::KEY_LEN]>,
 }
 
+/// `alpha_be` is Alice's raw ΠMul input — a signing nonce `k_i` or the weighted
+/// key share `λ·x_i` — and `keys` are her OT outputs; neither may outlive the
+/// session.
+impl Drop for AliceState {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.alpha_be.zeroize();
+        for k in self.keys.iter_mut() {
+            k.zeroize();
+        }
+    }
+}
+
 /// Alice's first step: choice bits are the little-endian bits of `alpha`. Returns
 /// the OT-extension message for Bob and Alice's session state.
 pub fn alice_step1(
@@ -63,7 +76,8 @@ pub fn alice_step1(
     alpha: &Scalar,
 ) -> Result<(ExtendMsg1, AliceState), Error> {
     let alpha_be = alpha.to_bytes_be();
-    let choice = bits_le(&alpha_be);
+    // The choice bits are `alpha` again, one bit per entry.
+    let choice = zeroize::Zeroizing::new(bits_le(&alpha_be));
     let (msg, keys) = ext_receiver.extend(sid, &choice, SCALAR_BITS)?;
     Ok((msg, AliceState { alpha_be, keys }))
 }

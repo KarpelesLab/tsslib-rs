@@ -82,6 +82,13 @@ struct State {
     peer_vs: HashMap<Vec<u8>, Vec<EdwardsPoint>>,
 }
 
+/// The X25519 private key opens the share envelopes; wiped with the session.
+impl Drop for State {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.eph_priv);
+    }
+}
+
 impl Keygen {
     /// Starts the FROST Pedersen DKG for this party. Returns immediately after
     /// round 1 is broadcast; the result is delivered once all rounds complete.
@@ -249,7 +256,7 @@ impl Shared {
                     .expect("peer eph pub present")
             };
             let ad = keygen_round2_ad(&my_nonce, &eph_pub, &recipient_pub);
-            let plaintext = scalar_to_be(&share.value);
+            let plaintext = zeroize::Zeroizing::new(scalar_to_be(&share.value));
             let ct = match aead::seal_share(&mut rng, &eph_priv, &recipient_pub, &ad, &plaintext) {
                 Ok(ct) => ct,
                 Err(e) => {

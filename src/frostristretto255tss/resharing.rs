@@ -117,6 +117,14 @@ struct State {
     acks_done: bool,
 }
 
+/// The X25519 private keys open and seal the share envelopes; wiped with the session.
+impl Drop for State {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.eph_priv);
+        zeroize::Zeroize::zeroize(&mut self.my_eph_priv);
+    }
+}
+
 impl Resharing {
     /// Starts a resharing session. `input` is the old key for old-committee
     /// members and `None` for pure new members.
@@ -389,7 +397,7 @@ impl Shared {
                 &eph_priv,
                 recipient_pub,
                 &ad,
-                &encode_scalar(&share.value),
+                &*zeroize::Zeroizing::new(encode_scalar(&share.value)),
             ) {
                 Ok(ct) => ct,
                 Err(e) => {

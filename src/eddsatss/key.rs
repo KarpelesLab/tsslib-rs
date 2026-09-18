@@ -175,7 +175,9 @@ impl Key {
             .big_xj_points()
             .ok_or_else(|| Error::Validation("key: a BigXj is off curve".into()))?;
         Ok(Key {
-            xi: BigUintDec::from_be_bytes(&ed::scalar_to_be(&self.xi_scalar().add(&d))),
+            xi: BigUintDec::from_be_bytes(&zeroize::Zeroizing::new(ed::scalar_to_be(
+                &self.xi_scalar().add(&d),
+            ))),
             share_id: self.share_id.clone(),
             ks: self.ks.clone(),
             big_xj: big_xj

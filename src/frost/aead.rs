@@ -94,7 +94,7 @@ pub fn open_share(
     sender_pub: &[u8; 32],
     ad: &[u8],
     ciphertext: &[u8],
-) -> Result<Vec<u8>, AeadError> {
+) -> Result<Zeroizing<Vec<u8>>, AeadError> {
     if ciphertext.len() < NONCE_BYTES + TAG_BYTES {
         return Err(AeadError::TooShort);
     }
@@ -109,10 +109,9 @@ pub fn open_share(
         .unwrap();
     // Decryption happens in place: `buf` starts as a ciphertext copy and is
     // transformed into the plaintext, which is moved (not copied) to the
-    // caller, so no intermediate plaintext copy is left behind. The returned
-    // Vec itself is owned by the caller and intentionally not wrapped — doing
-    // so would change the public API.
-    let mut buf = ciphertext[NONCE_BYTES..ciphertext.len() - TAG_BYTES].to_vec();
+    // caller, so no intermediate plaintext copy is left behind. It is a secret
+    // share, so it is handed back in a `Zeroizing` that wipes it on drop.
+    let mut buf = Zeroizing::new(ciphertext[NONCE_BYTES..ciphertext.len() - TAG_BYTES].to_vec());
 
     ChaCha20Poly1305::new(&key)
         .decrypt(&nonce, ad, &mut buf, &tag)
@@ -153,7 +152,7 @@ mod tests {
 
         let ct = seal_share(&mut OsRng, &a_priv, &b_pub, ad, msg).unwrap();
         let pt = open_share(&b_priv, &a_pub, ad, &ct).unwrap();
-        assert_eq!(pt, msg);
+        assert_eq!(pt.as_slice(), msg);
     }
 
     #[test]

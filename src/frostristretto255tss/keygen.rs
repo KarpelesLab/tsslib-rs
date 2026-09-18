@@ -72,6 +72,13 @@ struct State {
     peer_vs: HashMap<Vec<u8>, Vec<RistrettoPoint>>,
 }
 
+/// The X25519 private key opens the share envelopes; wiped with the session.
+impl Drop for State {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.eph_priv);
+    }
+}
+
 impl Keygen {
     /// Starts the FROST(ristretto255) Pedersen DKG for this party.
     pub fn new(params: Parameters) -> Result<Keygen, Error> {
@@ -233,7 +240,7 @@ impl Shared {
                 &eph_priv,
                 &recipient_pub,
                 &ad,
-                &scalar_to_be(&share.value),
+                &zeroize::Zeroizing::new(scalar_to_be(&share.value)),
             ) {
                 Ok(ct) => ct,
                 Err(e) => {

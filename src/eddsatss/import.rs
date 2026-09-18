@@ -24,7 +24,7 @@ pub fn import_key(priv_be: &[u8], party_key: &[u8]) -> Result<Key, Error> {
     let pub_json: EcPointJson = point_to_json(&pubp);
 
     Ok(Key {
-        xi: BigUintDec::from_be_bytes(&ed::scalar_to_be(&xi)),
+        xi: BigUintDec::from_be_bytes(&zeroize::Zeroizing::new(ed::scalar_to_be(&xi))),
         share_id: BigUintDec::from_be_bytes(party_key),
         ks: vec![BigUintDec::from_be_bytes(party_key)],
         big_xj: vec![pub_json.clone()],
