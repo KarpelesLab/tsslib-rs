@@ -7,8 +7,8 @@
 
 use super::Error;
 use super::point::{point_from_affine_be, point_to_affine_be};
-use crate::frost::hashing::sha512_256i_tagged;
 use crate::frost::{Ciphersuite, Ed25519, Scalar, random_scalar};
+use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use purecrypto::rng::RngCore;
 

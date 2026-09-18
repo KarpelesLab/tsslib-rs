@@ -13,12 +13,14 @@ pub mod aead;
 pub mod binding;
 pub mod commitments;
 mod ed25519;
-pub mod hashing;
 pub mod vss;
 
 #[cfg(feature = "frostristretto255tss")]
 mod ristretto255;
 
+// The tss-lib hash helpers live in `tss` (every protocol uses them); re-exported
+// here to keep the original `frost::hashing` path.
+pub use crate::tss::hashing;
 pub use ed25519::Ed25519;
 pub use purecrypto::ec::edwards25519::hazmat::Scalar;
 use purecrypto::rng::RngCore;

@@ -9,7 +9,7 @@
 
 use super::bn;
 use super::secp::{self, ProjectivePoint, Scalar};
-use crate::frost::hashing::sha512_256i_tagged;
+use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::rng::RngCore;
 
 /// Proof of knowledge of `x` such that `X = x·G`.

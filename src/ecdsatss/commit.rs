@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use super::bn;
-use crate::frost::hashing::sha512_256i;
+use crate::tss::hashing::sha512_256i;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
 

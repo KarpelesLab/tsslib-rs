@@ -5,7 +5,7 @@
 
 use super::Error;
 use super::bn::{self, Modulus};
-use crate::frost::hashing::sha512_256_parts;
+use crate::tss::hashing::sha512_256_parts;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
 

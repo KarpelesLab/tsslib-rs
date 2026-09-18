@@ -14,7 +14,7 @@ use super::secp::{self, ProjectivePoint, Scalar};
 use super::signing::{
     cmp_be, ecdsa_verify, hash_to_scalar, is_high_s, lagrange_coefficient, make_sid, pad32,
 };
-use crate::frost::hashing::sha512_256i_tagged;
+use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::rng::RngCore;
 use std::sync::atomic::{AtomicBool, Ordering};
 

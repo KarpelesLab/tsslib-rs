@@ -10,7 +10,7 @@
 use super::bn::{self, Modulus};
 use super::paillier::{PrivateKey, PublicKey};
 use super::{Error, secp};
-use crate::frost::hashing::sha512_256i_tagged;
+use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::ec::secp256k1::ProjectivePoint;
 use purecrypto::rng::RngCore;

@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use crate::frost::hashing::sha512_256i;
+use crate::tss::hashing::sha512_256i;
 use purecrypto::rng::RngCore;
 
 /// `(C, D)` for `parts`: a random 256-bit nonce `r` is prepended; `C` is the

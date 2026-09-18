@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 use super::ed;
-use crate::frost::hashing::sha512_256i_tagged;
+use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use purecrypto::rng::RngCore;
 

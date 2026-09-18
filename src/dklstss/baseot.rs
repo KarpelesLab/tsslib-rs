@@ -7,7 +7,7 @@
 
 use super::schnorr::ZkProof;
 use super::secp::{self, ProjectivePoint, Scalar};
-use crate::frost::hashing::sha512_256i_tagged;
+use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::ct::{Choice, ConditionallySelectable};
 use purecrypto::rng::RngCore;
 

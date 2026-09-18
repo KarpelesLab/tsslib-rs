@@ -33,6 +33,19 @@
 //! contains no hand-rolled field arithmetic of its own.
 
 #![forbid(unsafe_code)]
+// The shared `tss` helpers are only partly reachable when a subset of the
+// protocols is enabled; dead-code analysis stays on for the full build.
+#![cfg_attr(
+    not(all(
+        feature = "frosttss",
+        feature = "frostristretto255tss",
+        feature = "mldsatss",
+        feature = "dklstss",
+        feature = "ecdsatss",
+        feature = "eddsatss"
+    )),
+    allow(dead_code)
+)]
 
 pub mod tss;
 

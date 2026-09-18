@@ -48,6 +48,16 @@ jobs:
       - name: Test (no default features)
         run: cargo test --no-default-features
 
+      - name: Clippy (each protocol feature alone)
+        if: runner.os == 'Linux' # feature gating is platform-independent
+        shell: bash
+        run: |
+          for f in frosttss frostristretto255tss mldsatss dklstss ecdsatss eddsatss; do
+            echo "::group::$f"
+            cargo clippy --no-default-features --features "$f" --all-targets -- -D warnings
+            echo "::endgroup::"
+          done
+
   docs:
     name: Docs build (warnings denied)
     runs-on: ubuntu-latest

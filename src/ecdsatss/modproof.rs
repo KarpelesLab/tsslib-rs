@@ -8,7 +8,7 @@
 
 use super::Error;
 use super::bn::{self, Modulus};
-use crate::frost::hashing::sha512_256i_tagged;
+use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
 

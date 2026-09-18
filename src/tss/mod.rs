@@ -9,6 +9,7 @@ pub(crate) mod b64;
 pub(crate) mod bigint;
 mod error;
 pub(crate) mod expect;
+pub mod hashing;
 pub(crate) mod keyimage_hash;
 mod message;
 mod params;
