@@ -37,8 +37,10 @@
 //!
 //! ## Opt-in malicious-security: the *checked* signing path
 //!
-//! An **opt-in** Mul-then-check variant (DKLs23 §5) is now available and
-//! **SHOULD be used whenever co-signers are not mutually trusted**:
+//! An **opt-in** Mul-then-check variant (a simplified DKLs23 §5 check) is
+//! available. It catches one class of deviation and names the culprit, but it
+//! does **not** fully close the selective-failure oracle (see the limitation
+//! below), so the operational guidance for the default path still applies:
 //! - [`sign_checked`] / [`sign_checked_with_tweak`] — synchronous in-process;
 //! - [`CheckedSigningParty`] — broker-driven, the security-relevant one
 //!   (a genuinely remote malicious peer can only deviate over the wire).
@@ -53,11 +55,15 @@
 //! 2× the wire/CPU of the default path.
 //!
 //! **Inherited limitation (matches Go):** this simplified check catches an
-//! *inconsistent* `β` across the two runs but **not** a *consistently wrong*
-//! `β` (same wrong value in both runs); that residual class is caught only at
-//! the signing layer by the final ECDSA verification gate. The full
-//! identifiable-abort variant with a Pedersen-style `β` commitment is Go's
-//! task #17 and is intentionally not ported.
+//! *inconsistent* `β` across the two runs but **not** a deviation applied
+//! identically to both. In particular the same offset on one correction value
+//! in both runs cancels in the check and corrupts the product only when the
+//! corresponding bit of the victim's secret is set — a per-bit
+//! selective-failure attack that still surfaces only as an unattributed abort
+//! at the final ECDSA verification gate, leaking about one bit per abort. The
+//! real DKLs23 check (Go's task #17) is intentionally not ported. With
+//! untrusted co-signers, bound retries and rotate/reshare the key after
+//! repeated unexplained signing aborts, on either path.
 //!
 //! Mitigations that apply to **both** paths: echo-broadcast consistency checks
 //! in keygen/refresh/reshare, single-use enforcement of presignatures, the KOS

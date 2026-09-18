@@ -30,12 +30,12 @@
 //! [`super::CheckedSigningParty`]. That wrapper requires no change to the
 //! OT-extension message sizes — it simply runs the unchecked multiplication
 //! twice — so the default wire format is untouched. It inherits Go's
-//! simplified-check limitation (a *consistently* wrong `β` is caught only by
-//! the final ECDSA verification gate; full identifiable abort is Go's task
-//! #17). See [`super`] (dklstss) module docs for operational guidance on the
-//! default path: bound retries and rotate/reshare the key on repeated
-//! unexplained signing aborts with the same participant set, or use the checked
-//! path with untrusted peers.
+//! simplified-check limitation: a deviation applied identically to both runs
+//! (including a per-bit offset, which is still a selective-failure lever) is
+//! caught only by the final ECDSA verification gate; the full check is Go's
+//! task #17. See [`super`] (dklstss) module docs for operational guidance on the
+//! signing paths: bound retries and rotate/reshare the key on repeated
+//! unexplained signing aborts with the same participant set.
 
 use super::Error;
 use super::otext::{self, ExtReceiver, ExtSender, ExtendMsg1};

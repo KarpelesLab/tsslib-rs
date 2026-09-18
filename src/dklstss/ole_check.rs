@@ -18,12 +18,20 @@
 //! β across the two runs"** — the lever a malicious co-signer pulls to mount
 //! the per-bit selective-failure attack on Alice's secret `α`.
 //!
-//! It does **not** catch a *consistently wrong* `β` (the same wrong value in
-//! both runs): that produces a well-formed `α·β'` whose only effect surfaces
-//! at the signing layer, where the final ECDSA verification gate rejects the
-//! resulting signature. This mirrors Go's documented limitation: the full
-//! identifiable-abort variant with a Pedersen-style `β` commitment is Go's
-//! task #17 and is intentionally **not** ported here.
+//! It does **not** catch a deviation applied *identically to both runs*, and
+//! that class still contains a selective-failure attack. Adding the same
+//! offset `δ` to correction `i` in both runs shifts `u_A1` and `u_A2` by the
+//! same `α_i·δ`, which cancels in `Z_A`; the check passes and Alice's share is
+//! wrong exactly when bit `i` of `α` is set. The final ECDSA verification gate
+//! then aborts or not depending on that bit — the same one-bit-per-abort
+//! oracle as the unchecked path, with no culprit named (see the
+//! `checked_does_not_detect_same_offset_in_both_runs` test). A *consistently
+//! wrong* `β` (one wrong value used for every bit) is likewise only caught by
+//! that gate, but leaks nothing. This mirrors Go's simplified check: the real
+//! DKLs23 check (randomised encoding of `α` plus Bob's commitment and
+//! check-vector equation, Go's task #17) is **not** ported here, so the
+//! checked path narrows the attack surface but is **not** a substitute for
+//! bounding retries and rotating keys after unexplained aborts.
 //!
 //! This module is **opt-in** and additive: the default unchecked
 //! [`super::ole`] primitives and the default sign / `SigningParty` wire format
@@ -198,6 +206,32 @@ mod tests {
             Err(e) => panic!("expected MUL_CHECK_FAILED, got {e}"),
             Ok(_) => panic!("checked_alice_step2 must reject inconsistent β"),
         }
+    }
+
+    /// Documents the limit of this check: the SAME offset on one correction in
+    /// both runs cancels in `Z_A`, so it is accepted, and Alice's share is then
+    /// off by `α_i·δ` — wrong exactly when bit `i` of `α` is set. That is the
+    /// per-bit selective-failure lever, surfacing only at the final ECDSA gate.
+    #[test]
+    fn checked_does_not_detect_same_offset_in_both_runs() {
+        let (ext_sender, ext_receiver) = ot_setup();
+        let sid = b"checked-same-offset";
+        let beta = secp::random_scalar(&mut OsRng);
+        let delta = secp::random_scalar(&mut OsRng);
+        let mut wrong = 0;
+        for _ in 0..40 {
+            let alpha = secp::random_scalar(&mut OsRng);
+            let (m1, m2, state) = checked_alice_step1(sid, &ext_receiver, &alpha).unwrap();
+            let (mut bmsg, u_b) = checked_bob_step1(sid, &ext_sender, &beta, &m1, &m2).unwrap();
+            bmsg.msg1.corrections[0] = bmsg.msg1.corrections[0].add(&delta);
+            bmsg.msg2.corrections[0] = bmsg.msg2.corrections[0].add(&delta);
+            let u_a = checked_alice_step2(&state, &bmsg).expect("offset cancels in the check");
+            if !bool::from(u_a.add(&u_b).ct_eq(&alpha.mul(&beta))) {
+                wrong += 1;
+            }
+        }
+        // Wrong for roughly half the random α (those with the targeted bit set).
+        assert!(wrong > 0 && wrong < 40, "product wrong in {wrong}/40 runs");
     }
 
     /// Negative: tampering with Bob's consistency value `Z` (by one) also

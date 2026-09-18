@@ -239,9 +239,9 @@ impl Shared {
     }
 
     fn on_r1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let r1s: Vec<SignR1> = match msgs.iter().map(json_get).collect() {
+        let r1s: Vec<SignR1> = match decode_all(others, &msgs) {
             Ok(v) => v,
-            Err(e) => return self.deliver(Err(Error::Serde(e))),
+            Err(e) => return self.deliver(Err(e)),
         };
 
         let digests: HashMap<String, B64Bytes> = {
@@ -287,9 +287,9 @@ impl Shared {
     }
 
     fn on_r1_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let echoes: Vec<EchoMsg> = match msgs.iter().map(json_get).collect() {
+        let echoes: Vec<EchoMsg> = match decode_all(others, &msgs) {
             Ok(v) => v,
-            Err(e) => return self.deliver(Err(Error::Serde(e))),
+            Err(e) => return self.deliver(Err(e)),
         };
         let me = self.params.party_id().clone();
         let self_key = peer_key_str(&me);
@@ -381,9 +381,9 @@ impl Shared {
     }
 
     fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let r2s: Vec<CheckedSignR2> = match msgs.iter().map(json_get).collect() {
+        let r2s: Vec<CheckedSignR2> = match decode_all(others, &msgs) {
             Ok(v) => v,
-            Err(e) => return self.deliver(Err(Error::Serde(e))),
+            Err(e) => return self.deliver(Err(e)),
         };
         let me = self.params.party_id().clone();
 
@@ -399,19 +399,19 @@ impl Shared {
             };
             let ext_k1 = match r2.alice_k1.to_msg() {
                 Ok(m) => m,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let ext_k2 = match r2.alice_k2.to_msg() {
                 Ok(m) => m,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let ext_x1 = match r2.alice_x1.to_msg() {
                 Ok(m) => m,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let ext_x2 = match r2.alice_x2.to_msg() {
                 Ok(m) => m,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let (ssid, rho_i) = {
                 let st = self.state.lock().unwrap();
@@ -424,12 +424,12 @@ impl Shared {
             let (bmsg_k, u_bk) =
                 match ole_check::checked_bob_step1(&sid_k, bob_pair, &rho_i, &ext_k1, &ext_k2) {
                     Ok(v) => v,
-                    Err(e) => return self.deliver(Err(e)),
+                    Err(e) => return self.deliver(Err(peer_fail(pid, e))),
                 };
             let (bmsg_x, u_bx) =
                 match ole_check::checked_bob_step1(&sid_x, bob_pair, &rho_i, &ext_x1, &ext_x2) {
                     Ok(v) => v,
-                    Err(e) => return self.deliver(Err(e)),
+                    Err(e) => return self.deliver(Err(peer_fail(pid, e))),
                 };
             {
                 let mut st = self.state.lock().unwrap();
@@ -460,27 +460,27 @@ impl Shared {
     }
 
     fn on_r3(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let r3s: Vec<CheckedSignR3> = match msgs.iter().map(json_get).collect() {
+        let r3s: Vec<CheckedSignR3> = match decode_all(others, &msgs) {
             Ok(v) => v,
-            Err(e) => return self.deliver(Err(Error::Serde(e))),
+            Err(e) => return self.deliver(Err(e)),
         };
 
         for (pid, r3) in others.iter().zip(r3s.iter()) {
             let bob_k1 = match decode_bob(&r3.bob_k1) {
                 Ok(v) => v,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let bob_k2 = match decode_bob(&r3.bob_k2) {
                 Ok(v) => v,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let bob_x1 = match decode_bob(&r3.bob_x1) {
                 Ok(v) => v,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let bob_x2 = match decode_bob(&r3.bob_x2) {
                 Ok(v) => v,
-                Err(e) => return self.deliver(Err(e)),
+                Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             // Range-check Z: must be a canonical (< n) encoding, mirroring Go's
             // explicit `Z >= q` rejection (scalar_from_be_reduce would silently
@@ -581,9 +581,9 @@ impl Shared {
     }
 
     fn on_r4_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let r4s: Vec<SignR4> = match msgs.iter().map(json_get).collect() {
+        let r4s: Vec<SignR4> = match decode_all(others, &msgs) {
             Ok(v) => v,
-            Err(e) => return self.deliver(Err(Error::Serde(e))),
+            Err(e) => return self.deliver(Err(e)),
         };
         let digests: HashMap<String, B64Bytes> = {
             let mut st = self.state.lock().unwrap();
@@ -608,9 +608,9 @@ impl Shared {
     }
 
     fn finalize(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let echoes: Vec<EchoMsg> = match msgs.iter().map(json_get).collect() {
+        let echoes: Vec<EchoMsg> = match decode_all(others, &msgs) {
             Ok(v) => v,
-            Err(e) => return self.deliver(Err(Error::Serde(e))),
+            Err(e) => return self.deliver(Err(e)),
         };
         let me = self.params.party_id().clone();
         let self_key = peer_key_str(&me);
@@ -735,6 +735,35 @@ fn echo_fail(cause: String, culprit: &PartyId) -> Error {
         None,
         vec![culprit.clone()],
     )))
+}
+
+/// Attributes a failure while processing `culprit`'s message — a malformed
+/// payload, or an OT-extension / ΠMul check it caused to fail — to that peer.
+/// A failed OT-extension consistency check leaks a bit of the long-lived
+/// correlation, so the victim needs to know which pairing to stop trusting.
+fn peer_fail(culprit: &PartyId, e: Error) -> Error {
+    match e {
+        Error::Tss(_) => e,
+        e => Error::Tss(Box::new(crate::tss::TssError::new(
+            format!("processing message from {culprit}: {e}"),
+            ECHO_SOURCE_SIGN,
+            0,
+            None,
+            vec![culprit.clone()],
+        ))),
+    }
+}
+
+/// Decodes one message per sender (`msgs` is in `from` order), naming the
+/// sender of a malformed one.
+fn decode_all<T: serde::de::DeserializeOwned>(
+    from: &[PartyId],
+    msgs: &[JsonMessage],
+) -> Result<Vec<T>, Error> {
+    from.iter()
+        .zip(msgs)
+        .map(|(pid, m)| json_get(m).map_err(|e| peer_fail(pid, Error::Serde(e))))
+        .collect()
 }
 
 /// Wraps a Mul-then-check rejection as a `tss` error naming the deviating Bob —

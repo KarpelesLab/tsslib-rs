@@ -64,6 +64,11 @@ impl Key {
         if bool::from(self.xi.is_zero()) {
             return Err(Validation("Xi is zero".into()));
         }
+        // A dealer can steer Σ V_i[0] to the identity (V = −Σ others); no
+        // signature verifies under it, so the key is unusable.
+        if bool::from(self.ecdsa_pub.is_identity()) {
+            return Err(Validation("ECDSAPub is the identity".into()));
+        }
         // Xi·G must equal BigXj[idx].
         if !super::secp::point_eq(&super::secp::mul_base(&self.xi), &self.big_xj[self.idx]) {
             return Err(Validation("Xi·G != BigXj[idx]".into()));
