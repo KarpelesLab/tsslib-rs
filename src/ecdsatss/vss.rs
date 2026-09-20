@@ -42,16 +42,15 @@ pub(crate) fn check_indexes(ids: &[Scalar]) -> Result<(), &'static str> {
 
 /// Creates a degree-`t` sharing of `secret` for recipient `ids`. Returns the
 /// Feldman commitments `v_0..v_t` (`v_0 = secret·G`) and one share per id.
-///
-/// `t = 0` is a valid 1-of-n sharing: the polynomial is the constant `secret`,
-/// so every id is dealt the secret itself and any single holder can
-/// reconstruct it.
 pub(crate) fn create<R: RngCore>(
     t: usize,
     secret: &Scalar,
     ids: &[Scalar],
     rng: &mut R,
 ) -> Result<(Vec<ProjectivePoint>, Vec<Share>), &'static str> {
+    if t < 1 {
+        return Err("threshold must be at least 1");
+    }
     if ids.len() <= t {
         return Err("fewer than threshold+1 share ids");
     }
@@ -159,23 +158,9 @@ mod tests {
         assert!(create(1, &secret, &[id(&[1]), id(&order)], &mut rng).is_err());
         // Equal ids hold the same share.
         assert!(create(1, &secret, &[id(&[1]), id(&[0, 1])], &mut rng).is_err());
-        // t+1 ids are needed to ever reconstruct.
+        // Threshold 0 hands every party the secret; t+1 ids are needed.
+        assert!(create(0, &secret, &[id(&[1]), id(&[2])], &mut rng).is_err());
         assert!(create(2, &secret, &[id(&[1]), id(&[2])], &mut rng).is_err());
         assert!(create(1, &secret, &[id(&[1]), id(&[2])], &mut rng).is_ok());
-    }
-
-    /// Threshold 0 shares a constant polynomial: every party is dealt the
-    /// secret itself, so any single holder can sign (1-of-n).
-    #[test]
-    fn threshold_zero_deals_the_secret_to_every_party() {
-        let mut rng = purecrypto::rng::OsRng;
-        let ids: Vec<Scalar> = [1u8, 2, 3].iter().map(|b| secp::scalar_from_be(&[*b])).collect();
-        let secret = random_scalar(&mut rng);
-        let (commitments, shares) = create(0, &secret, &ids, &mut rng).unwrap();
-        assert_eq!(commitments.len(), 1);
-        for sh in &shares {
-            assert!(bool::from(sh.value.ct_eq(&secret)));
-            assert!(verify(&sh.id, &sh.value, 0, &commitments));
-        }
     }
 }

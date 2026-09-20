@@ -31,14 +31,17 @@ impl std::fmt::Display for VssError {
 impl std::error::Error for VssError {}
 
 /// Port of tss-lib `vss.CheckIndexes` plus the `Create` threshold checks:
-/// rejects fewer than `threshold + 1` identifiers and any identifier that is
-/// zero or a duplicate mod `L`.
+/// rejects `threshold < 1`, fewer than `threshold + 1` identifiers, and any
+/// identifier that is zero or a duplicate mod `L`.
 ///
 /// An identifier of `0 mod L` would be handed `f(0)` — the shared secret
 /// itself — and two identifiers congruent mod `L` would hold the same share,
 /// so every ceremony must run this over its committee before sharing to it or
 /// interpolating over it.
 pub fn check_indexes(threshold: usize, ids: &[Vec<u8>]) -> Result<(), VssError> {
+    if threshold < 1 {
+        return Err(VssError("threshold must be at least 1"));
+    }
     if ids.len() <= threshold {
         return Err(VssError("fewer than threshold+1 identifiers"));
     }
@@ -59,10 +62,6 @@ pub fn check_indexes(threshold: usize, ids: &[Vec<u8>]) -> Result<(), VssError> 
 /// Creates a degree-`threshold` sharing of `secret` for the given recipient
 /// `ids`. Returns the Feldman commitments `v_0..v_t` (`v_0 = secret·G`) and one
 /// [`Share`] per id. Fails if `threshold`/`ids` do not pass [`check_indexes`].
-///
-/// A `threshold` of 0 is a valid 1-of-n sharing: the polynomial is the constant
-/// `secret`, so every id is dealt the secret itself and any single holder can
-/// reconstruct it.
 pub fn create<C: Ciphersuite>(
     threshold: usize,
     secret: &Scalar,
@@ -162,8 +161,8 @@ mod tests {
         let ok = vec![vec![1u8], vec![2], vec![3]];
         assert!(check_indexes(1, &ok).is_ok());
         assert!(check_indexes(2, &ok).is_ok());
-        // threshold 0 is a 1-of-n sharing: allowed, every party gets the secret.
-        assert!(check_indexes(0, &ok).is_ok());
+        // threshold 0 would hand every party the whole secret.
+        assert!(check_indexes(0, &ok).is_err());
         // t+1 identifiers are needed to ever reconstruct.
         assert!(check_indexes(3, &ok).is_err());
         // Byte-distinct but congruent mod L: id and id + L.
@@ -179,20 +178,6 @@ mod tests {
         assert_eq!(long.len(), 70);
         assert!(check_indexes(1, &[vec![1], long.clone()]).is_err());
         assert!(check_indexes(1, &[vec![2], long]).is_ok());
-    }
-
-    /// A threshold of 0 shares a constant polynomial: every party is dealt the
-    /// secret itself, so any single holder can sign (1-of-n).
-    #[test]
-    fn threshold_zero_deals_the_secret_to_every_party() {
-        let ids: Vec<Vec<u8>> = (1u8..=3).map(|i| vec![i]).collect();
-        let secret = random_scalar(&mut OsRng);
-        let (commitments, shares) = create::<Ed25519>(0, &secret, &ids, &mut OsRng).unwrap();
-        assert_eq!(commitments.len(), 1);
-        for sh in &shares {
-            assert!(bool::from(sh.value.ct_eq(&secret)));
-            assert!(verify::<Ed25519>(&sh.id, &sh.value, 0, &commitments));
-        }
     }
 
     #[test]

@@ -588,46 +588,6 @@ mod tests {
         }
     }
 
-    /// Threshold 0 is a 1-of-n key: keygen succeeds, every party holds the same
-    /// share, and a single party signs for the group.
-    #[test]
-    fn keygen_then_sign_with_threshold_zero() {
-        let n = 3;
-        let t = 0;
-        let ids = party_ids(n);
-        let keys = run_keygen(&ids, t);
-        let group_pub = keys[0].group_public_key;
-        for k in &keys {
-            k.validate_basic().unwrap();
-            assert!(bool::from(keys[0].xi.ct_eq(&k.xi)));
-        }
-
-        // Any committee signs for the group. A committee of exactly one would
-        // also be valid arithmetically, but the round driver cannot run it: a
-        // solo party expects no peer messages, and `JsonExpect` only advances
-        // when a message arrives.
-        let pk = Ed25519PublicKey::from_bytes(Ed25519::encode_point(&group_pub));
-        for committee in [2, 3] {
-            let committee_ids: Vec<PartyId> = ids[..committee].to_vec();
-            let hub = TestHub::new(&committee_ids);
-            let msg = b"1-of-n FROST".to_vec();
-            let signings: Vec<_> = (0..committee)
-                .map(|i| {
-                    let params =
-                        Parameters::new(committee_ids.clone(), &committee_ids[i], t, hub.broker(i));
-                    keys[i].new_signing(msg.clone(), params).unwrap()
-                })
-                .collect();
-            for sg in &signings {
-                let sig = sg.wait().expect("signing succeeds");
-                let mut sb = [0u8; 64];
-                sb.copy_from_slice(&sig.signature);
-                pk.verify(&msg, &Ed25519Signature::from_bytes(sb))
-                    .expect("1-of-n signature verifies under the DKG public key");
-            }
-        }
-    }
-
     #[test]
     fn keygen_2_of_4() {
         let ids = party_ids(4);
