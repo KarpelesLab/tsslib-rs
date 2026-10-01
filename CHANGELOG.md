@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.10](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.9...v0.2.10) - 2026-10-01
+
+### Added
+
+- *(rng)* take a purecrypto RNG in set_entropy_source
+
+### Other
+
+- replace internal per-party BTreeMaps with a sorted-Vec map
+
 ## [0.2.9](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.8...v0.2.9) - 2026-10-01
 
 ### Added
