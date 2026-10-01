@@ -37,7 +37,7 @@ use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
-use alloc::collections::BTreeMap;
+use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::MlDsa44PublicKey;
@@ -82,10 +82,10 @@ struct Shared {
 struct State {
     own_contrib: [u8; 32],
     contribs: Vec<Option<[u8; 32]>>, // by committee slot (= id)
-    dealt: BTreeMap<u8, ([Poly; L], [Poly; K])>,
-    received: BTreeMap<u8, ([Poly; L], [Poly; K])>,
-    t_by_mask: BTreeMap<u8, [Poly; K]>,
-    commit_by_mask: BTreeMap<u8, [u8; 32]>,
+    dealt: VecMap<u8, ([Poly; L], [Poly; K])>,
+    received: VecMap<u8, ([Poly; L], [Poly; K])>,
+    t_by_mask: VecMap<u8, [Poly; K]>,
+    commit_by_mask: VecMap<u8, [u8; 32]>,
     /// Joint `rho`, fixed at the end of round 1.
     rho: [u8; 32],
     /// This party's round-2 reveal, held back until every commitment is in.
@@ -133,10 +133,10 @@ impl DkgParty44 {
             state: Mutex::new(State {
                 own_contrib,
                 contribs: vec![None; n],
-                dealt: BTreeMap::new(),
-                received: BTreeMap::new(),
-                t_by_mask: BTreeMap::new(),
-                commit_by_mask: BTreeMap::new(),
+                dealt: VecMap::new(),
+                received: VecMap::new(),
+                t_by_mask: VecMap::new(),
+                commit_by_mask: VecMap::new(),
                 rho: [0u8; 32],
                 own_reveal: Vec::new(),
                 t_commits: vec![None; n],
@@ -528,7 +528,8 @@ impl Shared {
         }
 
         // Assemble + verify this party's held shares.
-        let mut shares: BTreeMap<u8, Share44> = BTreeMap::new();
+        let mut shares: alloc::collections::BTreeMap<u8, Share44> =
+            alloc::collections::BTreeMap::new();
         for &mask in &self.masks_hold {
             let (s1, s2) = if let Some(v) = st.dealt.get(&mask) {
                 *v
@@ -871,7 +872,7 @@ mod tests {
     struct Tap {
         me: Vec<u8>,
         out: Mutex<Vec<JsonMessage>>,
-        handlers: Mutex<BTreeMap<String, Arc<dyn crate::tss::MessageReceiver + Send + Sync>>>,
+        handlers: Mutex<VecMap<String, Arc<dyn crate::tss::MessageReceiver + Send + Sync>>>,
         pending: Mutex<Vec<JsonMessage>>,
     }
 

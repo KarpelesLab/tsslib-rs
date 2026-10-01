@@ -25,7 +25,7 @@ use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
-use alloc::collections::BTreeMap;
+use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::sha256;
 use serde::{Deserialize, Serialize};
@@ -67,14 +67,14 @@ struct State {
     rho_i: Scalar,
     big_k_i: ProjectivePoint,
     r: Scalar,
-    alice_k: BTreeMap<String, AliceState>,
-    alice_x: BTreeMap<String, AliceState>,
-    peer_k: BTreeMap<String, ProjectivePoint>,
+    alice_k: VecMap<String, AliceState>,
+    alice_x: VecMap<String, AliceState>,
+    peer_k: VecMap<String, ProjectivePoint>,
     k_rho_mine: Scalar,
     x_rho_mine: Scalar,
     phi_i: Scalar,
     shat_i: Scalar,
-    r4msgs: BTreeMap<String, SignR4>,
+    r4msgs: VecMap<String, SignR4>,
 }
 
 impl SigningParty {
@@ -139,14 +139,14 @@ impl SigningParty {
                 rho_i: Scalar::ZERO,
                 big_k_i: secp::generator(),
                 r: Scalar::ZERO,
-                alice_k: BTreeMap::new(),
-                alice_x: BTreeMap::new(),
-                peer_k: BTreeMap::new(),
+                alice_k: VecMap::new(),
+                alice_x: VecMap::new(),
+                peer_k: VecMap::new(),
                 k_rho_mine: Scalar::ZERO,
                 x_rho_mine: Scalar::ZERO,
                 phi_i: Scalar::ZERO,
                 shat_i: Scalar::ZERO,
-                r4msgs: BTreeMap::new(),
+                r4msgs: VecMap::new(),
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -224,7 +224,7 @@ impl Shared {
         };
 
         let me = self.params.party_id().clone();
-        let digests: BTreeMap<String, B64Bytes> = {
+        let digests: VecMap<String, B64Bytes> = {
             let mut st = self.state.lock();
             let mut r_point = st.big_k_i;
             for (pid, r1) in others.iter().zip(r1s.iter()) {
@@ -275,9 +275,9 @@ impl Shared {
         let me = self.params.party_id().clone();
         let self_key = peer_key_str(&me);
 
-        let my_digests: BTreeMap<String, Vec<u8>> = {
+        let my_digests: VecMap<String, Vec<u8>> = {
             let st = self.state.lock();
-            let mut m = BTreeMap::new();
+            let mut m = VecMap::new();
             for pid in others {
                 let kj = st.peer_k[&peer_key_str(pid)];
                 m.insert(peer_key_str(pid), ki_digest(pid, &kj));
@@ -496,9 +496,9 @@ impl Shared {
             Err(e) => return self.deliver(Err(e)),
         };
         let me = self.params.party_id().clone();
-        let digests: BTreeMap<String, B64Bytes> = {
+        let digests: VecMap<String, B64Bytes> = {
             let mut st = self.state.lock();
-            let mut d = BTreeMap::new();
+            let mut d = VecMap::new();
             for (pid, r4) in others.iter().zip(r4s.iter()) {
                 st.r4msgs.insert(peer_key_str(pid), r4.clone());
                 d.insert(peer_key_str(pid), B64Bytes(r4_digest(pid, r4)));
@@ -530,8 +530,8 @@ impl Shared {
         let st = self.state.lock();
 
         // Cross-check every signer's (φ, ŝ) reveal.
-        let my_digests: BTreeMap<String, Vec<u8>> = {
-            let mut m = BTreeMap::new();
+        let my_digests: VecMap<String, Vec<u8>> = {
+            let mut m = VecMap::new();
             for pid in others {
                 m.insert(
                     peer_key_str(pid),
@@ -816,7 +816,7 @@ fn mix_round_one_ssid(
     self_id: &PartyId,
     self_k: &ProjectivePoint,
     peer_ids: &[PartyId],
-    peer_k: &BTreeMap<String, ProjectivePoint>,
+    peer_k: &VecMap<String, ProjectivePoint>,
 ) -> Vec<u8> {
     let mut all: Vec<(Vec<u8>, ProjectivePoint)> = vec![(strip(&self_id.key).to_vec(), *self_k)];
     for pid in peer_ids {

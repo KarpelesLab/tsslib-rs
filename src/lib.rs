@@ -73,6 +73,7 @@ mod prelude;
 pub mod rng;
 mod sync;
 pub mod tss;
+mod vecmap;
 
 /// Shared FROST core (RFC 9591), used by the Ed25519 and ristretto255 variants.
 #[cfg(any(feature = "frosttss", feature = "frostristretto255tss"))]

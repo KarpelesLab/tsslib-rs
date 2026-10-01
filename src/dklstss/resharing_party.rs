@@ -33,7 +33,7 @@ use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
-use alloc::collections::BTreeMap;
+use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::sha256;
 use purecrypto::rng::RngCore;
@@ -75,11 +75,11 @@ struct State {
     r1_bcasts: Vec<ReshareR1Bcast>,
     r1_unicasts: Vec<ReshareR1Unicast>,
     r1_join: u8,
-    received_shares: BTreeMap<String, Scalar>,
-    received_commits: BTreeMap<String, Vec<ProjectivePoint>>,
-    new_ot_snd: BTreeMap<String, baseot::Sender>,
-    new_ot_rcv: BTreeMap<String, baseot::Receiver>,
-    my_delta: BTreeMap<String, Vec<u8>>,
+    received_shares: VecMap<String, Scalar>,
+    received_commits: VecMap<String, Vec<ProjectivePoint>>,
+    new_ot_snd: VecMap<String, baseot::Sender>,
+    new_ot_rcv: VecMap<String, baseot::Receiver>,
+    my_delta: VecMap<String, Vec<u8>>,
     new_xi: Scalar,
 }
 
@@ -163,11 +163,11 @@ impl ResharingParty {
                 r1_bcasts: Vec::new(),
                 r1_unicasts: Vec::new(),
                 r1_join: 0,
-                received_shares: BTreeMap::new(),
-                received_commits: BTreeMap::new(),
-                new_ot_snd: BTreeMap::new(),
-                new_ot_rcv: BTreeMap::new(),
-                my_delta: BTreeMap::new(),
+                received_shares: VecMap::new(),
+                received_commits: VecMap::new(),
+                new_ot_snd: VecMap::new(),
+                new_ot_rcv: VecMap::new(),
+                my_delta: VecMap::new(),
                 new_xi: Scalar::ZERO,
             }),
             result_tx: Mutex::new(Some(tx)),
@@ -320,9 +320,9 @@ impl Shared {
         let self_key = peer_key_str(&me);
         let old_ids = self.params.old_parties().to_vec();
 
-        let digests: BTreeMap<String, B64Bytes> = {
+        let digests: VecMap<String, B64Bytes> = {
             let st = self.state.lock();
-            let mut d = BTreeMap::new();
+            let mut d = VecMap::new();
             for (n, dealer) in old_ids.iter().enumerate() {
                 let dk = peer_key_str(dealer);
                 if dk == self_key {
@@ -357,9 +357,9 @@ impl Shared {
         let old_ids = self.params.old_parties().to_vec();
         let new_others = other_parties(self.params.new_parties(), &me);
 
-        let my_digests: BTreeMap<String, Vec<u8>> = {
+        let my_digests: VecMap<String, Vec<u8>> = {
             let st = self.state.lock();
-            let mut m = BTreeMap::new();
+            let mut m = VecMap::new();
             for (n, dealer) in old_ids.iter().enumerate() {
                 let dk = peer_key_str(dealer);
                 if dk == self_key {

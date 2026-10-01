@@ -21,7 +21,7 @@ use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
-use alloc::collections::BTreeMap;
+use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::ec::ristretto255::RistrettoPoint;
 use purecrypto::rng::RngCore;
@@ -101,8 +101,8 @@ struct State {
     v_decommit: Vec<u8>,
     eph_priv: [u8; 32],
     eph_pub: [u8; 32],
-    new_eph_pubs: BTreeMap<Vec<u8>, [u8; 32]>,
-    new_session_nonces: BTreeMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
+    new_eph_pubs: VecMap<Vec<u8>, [u8; 32]>,
+    new_session_nonces: VecMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
     // new member
     group_pub_key: Option<RistrettoPoint>,
     my_eph_priv: [u8; 32],

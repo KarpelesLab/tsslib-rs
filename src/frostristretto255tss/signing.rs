@@ -241,7 +241,7 @@ impl Shared {
         r2msgs: Vec<JsonMessage>,
     ) {
         let signer_ids: Vec<Vec<u8>> = commitments.iter().map(|cm| cm.identifier.clone()).collect();
-        let big_x_by_id: alloc::collections::BTreeMap<&[u8], RistrettoPoint> = self
+        let big_x_by_id: crate::vecmap::VecMap<&[u8], RistrettoPoint> = self
             .key
             .ks
             .iter()

@@ -294,7 +294,7 @@ impl Shared {
         let signer_ids: Vec<Vec<u8>> = commitments.iter().map(|cm| cm.identifier.clone()).collect();
 
         // Verification share Y_j by identifier.
-        let big_x_by_id: alloc::collections::BTreeMap<&[u8], EdwardsPoint> = self
+        let big_x_by_id: crate::vecmap::VecMap<&[u8], EdwardsPoint> = self
             .key
             .ks
             .iter()

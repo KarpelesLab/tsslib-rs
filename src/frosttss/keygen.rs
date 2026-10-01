@@ -21,7 +21,7 @@ use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
-use alloc::collections::BTreeMap;
+use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use purecrypto::rng::RngCore;
@@ -79,9 +79,9 @@ struct State {
     eph_pub: [u8; 32],
     my_session_nonce: [u8; SESSION_NONCE_LEN],
     ks: Vec<Vec<u8>>,
-    peer_eph_pubs: BTreeMap<Vec<u8>, [u8; 32]>,
-    peer_session_nonces: BTreeMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
-    peer_vs: BTreeMap<Vec<u8>, Vec<EdwardsPoint>>,
+    peer_eph_pubs: VecMap<Vec<u8>, [u8; 32]>,
+    peer_session_nonces: VecMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
+    peer_vs: VecMap<Vec<u8>, Vec<EdwardsPoint>>,
 }
 
 /// The X25519 private key opens the share envelopes; wiped with the session.
@@ -108,9 +108,9 @@ impl Keygen {
                 eph_pub: [0u8; 32],
                 my_session_nonce: [0u8; SESSION_NONCE_LEN],
                 ks: Vec::new(),
-                peer_eph_pubs: BTreeMap::new(),
-                peer_session_nonces: BTreeMap::new(),
-                peer_vs: BTreeMap::new(),
+                peer_eph_pubs: VecMap::new(),
+                peer_session_nonces: VecMap::new(),
+                peer_vs: VecMap::new(),
             }),
             result_tx: Mutex::new(Some(tx)),
         });

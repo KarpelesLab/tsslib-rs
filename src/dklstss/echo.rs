@@ -16,7 +16,7 @@ use crate::tss::PartyId;
 use crate::tss::TssError;
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::be_to_decimal;
-use alloc::collections::BTreeMap;
+use crate::vecmap::VecMap;
 use purecrypto::hash::sha256;
 use serde::{Deserialize, Serialize};
 
@@ -55,7 +55,7 @@ pub(crate) fn commit_digest(tag: &str, dealer: &PartyId, vs_bytes: &[Vec<u8>]) -
 #[derive(Serialize, Deserialize)]
 pub(crate) struct EchoMsg {
     #[serde(rename = "digests")]
-    pub digests: BTreeMap<String, B64Bytes>,
+    pub digests: VecMap<String, B64Bytes>,
 }
 
 /// Cross-checks every echoer's reported digest against the recipient's own view.
@@ -71,14 +71,14 @@ pub(crate) struct EchoMsg {
 /// own V" path). `echoers[n]` is the sender of `msgs[n]`. `all_parties` is the
 /// dealer set from the echoer's perspective.
 pub(crate) fn verify_echoes(
-    my_digests: &BTreeMap<String, Vec<u8>>,
+    my_digests: &VecMap<String, Vec<u8>>,
     self_key: &str,
     echoers: &[PartyId],
     msgs: &[EchoMsg],
     all_parties: &[PartyId],
     source: &str,
 ) -> Result<(), Error> {
-    let by_key: BTreeMap<String, &PartyId> =
+    let by_key: VecMap<String, &PartyId> =
         all_parties.iter().map(|p| (peer_key_str(p), p)).collect();
     let max_digests = all_parties.len();
 
