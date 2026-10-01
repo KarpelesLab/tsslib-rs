@@ -23,15 +23,17 @@ use super::key::Key44;
 use super::packing::{PACK_POLYQ_SIZE, pack_polyq, unpack_polyq};
 use super::params::ThresholdParams44;
 use super::signing::{K, L, combine_try, compute_mu, compute_response, sample_w};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::hazmat::{ML_DSA_44, Poly, inf_norm, unpack_z};
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 use zeroize::Zeroize;
 
 const TYPE_R1: &str = "mldsa44:sign:round1";
@@ -192,6 +194,7 @@ impl SigningParty44 {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> SignResult {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -204,13 +207,13 @@ impl SigningParty44 {
 
 impl Shared {
     fn deliver(&self, r: SignResult) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let mut rhop = [0u8; 64];
         rng.fill_bytes(&mut rhop);
 
@@ -231,7 +234,7 @@ impl Shared {
 
         let commit = self.compute_commitment(self.key.id, &wbuf);
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.stws = stws;
             st.wbuf = wbuf;
             st.r1commits[self.my_rank] = Some(commit.clone());
@@ -262,7 +265,7 @@ impl Shared {
             Err(e) => return self.deliver(Err(e)),
         };
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (pid, r1) in others.iter().zip(r1s.iter()) {
                 let slot = self.committee_slot(pid);
                 if r1.commit.0.len() != 32 {
@@ -278,7 +281,7 @@ impl Shared {
 
     fn round2(self: &Arc<Self>, others: &[PartyId]) {
         let wbuf = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let wbuf = st.wbuf.clone();
             st.r2wbufs[self.my_rank] = Some(wbuf.clone());
             wbuf
@@ -309,7 +312,7 @@ impl Shared {
         };
         let expected_len = self.kk * K * PACK_POLYQ_SIZE;
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (pid, r2) in others.iter().zip(r2s.iter()) {
                 let slot = self.committee_slot(pid);
                 if r2.wbuf.0.len() != expected_len {
@@ -334,7 +337,7 @@ impl Shared {
     fn round3(self: &Arc<Self>, others: &[PartyId]) {
         // Aggregate w per try over the whole committee.
         let wfinal = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             aggregate_wfinal(&st.r2wbufs, self.kk)
         };
 
@@ -347,7 +350,7 @@ impl Shared {
         // Compute responses (zeros for rejected tries → caught in combine).
         let mut respbuf = vec![0u8; self.kk * L * encoding_z_size()];
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let mut off = 0;
             for tri in 0..self.kk {
                 let z =
@@ -373,7 +376,7 @@ impl Shared {
             p.c.zeroize();
         }
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.r3resps[self.my_rank] = Some(respbuf.clone());
         }
         if let Err(e) = self.broadcast(
@@ -402,7 +405,7 @@ impl Shared {
         };
         let expected_len = self.kk * L * encoding_z_size();
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (pid, r3) in others.iter().zip(r3s.iter()) {
                 let slot = self.committee_slot(pid);
                 if r3.resp.0.len() != expected_len {
@@ -414,7 +417,7 @@ impl Shared {
         }
 
         let (wfinal, zfinal) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             // Per-party response validity (Go `validatePartyResponses`, FIX 2 —
             // identifiable abort). Before summing every party's z_i
             // unconditionally, range/bound-check each party's block. A
@@ -467,7 +470,7 @@ impl Shared {
         self.params
             .parties()
             .iter()
-            .position(|q| q.cmp_key(p) == std::cmp::Ordering::Equal)
+            .position(|q| q.cmp_key(p) == core::cmp::Ordering::Equal)
             .expect("sender in committee")
     }
 

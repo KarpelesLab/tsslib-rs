@@ -14,16 +14,17 @@ use super::key::Key;
 use super::schnorr::ZkProof;
 use super::vss;
 use super::{Error, ed::EcPointJson};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
-use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 use zeroize::Zeroize;
 
 const TYPE_R1: &str = "eddsa:keygen:round1";
@@ -97,6 +98,7 @@ impl KeygenParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<Key, Error> {
         self.result_rx
             .recv()
@@ -106,8 +108,8 @@ impl KeygenParty {
 
 impl Shared {
     fn deliver(&self, r: Result<Key, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -116,7 +118,7 @@ impl Shared {
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let t = self.params.threshold();
         let ids: Vec<Scalar> = self
             .params
@@ -132,7 +134,7 @@ impl Shared {
         let (c, d) = commit::commit(&flatten_points(&vs), &mut rng);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.ui = Some(ui);
             st.vs = vs;
             st.shares = shares;
@@ -155,7 +157,7 @@ impl Shared {
     }
 
     fn round2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.params.party_index();
 
         // Record peer commitments.
@@ -165,11 +167,11 @@ impl Shared {
                 Err(e) => return self.deliver(Err(e.into())),
             };
             let jidx = others[k].index as usize;
-            self.state.lock().unwrap().kgcs[jidx] = Some(r1.commitment.0);
+            self.state.lock().kgcs[jidx] = Some(r1.commitment.0);
         }
 
         // Unicast each peer its Shamir share.
-        let shares = self.state.lock().unwrap().shares.clone();
+        let shares = self.state.lock().shares.clone();
         for p in others {
             let jidx = p.index as usize;
             let r2m1 = R2Msg1 {
@@ -182,7 +184,7 @@ impl Shared {
 
         // Broadcast the opening + a Schnorr proof of knowledge of u_i.
         let (ui, vs0, decommit) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.ui.clone().unwrap(), st.vs[0], st.decommit.clone())
         };
         let context_i = context_bytes(&self.ssid, i);
@@ -215,7 +217,7 @@ impl Shared {
     fn on_r2_1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R2Msg1>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r2m1 = d,
                 Err(e) => return self.deliver(Err(e.into())),
@@ -232,7 +234,7 @@ impl Shared {
     fn on_r2_2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R2Msg2>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r2m2 = d,
                 Err(e) => return self.deliver(Err(e.into())),
@@ -252,7 +254,7 @@ impl Shared {
         let me_id = ed::scalar_from_be(&self.params.party_id().key);
 
         let (r2m1, r2m1_from, r2m2, r2m2_from, vs, my_share) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.r2m1.clone(),
                 st.r2m1_from.clone(),
@@ -272,7 +274,7 @@ impl Shared {
                 Some(p) => p,
                 None => return self.fail("keygen: missing round2-2 from peer"),
             };
-            let kgcj = match &self.state.lock().unwrap().kgcs[jidx] {
+            let kgcj = match &self.state.lock().kgcs[jidx] {
                 Some(c) => c.clone(),
                 None => return self.fail("keygen: missing commitment from peer"),
             };

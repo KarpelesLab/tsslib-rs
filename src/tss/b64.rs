@@ -1,6 +1,7 @@
 //! Standard-base64 serde helpers, matching Go's `encoding/json` treatment of
 //! `[]byte` (base64 std string, or `null` for a nil slice).
 
+use crate::prelude::*;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

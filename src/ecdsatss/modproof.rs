@@ -8,6 +8,7 @@
 
 use super::Error;
 use super::bn::{self, Modulus};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
@@ -224,7 +225,7 @@ mod tests {
         let session = mp["session"].as_str().unwrap().as_bytes();
         let n = dec(&mp["n"]);
         let pf = load(mp);
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         assert!(
             verify(session, &n, &pf, &mut rng),
             "Go modproof must verify"
@@ -241,7 +242,7 @@ mod tests {
         let mp = &f["modproof"];
         let (n, p, q) = (dec(&mp["n"]), dec(&mp["p"]), dec(&mp["q"]));
         let session = b"rust-mod-session";
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let proof = prove(session, &n, &p, &q, &mut rng).unwrap();
         assert!(verify(session, &n, &proof, &mut rng));
         assert!(!verify(b"other", &n, &proof, &mut rng));

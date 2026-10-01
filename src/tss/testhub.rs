@@ -7,6 +7,7 @@
 //! a handler for that type is connected.
 
 use super::{JsonMessage, MessageBroker, MessageReceiver, PartyId};
+use crate::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 

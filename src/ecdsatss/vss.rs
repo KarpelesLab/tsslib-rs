@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use super::secp;
+use crate::prelude::*;
 use purecrypto::ec::secp256k1::{ProjectivePoint, Scalar};
 use purecrypto::rng::RngCore;
 
@@ -149,7 +150,7 @@ mod tests {
 
     #[test]
     fn create_rejects_ids_that_leak_or_collide() {
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let id = |b: &[u8]| secp::scalar_from_be(b);
         let secret = random_scalar(&mut rng);
         let order = hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")

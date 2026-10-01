@@ -8,10 +8,11 @@
 use super::Error;
 use super::key::{Key44, Share44};
 use super::params::ThresholdParams44;
+use crate::prelude::*;
+use alloc::collections::BTreeMap;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{self, ML_DSA_44, N, Poly, pack_t1};
-use std::collections::HashMap;
 
 const K: usize = 4;
 const L: usize = 4;
@@ -47,7 +48,7 @@ pub fn trusted_dealer_keygen44(
             rho,
             tr: [0u8; 64],
             t1: [Poly::zero(); K],
-            shares: HashMap::new(),
+            shares: BTreeMap::new(),
         })
         .collect();
 
@@ -165,7 +166,7 @@ mod tests {
     /// Recompute t1 from the union of all distinct shares and confirm it
     /// matches every party's stored t1 — proving the shares carry the secret.
     fn check_secret_reconstructs(keys: &[Key44]) {
-        let mut seen: HashMap<u8, Share44> = HashMap::new();
+        let mut seen: BTreeMap<u8, Share44> = BTreeMap::new();
         for k in keys {
             for (m, s) in &k.shares {
                 seen.entry(*m).or_insert_with(|| s.clone());

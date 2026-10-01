@@ -11,13 +11,14 @@
 
 use super::Error;
 use super::secp::{self, ProjectivePoint};
+use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::TssError;
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::be_to_decimal;
+use alloc::collections::BTreeMap;
 use purecrypto::hash::sha256;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// `PartyID.KeyInt().String()` — the decimal string of a party's key, used as
 /// the map key in [`EchoMsg`] and for internal per-peer maps.
@@ -54,7 +55,7 @@ pub(crate) fn commit_digest(tag: &str, dealer: &PartyId, vs_bytes: &[Vec<u8>]) -
 #[derive(Serialize, Deserialize)]
 pub(crate) struct EchoMsg {
     #[serde(rename = "digests")]
-    pub digests: HashMap<String, B64Bytes>,
+    pub digests: BTreeMap<String, B64Bytes>,
 }
 
 /// Cross-checks every echoer's reported digest against the recipient's own view.
@@ -70,14 +71,14 @@ pub(crate) struct EchoMsg {
 /// own V" path). `echoers[n]` is the sender of `msgs[n]`. `all_parties` is the
 /// dealer set from the echoer's perspective.
 pub(crate) fn verify_echoes(
-    my_digests: &HashMap<String, Vec<u8>>,
+    my_digests: &BTreeMap<String, Vec<u8>>,
     self_key: &str,
     echoers: &[PartyId],
     msgs: &[EchoMsg],
     all_parties: &[PartyId],
     source: &str,
 ) -> Result<(), Error> {
-    let by_key: HashMap<String, &PartyId> =
+    let by_key: BTreeMap<String, &PartyId> =
         all_parties.iter().map(|p| (peer_key_str(p), p)).collect();
     let max_digests = all_parties.len();
 
@@ -227,7 +228,7 @@ pub(crate) fn point_from_be_xy(x_be: &[u8], y_be: &[u8]) -> Option<ProjectivePoi
 pub(crate) fn other_parties(parties: &[PartyId], self_id: &PartyId) -> Vec<PartyId> {
     parties
         .iter()
-        .filter(|p| p.cmp_key(self_id) != std::cmp::Ordering::Equal)
+        .filter(|p| p.cmp_key(self_id) != core::cmp::Ordering::Equal)
         .cloned()
         .collect()
 }

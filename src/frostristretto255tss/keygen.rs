@@ -10,16 +10,18 @@ use crate::frost::vss;
 use crate::frost::{
     Ciphersuite, Ristretto255, Scalar, random_scalar, scalar_from_be_mod_l, scalar_to_be,
 };
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use purecrypto::ec::ristretto255::RistrettoPoint;
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 
 const ROUND1_TYPE: &str = "frost:ristretto255:keygen:round1";
 const ROUND2_TYPE: &str = "frost:ristretto255:keygen:round2";
@@ -67,9 +69,9 @@ struct State {
     eph_pub: [u8; 32],
     my_session_nonce: [u8; SESSION_NONCE_LEN],
     ks: Vec<Vec<u8>>,
-    peer_eph_pubs: HashMap<Vec<u8>, [u8; 32]>,
-    peer_session_nonces: HashMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
-    peer_vs: HashMap<Vec<u8>, Vec<RistrettoPoint>>,
+    peer_eph_pubs: BTreeMap<Vec<u8>, [u8; 32]>,
+    peer_session_nonces: BTreeMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
+    peer_vs: BTreeMap<Vec<u8>, Vec<RistrettoPoint>>,
 }
 
 /// The X25519 private key opens the share envelopes; wiped with the session.
@@ -95,9 +97,9 @@ impl Keygen {
                 eph_pub: [0u8; 32],
                 my_session_nonce: [0u8; SESSION_NONCE_LEN],
                 ks: Vec::new(),
-                peer_eph_pubs: HashMap::new(),
-                peer_session_nonces: HashMap::new(),
-                peer_vs: HashMap::new(),
+                peer_eph_pubs: BTreeMap::new(),
+                peer_session_nonces: BTreeMap::new(),
+                peer_vs: BTreeMap::new(),
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -117,6 +119,7 @@ impl Keygen {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<Key, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -127,13 +130,13 @@ impl Keygen {
 
 impl Shared {
     fn deliver(&self, r: Result<Key, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1(self: &Arc<Self>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let threshold = self.params.threshold();
         let ks: Vec<Vec<u8>> = self
             .params
@@ -167,7 +170,7 @@ impl Shared {
         };
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.vs = vs;
             st.shares = shares;
             st.eph_priv = eph_priv;
@@ -192,7 +195,7 @@ impl Shared {
 
     fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<JsonMessage>) {
         let threshold = self.params.threshold();
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
 
         for (pid, msg) in others.iter().zip(r1msgs.iter()) {
             let r1: KeygenRound1Msg = match json_get(msg) {
@@ -204,7 +207,7 @@ impl Shared {
                 Err(e) => return self.deliver(Err(e)),
             };
             let key = strip(&pid.key).to_vec();
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.peer_eph_pubs.insert(key.clone(), to_arr32(&r1.eph_pub));
             st.peer_session_nonces
                 .insert(key.clone(), to_arr16(&r1.session_nonce));
@@ -212,7 +215,7 @@ impl Shared {
         }
 
         let (eph_priv, eph_pub, my_nonce, shares) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.eph_priv,
                 st.eph_pub,
@@ -229,7 +232,7 @@ impl Shared {
                 }
             };
             let recipient_pub = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 *st.peer_eph_pubs
                     .get(strip(&pid.key))
                     .expect("peer eph pub present")
@@ -318,7 +321,7 @@ impl Shared {
     fn finalize(self: &Arc<Self>, others: &[PartyId], r2msgs: Vec<JsonMessage>) {
         let threshold = self.params.threshold();
         let me_idx = self.params.party_index();
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock();
 
         let mut xi = st.shares[me_idx].value.clone();
         let my_id = &st.ks[me_idx];

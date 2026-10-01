@@ -56,8 +56,17 @@ cargo feature, all enabled by default:
 
 ```toml
 [dependencies]
-tsslib = { version = "0.2", default-features = false, features = ["frosttss"] }
+tsslib = { version = "0.3", default-features = false, features = ["std", "frosttss"] }
 ```
+
+### `no_std`
+
+The crate is `#![no_std]` and needs only `alloc`. The default `std` feature
+adds OS randomness, the blocking `wait()` on every session (without it, poll
+`try_result()` after feeding each inbound message), and OS-backed locks in
+place of spin locks. On a bare-metal target, register a CSPRNG with
+`tsslib::rng::set_entropy_source` before starting any session;
+`wasm32-unknown-unknown` draws from the host and needs no setup.
 
 ## Layout
 

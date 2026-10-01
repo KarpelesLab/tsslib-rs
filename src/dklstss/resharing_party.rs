@@ -27,15 +27,17 @@ use super::secp::{self, ProjectivePoint, Scalar};
 use super::signing::lagrange_coefficient;
 use super::vss;
 use super::{Error, echo::other_parties};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use purecrypto::hash::sha256;
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 const TYPE_R1BC: &str = "dkls:reshare:r1bc";
 const TYPE_R1UC: &str = "dkls:reshare:r1uc";
@@ -73,11 +75,11 @@ struct State {
     r1_bcasts: Vec<ReshareR1Bcast>,
     r1_unicasts: Vec<ReshareR1Unicast>,
     r1_join: u8,
-    received_shares: HashMap<String, Scalar>,
-    received_commits: HashMap<String, Vec<ProjectivePoint>>,
-    new_ot_snd: HashMap<String, baseot::Sender>,
-    new_ot_rcv: HashMap<String, baseot::Receiver>,
-    my_delta: HashMap<String, Vec<u8>>,
+    received_shares: BTreeMap<String, Scalar>,
+    received_commits: BTreeMap<String, Vec<ProjectivePoint>>,
+    new_ot_snd: BTreeMap<String, baseot::Sender>,
+    new_ot_rcv: BTreeMap<String, baseot::Receiver>,
+    my_delta: BTreeMap<String, Vec<u8>>,
     new_xi: Scalar,
 }
 
@@ -130,7 +132,7 @@ impl ResharingParty {
         let my_new_idx = params
             .new_parties()
             .iter()
-            .position(|p| p.cmp_key(params.party_id()) == std::cmp::Ordering::Equal);
+            .position(|p| p.cmp_key(params.party_id()) == core::cmp::Ordering::Equal);
 
         // OLD role: Lagrange coefficient over the active old subset.
         let old_lambda = if is_old {
@@ -161,11 +163,11 @@ impl ResharingParty {
                 r1_bcasts: Vec::new(),
                 r1_unicasts: Vec::new(),
                 r1_join: 0,
-                received_shares: HashMap::new(),
-                received_commits: HashMap::new(),
-                new_ot_snd: HashMap::new(),
-                new_ot_rcv: HashMap::new(),
-                my_delta: HashMap::new(),
+                received_shares: BTreeMap::new(),
+                received_commits: BTreeMap::new(),
+                new_ot_snd: BTreeMap::new(),
+                new_ot_rcv: BTreeMap::new(),
+                my_delta: BTreeMap::new(),
                 new_xi: Scalar::ZERO,
             }),
             result_tx: Mutex::new(Some(tx)),
@@ -195,6 +197,7 @@ impl ResharingParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> ReshareResult {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -205,8 +208,8 @@ impl ResharingParty {
 
 impl Shared {
     fn deliver(&self, r: ReshareResult) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -230,7 +233,7 @@ impl Shared {
     }
 
     fn old_round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let key = self.old_key.as_ref().expect("OLD has key");
         let lambda = self.old_lambda.as_ref().expect("OLD has lambda");
         let new_t = self.params.new_threshold();
@@ -250,7 +253,7 @@ impl Shared {
             .collect();
         let (vs, shares) = vss::create(new_t, &scaled, &new_ids, &mut rng);
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.own_vs = vs.clone();
         }
 
@@ -282,7 +285,7 @@ impl Shared {
         let decoded: Result<Vec<ReshareR1Bcast>, Error> =
             msgs.iter().map(|m| Ok(json_get(m)?)).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r1_bcasts = d,
                 Err(e) => return self.deliver(Err(e)),
@@ -299,7 +302,7 @@ impl Shared {
         let decoded: Result<Vec<ReshareR1Unicast>, Error> =
             msgs.iter().map(|m| Ok(json_get(m)?)).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r1_unicasts = d,
                 Err(e) => return self.deliver(Err(e)),
@@ -317,9 +320,9 @@ impl Shared {
         let self_key = peer_key_str(&me);
         let old_ids = self.params.old_parties().to_vec();
 
-        let digests: HashMap<String, B64Bytes> = {
-            let st = self.state.lock().unwrap();
-            let mut d = HashMap::new();
+        let digests: BTreeMap<String, B64Bytes> = {
+            let st = self.state.lock();
+            let mut d = BTreeMap::new();
             for (n, dealer) in old_ids.iter().enumerate() {
                 let dk = peer_key_str(dealer);
                 if dk == self_key {
@@ -354,9 +357,9 @@ impl Shared {
         let old_ids = self.params.old_parties().to_vec();
         let new_others = other_parties(self.params.new_parties(), &me);
 
-        let my_digests: HashMap<String, Vec<u8>> = {
-            let st = self.state.lock().unwrap();
-            let mut m = HashMap::new();
+        let my_digests: BTreeMap<String, Vec<u8>> = {
+            let st = self.state.lock();
+            let mut m = BTreeMap::new();
             for (n, dealer) in old_ids.iter().enumerate() {
                 let dk = peer_key_str(dealer);
                 if dk == self_key {
@@ -388,14 +391,14 @@ impl Shared {
     }
 
     fn after_round1(self: &Arc<Self>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let me = self.params.party_id().clone();
         let new_t = self.params.new_threshold();
         let my_id = secp::scalar_from_be_reduce(&me.key);
         let old_ids = self.params.old_parties().to_vec();
 
         let (bcasts, ucs) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.r1_bcasts.clone(), st.r1_unicasts.clone())
         };
 
@@ -426,22 +429,18 @@ impl Shared {
                 ))));
             }
             new_xi = new_xi.add(&share);
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.received_shares.insert(peer_key_str(pid), share);
             st.received_commits.insert(peer_key_str(pid), vsj);
         }
-        self.state.lock().unwrap().new_xi = new_xi;
+        self.state.lock().new_xi = new_xi;
 
         // Kick off pairwise base-OT with the other NEW members.
         let new_others = other_parties(self.params.new_parties(), &me);
         for pj in &new_others {
             let sid = pair_base_sid(&self.ssid, &me.key, &pj.key, &pj.key);
             let (snd, smsg) = baseot::Sender::new(&sid, otext::KAPPA, &mut rng);
-            self.state
-                .lock()
-                .unwrap()
-                .new_ot_snd
-                .insert(peer_key_str(pj), snd);
+            self.state.lock().new_ot_snd.insert(peer_key_str(pj), snd);
 
             let (sx, sy) = secp::affine_be(&smsg.s);
             let (ax, ay) = secp::affine_be(&smsg.pok.alpha);
@@ -467,7 +466,7 @@ impl Shared {
     }
 
     fn after_round2(self: &Arc<Self>, new_others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let me = self.params.party_id().clone();
         let r2s: Vec<ReshareR2> = match msgs.iter().map(json_get).collect() {
             Ok(v) => v,
@@ -501,7 +500,7 @@ impl Shared {
                 ))));
             };
             {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.state.lock();
                 st.new_ot_rcv.insert(peer_key_str(pid), rcvr);
                 st.my_delta.insert(peer_key_str(pid), delta);
             }
@@ -535,7 +534,7 @@ impl Shared {
             Err(e) => return self.deliver(Err(Error::Serde(e))),
         };
 
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock();
 
         // Reconstruct the public key from Σ V_old[0] and bind it to the
         // advertised old_ecdsa_pub (stops a malicious OLD party rotating it).
@@ -576,7 +575,7 @@ impl Shared {
             };
             let idx = new_others
                 .iter()
-                .position(|p| p.cmp_key(pj) == std::cmp::Ordering::Equal)
+                .position(|p| p.cmp_key(pj) == core::cmp::Ordering::Equal)
                 .expect("peer present");
             let peer_r = match unflatten_point_xy(&r3s[idx].ot_receiver_r) {
                 Ok(v) => v,
@@ -594,7 +593,7 @@ impl Shared {
             };
             let pos = new_parties
                 .iter()
-                .position(|p| p.cmp_key(pj) == std::cmp::Ordering::Equal)
+                .position(|p| p.cmp_key(pj) == core::cmp::Ordering::Equal)
                 .expect("peer in new committee");
             ot[pos] = Some(PairOTState {
                 as_alice: ext_receiver,
@@ -720,9 +719,9 @@ mod tests {
     use super::super::keygen::keygen;
     use super::super::signing::{ecdsa_verify, hash_to_scalar};
     use super::*;
+    use crate::rng::SystemRng;
     use crate::tss::testhub::ReshareHub;
     use purecrypto::hash::sha256;
-    use purecrypto::rng::OsRng;
 
     fn party_ids(vals: &[u8]) -> Vec<PartyId> {
         PartyId::sort(
@@ -738,7 +737,7 @@ mod tests {
     #[test]
     fn rejects_new_member_with_zero_id() {
         let old_ids = party_ids(&[1, 2, 3]);
-        let old_keys = keygen(old_ids.len(), 1, &old_ids, &mut OsRng).unwrap();
+        let old_keys = keygen(old_ids.len(), 1, &old_ids, &mut SystemRng).unwrap();
         let order = hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
             .unwrap();
         let mut new = vec![
@@ -767,7 +766,7 @@ mod tests {
     #[test]
     fn reshare_with_party_in_both_committees() {
         let old_ids = party_ids(&[1, 2, 3]);
-        let old_keys = keygen(old_ids.len(), 1, &old_ids, &mut OsRng).unwrap();
+        let old_keys = keygen(old_ids.len(), 1, &old_ids, &mut SystemRng).unwrap();
         let group_pub = old_keys[0].ecdsa_pub;
         let new_ids = party_ids(&[3, 11, 12]);
         let all = party_ids(&[1, 2, 3, 11, 12]);
@@ -788,7 +787,7 @@ mod tests {
                     );
                     let old_key = old_ids
                         .iter()
-                        .position(|o| o.cmp_key(p) == std::cmp::Ordering::Equal)
+                        .position(|o| o.cmp_key(p) == core::cmp::Ordering::Equal)
                         .map(|j| old_keys[j].clone());
                     ResharingParty::new(params, group_pub, old_key).unwrap()
                 })
@@ -812,7 +811,7 @@ mod tests {
     fn reshare_1of3_to_2of5_preserves_key_and_signs() {
         let old_ids = party_ids(&[1, 2, 3]);
         let old_t = 1;
-        let old_keys = keygen(old_ids.len(), old_t, &old_ids, &mut OsRng).unwrap();
+        let old_keys = keygen(old_ids.len(), old_t, &old_ids, &mut SystemRng).unwrap();
         let group_pub = old_keys[0].ecdsa_pub;
 
         let new_ids = party_ids(&[11, 12, 13, 14, 15]);
@@ -866,7 +865,7 @@ mod tests {
 
         // Sign with the new committee (sync signer) under the preserved key.
         let hash = sha256(b"after reshare");
-        let sig = super::super::sign(&new_keys, &[0, 1, 2], &hash, &mut OsRng).unwrap();
+        let sig = super::super::sign(&new_keys, &[0, 1, 2], &hash, &mut SystemRng).unwrap();
         let e = hash_to_scalar(&hash);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);

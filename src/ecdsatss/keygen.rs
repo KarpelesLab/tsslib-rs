@@ -23,16 +23,17 @@ use super::prepare::LocalPreParams;
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::vss;
 use super::{Error, bn};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::bignum::BoxedUint;
-use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 const TYPE_R1: &str = "ecdsa:keygen:round1";
 const TYPE_R2_1: &str = "ecdsa:keygen:round2-1";
@@ -125,6 +126,7 @@ impl KeygenParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<Key, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -137,13 +139,13 @@ impl KeygenParty {
 
 impl Shared {
     fn deliver(&self, r: Result<Key, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let t = self.params.threshold();
         let me = self.params.party_id().clone();
         let parties = self.params.parties().to_vec();
@@ -195,7 +197,7 @@ impl Shared {
         // Record own per-index material.
         let i = self.params.party_index();
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.vs = vs;
             st.shares = shares;
             st.decommit = d;
@@ -219,7 +221,7 @@ impl Shared {
     }
 
     fn round2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.params.party_index();
         let pre = &self.pre;
 
@@ -259,7 +261,7 @@ impl Shared {
                     "keygen: DLN proof verification failed".into(),
                 )));
             }
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.paillier_pks[jidx] = Some(PublicKey { n: paillier_n });
             st.ntildej[jidx] = Some(ntildej);
             st.h1j[jidx] = Some(h1jv);
@@ -271,7 +273,7 @@ impl Shared {
 
         // Round-2 part 1: per-peer share + fac proof.
         let (shares, n0p, n0q, n0) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.shares.clone(),
                 pre.paillier_sk.p.clone(),
@@ -282,7 +284,7 @@ impl Shared {
         for p in others {
             let jidx = p.index as usize;
             let (ntildej, h1jv, h2jv) = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 (
                     st.ntildej[jidx].clone().unwrap(),
                     st.h1j[jidx].clone().unwrap(),
@@ -306,7 +308,7 @@ impl Shared {
             Ok(p) => p,
             Err(e) => return self.deliver(Err(e)),
         };
-        let decommit = self.state.lock().unwrap().decommit.clone();
+        let decommit = self.state.lock().decommit.clone();
         let r2m2 = R2Msg2 {
             decommitment: parts_b64(&decommit.iter().map(bn::to_be).collect::<Vec<_>>()),
             mod_proof: parts_b64(&mp.to_parts()),
@@ -333,7 +335,7 @@ impl Shared {
     fn on_r2_1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R2Msg1>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r2m1 = d,
                 Err(e) => return self.deliver(Err(Error::from(e))),
@@ -350,7 +352,7 @@ impl Shared {
     fn on_r2_2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R2Msg2>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r2m2 = d,
                 Err(e) => return self.deliver(Err(Error::from(e))),
@@ -365,14 +367,14 @@ impl Shared {
     }
 
     fn round3(self: &Arc<Self>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let t = self.params.threshold();
         let i = self.params.party_index();
         let me_id = secp::scalar_from_be(&self.params.party_id().key);
         let q = bn::secp256k1_order();
 
         let (r2m1, r2m1_from, r2m2, r2m2_from) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.r2m1.clone(),
                 st.r2m1_from.clone(),
@@ -395,7 +397,7 @@ impl Shared {
                 }
             };
             let (kgcj, ntj, h1, h2, peer_n) = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 (
                     st.kgcs[jidx].clone().unwrap(),
                     st.ntildej[i].clone().unwrap(), // my own ring params (verifier side)
@@ -468,7 +470,7 @@ impl Shared {
 
         // xi = own share + Σ received shares (mod q).
         let (my_vs, my_share) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.vs.clone(), st.shares[i].clone())
         };
         let mut xi = my_share;
@@ -499,7 +501,7 @@ impl Shared {
         }
 
         let ecdsa_pub = vc[0];
-        self.state.lock().unwrap().ecdsa_pub = Some(ecdsa_pub);
+        self.state.lock().ecdsa_pub = Some(ecdsa_pub);
 
         // Paillier key proof over (my key int, ECDSAPub).
         let (ex, ey) = secp::coords(&ecdsa_pub);
@@ -516,7 +518,7 @@ impl Shared {
         let _ = q;
 
         // Stash assembled data for finalize, then broadcast the proof.
-        self.finalize_data.lock().unwrap().replace(Assembled {
+        self.finalize_data.lock().replace(Assembled {
             xi: secp::scalar_to_uint(&xi),
             big_xj,
             ecdsa_pub,
@@ -539,8 +541,8 @@ impl Shared {
     }
 
     fn round4(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
-        let ecdsa_pub = self.state.lock().unwrap().ecdsa_pub.unwrap();
+        let mut rng = SystemRng;
+        let ecdsa_pub = self.state.lock().ecdsa_pub.unwrap();
         let (ex, ey) = secp::coords(&ecdsa_pub);
         let _ = &mut rng;
 
@@ -551,7 +553,7 @@ impl Shared {
             };
             let jidx = others[k].index as usize;
             let (peer_n, kj) = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 (
                     st.paillier_pks[jidx].clone().unwrap().n,
                     bn::from_be(&others[k].key),
@@ -582,10 +584,9 @@ impl Shared {
         let fin = self
             .finalize_data
             .lock()
-            .unwrap()
             .clone()
             .ok_or_else(|| Error::Validation("keygen: missing finalize data".into()))?;
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock();
         let parties = self.params.parties();
         let pre = &self.pre;
 
@@ -807,7 +808,7 @@ mod tests {
         let t = 1;
         // Small (insecure) safe primes keep the test tractable.
         let pres: Vec<LocalPreParams> = (0..ids.len())
-            .map(|_| LocalPreParams::generate(256, &mut OsRng))
+            .map(|_| LocalPreParams::generate(256, &mut SystemRng))
             .collect();
 
         let hub = TestHub::new(&ids);

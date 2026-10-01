@@ -33,7 +33,20 @@
 //! Low-level group, scalar, and lattice arithmetic is provided by the
 //! [`purecrypto`](https://github.com/KarpelesLab/purecrypto) crate. This crate
 //! contains no hand-rolled field arithmetic of its own.
+//!
+//! ## `no_std`
+//!
+//! The crate is `#![no_std]` and needs only `alloc`. The default `std` feature
+//! adds:
+//!
+//! - OS randomness. Without `std` (outside `wasm32-unknown-unknown`, where the
+//!   host supplies entropy), register a CSPRNG with
+//!   [`rng::set_entropy_source`] before starting any session.
+//! - The blocking `wait()` on every session type. Without `std`, poll
+//!   `try_result()` after feeding each inbound message instead.
+//! - OS-backed locks; the `no_std` build uses spin locks.
 
+#![no_std]
 #![forbid(unsafe_code)]
 // The shared `tss` helpers are only partly reachable when a subset of the
 // protocols is enabled; dead-code analysis stays on for the full build.
@@ -49,6 +62,16 @@
     allow(dead_code)
 )]
 
+#[macro_use]
+extern crate alloc;
+
+// Tests always link `std` (threads, the in-process test hub, `f64::exp`).
+#[cfg(any(feature = "std", test))]
+extern crate std;
+
+mod prelude;
+pub mod rng;
+mod sync;
 pub mod tss;
 
 /// Shared FROST core (RFC 9591), used by the Ed25519 and ristretto255 variants.

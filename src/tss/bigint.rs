@@ -13,6 +13,7 @@
 //! All values exchanged by these protocols are non-negative; a leading `-` on
 //! input is rejected.
 
+use crate::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A non-negative big integer that (de)serializes as a bare decimal JSON number,
@@ -123,13 +124,13 @@ pub fn decimal_to_be(s: &str) -> Result<Vec<u8>, DecimalError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DecimalError(&'static str);
 
-impl std::fmt::Display for DecimalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for DecimalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "invalid decimal integer: {}", self.0)
     }
 }
 
-impl std::error::Error for DecimalError {}
+impl core::error::Error for DecimalError {}
 
 fn strip_leading_zeros(b: &[u8]) -> &[u8] {
     let start = b.iter().position(|&x| x != 0).unwrap_or(b.len());

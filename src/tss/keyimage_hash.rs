@@ -19,6 +19,7 @@
 //! purecrypto's enum: a 32-byte digest for curve-point candidates, and a
 //! 64-byte one for unbiased reduction into a scalar field.
 
+use crate::prelude::*;
 pub use purecrypto::hash::HashAlgorithm;
 
 /// The shortest digest a key-image derivation accepts, in bytes. A 32-byte
@@ -120,9 +121,9 @@ mod tests {
     /// Domain separation relies on distinct names and distinct digests.
     #[test]
     fn every_accepted_algorithm_is_distinct() {
-        let mut names = std::collections::HashSet::new();
-        let mut d32 = std::collections::HashSet::new();
-        let mut d64 = std::collections::HashSet::new();
+        let mut names = alloc::collections::BTreeSet::new();
+        let mut d32 = alloc::collections::BTreeSet::new();
+        let mut d64 = alloc::collections::BTreeSet::new();
         for &alg in HashAlgorithm::ALL {
             if validate(alg).is_err() {
                 continue;

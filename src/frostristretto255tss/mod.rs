@@ -19,6 +19,7 @@ mod schnorr;
 mod signature;
 mod signing;
 
+use crate::prelude::*;
 pub use key::{KEY_VERSION, Key};
 pub use keygen::Keygen;
 pub use resharing::Resharing;
@@ -36,8 +37,8 @@ pub enum Error {
     Tss(Box<crate::tss::TssError>),
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Validation(m) => write!(f, "frostristretto255tss: {m}"),
             Error::Serde(e) => write!(f, "frostristretto255tss: json: {e}"),
@@ -46,7 +47,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {

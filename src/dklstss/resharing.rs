@@ -8,6 +8,7 @@ use super::secp::{self, ProjectivePoint, Scalar};
 use super::setup::setup_pairs;
 use super::signing::lagrange_coefficient;
 use super::vss;
+use crate::prelude::*;
 use crate::tss::PartyId;
 use purecrypto::rng::RngCore;
 
@@ -225,7 +226,7 @@ fn assemble(
             xi: xj[i].clone(),
             big_xj: big_xj.clone(),
             ecdsa_pub: pub_key,
-            ot: std::mem::take(&mut ot[i]),
+            ot: core::mem::take(&mut ot[i]),
             chain_code,
         };
         key.validate_basic()?;
@@ -299,8 +300,8 @@ mod tests {
     use super::super::keygen::keygen;
     use super::super::signing::{self, sign};
     use super::*;
+    use crate::rng::SystemRng;
     use purecrypto::hash::sha256;
-    use purecrypto::rng::OsRng;
 
     fn ids(keys: &[u8]) -> Vec<PartyId> {
         PartyId::sort(
@@ -312,7 +313,7 @@ mod tests {
     }
 
     fn check_sig(keys: &[Key], idxs: &[usize], msg: &[u8]) {
-        let sig = sign(keys, idxs, msg, &mut OsRng).unwrap();
+        let sig = sign(keys, idxs, msg, &mut SystemRng).unwrap();
         let e = signing::hash_to_scalar(msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);
@@ -322,11 +323,11 @@ mod tests {
     #[test]
     fn reshare_preserves_key_and_signs() {
         let old_ids = ids(&[1, 2, 3]);
-        let old = keygen(3, 1, &old_ids, &mut OsRng).unwrap();
+        let old = keygen(3, 1, &old_ids, &mut SystemRng).unwrap();
         let pub0 = old[0].ecdsa_pub;
 
         let new_ids = ids(&[11, 12, 13, 14, 15]);
-        let new = reshare(&old, &[0, 1], &new_ids, 2, &mut OsRng).unwrap();
+        let new = reshare(&old, &[0, 1], &new_ids, 2, &mut SystemRng).unwrap();
         assert_eq!(new.len(), 5);
         for k in &new {
             assert!(secp::point_eq(&k.ecdsa_pub, &pub0));
@@ -337,9 +338,9 @@ mod tests {
     #[test]
     fn refresh_preserves_key_and_signs() {
         let id_set = ids(&[1, 2, 3]);
-        let keys = keygen(3, 1, &id_set, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &id_set, &mut SystemRng).unwrap();
         let pub0 = keys[0].ecdsa_pub;
-        let refreshed = refresh(&keys, &mut OsRng).unwrap();
+        let refreshed = refresh(&keys, &mut SystemRng).unwrap();
         for k in &refreshed {
             assert!(secp::point_eq(&k.ecdsa_pub, &pub0));
         }

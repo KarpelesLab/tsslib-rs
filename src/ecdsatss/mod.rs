@@ -34,6 +34,7 @@ pub mod signing;
 #[cfg(test)]
 mod testvec;
 
+use crate::prelude::*;
 pub use import::import_key;
 pub use key::Key;
 pub use keygen::KeygenParty;
@@ -51,8 +52,8 @@ pub enum Error {
     Serde(serde_json::Error),
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Validation(m) => write!(f, "ecdsatss: {m}"),
             Error::Serde(e) => write!(f, "ecdsatss: json: {e}"),
@@ -60,7 +61,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {

@@ -1,10 +1,11 @@
 //! Participant identity.
 
+use crate::prelude::*;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use core::cmp::Ordering;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::cmp::Ordering;
 
 /// A participant in the TSS protocol rounds.
 ///
@@ -82,8 +83,8 @@ impl Ord for PartyId {
     }
 }
 
-impl std::fmt::Display for PartyId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for PartyId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{{{},{}}}", self.index, self.moniker)
     }
 }

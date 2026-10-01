@@ -12,10 +12,11 @@
 //! `mta`; some are consumed only by later phases of the GG18 port.
 #![allow(dead_code)]
 
+use crate::prelude::*;
 use crate::tss::bigint::BigUintDec;
+use core::cmp::Ordering;
 use purecrypto::bignum::{BoxedMontModulus, BoxedUint, inv_mod_boxed};
 use purecrypto::rng::RngCore;
-use std::cmp::Ordering;
 
 // --- construction / conversion ---------------------------------------------
 
@@ -206,7 +207,7 @@ pub(crate) fn gcd(a: &BoxedUint, b: &BoxedUint) -> BoxedUint {
         }
         // Now a, b both odd; ensure a <= b then subtract.
         if gt(&a, &b) {
-            std::mem::swap(&mut a, &mut b);
+            core::mem::swap(&mut a, &mut b);
         }
         b = b.sub(&a);
         if b.is_zero() {
@@ -494,7 +495,7 @@ pub(crate) fn jacobi(a: &BoxedUint, n: &BoxedUint) -> i32 {
                 result = -result;
             }
         }
-        std::mem::swap(&mut a, &mut n);
+        core::mem::swap(&mut a, &mut n);
         if mod_small(&a, 4) == 3 && mod_small(&n, 4) == 3 {
             result = -result;
         }
@@ -506,7 +507,7 @@ pub(crate) fn jacobi(a: &BoxedUint, n: &BoxedUint) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn be_roundtrip_and_dec() {
@@ -554,7 +555,7 @@ mod tests {
 
     #[test]
     fn primality() {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         assert!(is_probable_prime(&u64(2), &mut rng, 10));
         assert!(is_probable_prime(&u64(97), &mut rng, 10));
         assert!(is_probable_prime(&u64(7919), &mut rng, 10));
@@ -564,7 +565,7 @@ mod tests {
 
     #[test]
     fn safe_prime_small() {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let p = generate_safe_prime(20, &mut rng);
         assert!(is_probable_prime(&p, &mut rng, 20));
         let q = sub(&p, &one());

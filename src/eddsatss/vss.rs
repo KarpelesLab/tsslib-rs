@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use super::ed;
+use crate::prelude::*;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use purecrypto::rng::RngCore;
 
@@ -122,7 +123,7 @@ mod tests {
 
     #[test]
     fn create_rejects_ids_that_leak_or_collide() {
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let id = |b: &[u8]| ed::scalar_from_be(b);
         let secret = random_scalar(&mut rng);
         let order = hex::decode("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")

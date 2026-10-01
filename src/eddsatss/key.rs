@@ -10,6 +10,7 @@
 
 use super::Error;
 use super::ed::{self, EcPointJson};
+use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
@@ -91,7 +92,7 @@ impl Key {
                 "key: Ks and BigXj length mismatch".into(),
             ));
         }
-        for p in self.big_xj.iter().chain(std::iter::once(&self.eddsa_pub)) {
+        for p in self.big_xj.iter().chain(core::iter::once(&self.eddsa_pub)) {
             if p.curve != ed::CURVE_NAME {
                 return Err(Error::Validation(format!(
                     "key: unexpected curve {}",

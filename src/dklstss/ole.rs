@@ -40,6 +40,7 @@
 use super::Error;
 use super::otext::{self, ExtReceiver, ExtSender, ExtendMsg1};
 use super::secp::Scalar;
+use crate::prelude::*;
 
 /// Number of OT-extension rows consumed (secp256k1 scalar bit length).
 const SCALAR_BITS: usize = 256;
@@ -145,14 +146,15 @@ mod tests {
     use super::super::baseot;
     use super::super::secp;
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     fn ot_setup() -> (ExtSender, ExtReceiver) {
         let sid = b"ole-base";
         let mut delta = [0u8; otext::DELTA_BYTES];
-        OsRng.fill_bytes(&mut delta);
-        let (bs, m1) = baseot::Sender::new(sid, otext::KAPPA, &mut OsRng);
-        let (br, m2) = baseot::Receiver::new(sid, otext::KAPPA, &delta, &m1, &mut OsRng).unwrap();
+        SystemRng.fill_bytes(&mut delta);
+        let (bs, m1) = baseot::Sender::new(sid, otext::KAPPA, &mut SystemRng);
+        let (br, m2) =
+            baseot::Receiver::new(sid, otext::KAPPA, &delta, &m1, &mut SystemRng).unwrap();
         let (k0, k1) = bs.finalize(&m2).unwrap();
         let chosen = br.finalize();
         (
@@ -168,8 +170,8 @@ mod tests {
         // Alice is the OT-extension receiver; Bob is the sender.
         let (ext_sender, ext_receiver) = ot_setup();
         let sid = b"ole-session";
-        let alpha = secp::random_scalar(&mut OsRng);
-        let beta = secp::random_scalar(&mut OsRng);
+        let alpha = secp::random_scalar(&mut SystemRng);
+        let beta = secp::random_scalar(&mut SystemRng);
 
         let (alice_msg, state) = alice_step1(sid, &ext_receiver, &alpha).unwrap();
         let (bob_msg, u_b) = bob_step1(sid, &ext_sender, &beta, &alice_msg).unwrap();

@@ -1,6 +1,7 @@
 //! FROST(ristretto255, SHA-512) ciphersuite — RFC 9591 §6.2.
 
 use super::{Ciphersuite, Scalar};
+use crate::prelude::*;
 use purecrypto::ec::ristretto255::{CompressedRistretto, RistrettoPoint};
 use purecrypto::hash::sha512;
 

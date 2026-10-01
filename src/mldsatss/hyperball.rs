@@ -9,55 +9,90 @@
 //! and float arithmetic, so it lives here rather than being field arithmetic.
 //! Byte-identical to Go `mldsa` `SampleHyperball44` / `FVec44`.
 
+use crate::prelude::*;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::hazmat::{N, Poly, Q};
-use std::sync::OnceLock;
 
 const L: usize = 4;
 const K: usize = 4;
 /// Length of an [`FVec`]: `N · (L + K)` float lanes.
 pub const FVEC_LEN: usize = N * (L + K);
 
+// Only the test derivation of [`HYPERBALL_CDT`] reads σ at run time.
+#[cfg_attr(not(test), allow(dead_code))]
 const HYPERBALL_SIGMA: f64 = 8.0;
 const HYPERBALL_CDT_SIZE: usize = 64;
 const HYPERBALL_BYTES_PER_SAMPLE: usize = 9;
 
-/// `hyperball_cdt()[k] = floor(2^64 · Pr[|X| ≤ k])` for `X ~ D_σ` over `Z`.
-/// Computed once from `exp`; the table is input-independent, so the non-CT
-/// `exp` here does not affect the side-channel posture of [`sample_hyperball`].
-fn hyperball_cdt() -> &'static [u64; HYPERBALL_CDT_SIZE] {
-    static CDT: OnceLock<[u64; HYPERBALL_CDT_SIZE]> = OnceLock::new();
-    CDT.get_or_init(|| {
-        let sigma2 = HYPERBALL_SIGMA * HYPERBALL_SIGMA;
-        let tail_extent: i64 = HYPERBALL_CDT_SIZE as i64 + 16;
-        let mut rho = 0.0f64;
-        let mut k = -tail_extent;
-        while k <= tail_extent {
-            rho += (-((k * k) as f64) / (2.0 * sigma2)).exp();
-            k += 1;
-        }
-        let scale = (2.0f64).powi(64);
-        let mut cdt = [0u64; HYPERBALL_CDT_SIZE];
-        let mut acc = 0.0f64;
-        for (k, slot) in cdt.iter_mut().enumerate() {
-            if k == 0 {
-                acc = 1.0 / rho;
-            } else {
-                acc += 2.0 * (-((k * k) as f64) / (2.0 * sigma2)).exp() / rho;
-            }
-            let scaled = acc * scale;
-            // `f64 as u64` saturates to u64::MAX / 0 (matches the Go clamp).
-            *slot = if scaled >= scale {
-                u64::MAX
-            } else if scaled <= 0.0 {
-                0
-            } else {
-                scaled as u64
-            };
-        }
-        cdt
-    })
-}
+/// `HYPERBALL_CDT[k] = floor(2^64 · Pr[|X| ≤ k])` for `X ~ D_σ` over `Z`.
+/// Input-independent; frozen here so the `no_std` build needs no `exp`. The
+/// `cdt_matches_go_derivation` test recomputes it the way Go does.
+const HYPERBALL_CDT: [u64; HYPERBALL_CDT_SIZE] = [
+    0x0cc42299ea1b2880,
+    0x26198a31e7087c00,
+    0x3ed8b5d2ebc74a00,
+    0x56a52f21ad2a4c00,
+    0x6d2d6c23cdb0f800,
+    0x822e0300bd88c000,
+    0x9573d8f06abcd800,
+    0xa6dd324e9aaf6000,
+    0xb659a515b43b0000,
+    0xc3e90825cd5eb800,
+    0xcf998defe6572000,
+    0xd98546808e29e800,
+    0xe1cf4aabf7392800,
+    0xe8a0d08e5065a800,
+    0xee2661dc002b3000,
+    0xf28d606945e1e800,
+    0xf601f6f022e94000,
+    0xf8ad856ef1d0a000,
+    0xfab58b2e9988d800,
+    0xfc3b05c2c1bdd800,
+    0xfd5a34c819b30000,
+    0xfe2aadde0e9c9000,
+    0xfebfab0871b6a000,
+    0xff287eb1d119d800,
+    0xff711b36d077b000,
+    0xffa29f7bab6d7800,
+    0xffc3dded6e81c800,
+    0xffd9d6fcdb6a4000,
+    0xffe82348c40e3000,
+    0xfff14c288123b800,
+    0xfff7130d3c4e6000,
+    0xfffaa9514aa8a000,
+    0xfffcdaa46700b800,
+    0xfffe2c740ced1800,
+    0xfffef4998bdc6000,
+    0xffff69581cee7800,
+    0xffffac62863b7000,
+    0xffffd249459f1800,
+    0xffffe761aa0ed000,
+    0xfffff2f0d5ca7000,
+    0xfffff92d3023a000,
+    0xfffffc7d0132d000,
+    0xfffffe384bbeb000,
+    0xffffff1c7b8db000,
+    0xffffff901f3e9800,
+    0xffffffc9d112f000,
+    0xffffffe627c54000,
+    0xfffffff3dbe99800,
+    0xfffffffa6209d800,
+    0xfffffffd70cf9000,
+    0xfffffffeda003800,
+    0xffffffff7e143000,
+    0xffffffffc7758800,
+    0xffffffffe7c49800,
+    0xfffffffff5c5d800,
+    0xfffffffffbbfd800,
+    0xfffffffffe42a800,
+    0xffffffffff4c8800,
+    0xffffffffffb8c800,
+    0xffffffffffe43000,
+    0xfffffffffff55000,
+    0xfffffffffffbf800,
+    0xfffffffffffe8000,
+    0xffffffffffff7800,
+];
 
 /// Returns `1` if `a ≥ b` (unsigned), `0` otherwise, in constant time.
 fn ct_ge_u64(a: u64, b: u64) -> u64 {
@@ -68,14 +103,26 @@ fn ct_ge_u64(a: u64, b: u64) -> u64 {
 /// the input bytes. `mag_bytes` is compared against the CDT; `sign_byte`'s LSB
 /// picks the sign.
 fn ct_sample_d_gaussian(mag_bytes: u64, sign_byte: u8) -> i32 {
-    let cdt = hyperball_cdt();
     let mut k: u64 = 0;
-    for &entry in cdt.iter().take(HYPERBALL_CDT_SIZE - 1) {
+    for &entry in HYPERBALL_CDT.iter().take(HYPERBALL_CDT_SIZE - 1) {
         k += ct_ge_u64(mag_bytes, entry);
     }
     let mag = k as i32;
     let sign_mask = -((sign_byte & 1) as i32);
     (mag ^ sign_mask) - sign_mask
+}
+
+/// `x` rounded to the nearest integer, ties away from zero: `f64::round` (Go
+/// `math.Round`) without `std`, saturating to `i32` like `as i32`. Exact for
+/// `|x| < 2^52`, where `x - trunc(x)` is representable; larger doubles are
+/// already integers. No data-dependent branch on the (secret) value.
+fn round_ties_away(x: f64) -> i32 {
+    let t = x as i64; // trunc toward zero; NaN -> 0
+    let frac = x - t as f64;
+    let r = t
+        .saturating_add((frac >= 0.5) as i64)
+        .saturating_sub((frac <= -0.5) as i64);
+    r.clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
 /// `floor(sqrt(n))` via branch-free digit-by-digit iteration (32 rounds).
@@ -144,7 +191,7 @@ impl FVec {
     pub fn round_into(&self, s1: &mut [Poly; L], s2: &mut [Poly; K]) {
         for i in 0..(L + K) {
             for j in 0..N {
-                let mut u = self.v[i * N + j].round() as i32;
+                let mut u = round_ties_away(self.v[i * N + j]);
                 let t = u >> 31;
                 u += t & Q as i32;
                 if u >= Q as i32 {
@@ -230,6 +277,77 @@ pub fn sample_hyperball(p: &mut FVec, r: f64, nu: f64, rhop: &[u8; 64], nonce: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Go derivation of the CDT (`exp`-based), run with `std`'s floats.
+    fn derive_cdt() -> [u64; HYPERBALL_CDT_SIZE] {
+        let sigma2 = HYPERBALL_SIGMA * HYPERBALL_SIGMA;
+        let tail_extent: i64 = HYPERBALL_CDT_SIZE as i64 + 16;
+        let mut rho = 0.0f64;
+        let mut k = -tail_extent;
+        while k <= tail_extent {
+            rho += (-((k * k) as f64) / (2.0 * sigma2)).exp();
+            k += 1;
+        }
+        let scale = (2.0f64).powi(64);
+        let mut cdt = [0u64; HYPERBALL_CDT_SIZE];
+        let mut acc = 0.0f64;
+        for (k, slot) in cdt.iter_mut().enumerate() {
+            if k == 0 {
+                acc = 1.0 / rho;
+            } else {
+                acc += 2.0 * (-((k * k) as f64) / (2.0 * sigma2)).exp() / rho;
+            }
+            let scaled = acc * scale;
+            // `f64 as u64` saturates to u64::MAX / 0 (matches the Go clamp).
+            *slot = if scaled >= scale {
+                u64::MAX
+            } else if scaled <= 0.0 {
+                0
+            } else {
+                scaled as u64
+            };
+        }
+        cdt
+    }
+
+    #[test]
+    fn cdt_matches_go_derivation() {
+        assert_eq!(derive_cdt(), HYPERBALL_CDT);
+    }
+
+    #[test]
+    fn round_matches_std() {
+        let mut cases = std::vec![
+            0.0,
+            -0.0,
+            0.5,
+            -0.5,
+            1.5,
+            -1.5,
+            2.5,
+            -2.5,
+            0.49999999999999994,
+            -0.49999999999999994,
+            4503599627370495.5,
+            8380416.5,
+            -8380416.5,
+            1e300,
+            -1e300,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        let mut x = 0x9e3779b97f4a7c15u64;
+        for _ in 0..100_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            cases.push((x as i64 as f64) / 2f64.powi((x % 40) as i32));
+        }
+        for c in cases {
+            assert_eq!(round_ties_away(c), c.round() as i32, "round({c})");
+        }
+    }
 
     #[test]
     fn deterministic_in_seed_and_nonce() {

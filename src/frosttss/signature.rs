@@ -1,5 +1,6 @@
 //! Output of a threshold FROST(Ed25519) signing operation.
 
+use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// The result of a FROST(Ed25519) signing run.

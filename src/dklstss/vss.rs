@@ -1,6 +1,7 @@
 //! Feldman verifiable secret sharing over secp256k1 (for DKLs keygen).
 
 use super::secp::{self, ProjectivePoint, Scalar};
+use crate::prelude::*;
 use purecrypto::rng::RngCore;
 
 /// Creates a degree-`t` sharing of `secret` for recipient ids `ids`. Returns the
@@ -68,15 +69,15 @@ fn eval(poly: &[Scalar], x: &Scalar) -> Scalar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn shares_verify() {
         let ids: Vec<Scalar> = (1u8..=4)
             .map(|i| secp::scalar_from_be_reduce(&[i]))
             .collect();
-        let secret = secp::random_scalar(&mut OsRng);
-        let (commitments, shares) = create(2, &secret, &ids, &mut OsRng);
+        let secret = secp::random_scalar(&mut SystemRng);
+        let (commitments, shares) = create(2, &secret, &ids, &mut SystemRng);
         for (id, sh) in ids.iter().zip(shares.iter()) {
             assert!(verify(id, sh, 2, &commitments));
         }
@@ -88,8 +89,8 @@ mod tests {
         let ids: Vec<Scalar> = (1u8..=3)
             .map(|i| secp::scalar_from_be_reduce(&[i]))
             .collect();
-        let secret = secp::random_scalar(&mut OsRng);
-        let (commitments, shares) = create(1, &secret, &ids, &mut OsRng);
+        let secret = secp::random_scalar(&mut SystemRng);
+        let (commitments, shares) = create(1, &secret, &ids, &mut SystemRng);
         let bad = shares[0].add(&Scalar::ONE);
         assert!(!verify(&ids[0], &bad, 1, &commitments));
     }

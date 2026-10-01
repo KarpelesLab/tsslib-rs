@@ -12,6 +12,7 @@ use super::Error;
 use super::key::{Key, PairOTState};
 use super::otext::{self, ExtReceiver, ExtSender};
 use super::secp::{self, Scalar};
+use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use serde::{Deserialize, Serialize};
@@ -260,8 +261,8 @@ mod tests {
     use super::super::keygen::keygen;
     use super::super::signing::sign;
     use super::*;
+    use crate::rng::SystemRng;
     use purecrypto::hash::sha256;
-    use purecrypto::rng::OsRng;
 
     fn party_ids(n: usize) -> Vec<PartyId> {
         PartyId::sort(
@@ -275,7 +276,7 @@ mod tests {
     #[test]
     fn key_json_roundtrip_then_sign() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let loaded: Vec<Key> = keys
             .iter()
             .map(|k| Key::from_json(&k.to_json().unwrap()).unwrap())
@@ -297,7 +298,7 @@ mod tests {
             }
         }
         let msg = sha256(b"reloaded sign");
-        let sig = sign(&loaded, &[0, 2], &msg, &mut OsRng).unwrap();
+        let sig = sign(&loaded, &[0, 2], &msg, &mut SystemRng).unwrap();
         let e = super::super::signing::hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);
@@ -312,7 +313,7 @@ mod tests {
     #[test]
     fn save_format_shape_matches_go() {
         let ids = party_ids(2);
-        let keys = keygen(2, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(2, 1, &ids, &mut SystemRng).unwrap();
         let v: serde_json::Value = serde_json::from_str(&keys[0].to_json().unwrap()).unwrap();
         assert_eq!(v["format"], "dklstss-key");
         assert_eq!(v["version"], 4);
@@ -335,8 +336,8 @@ mod tests {
 mod go_interop_tests {
     use super::super::signing::{self, sign};
     use super::*;
+    use crate::rng::SystemRng;
     use purecrypto::hash::sha256;
-    use purecrypto::rng::OsRng;
 
     /// Loads the real Go-generated DKLs23 keys (3-party, t=1) and signs.
     #[test]
@@ -375,7 +376,7 @@ mod go_interop_tests {
 
         // Sign with parties 0 and 1 using the loaded Go keys + restored OT state.
         let msg = sha256(b"go dkls key signs in rust");
-        let sig = sign(&keys, &[0, 1], &msg, &mut OsRng).expect("sign with Go keys");
+        let sig = sign(&keys, &[0, 1], &msg, &mut SystemRng).expect("sign with Go keys");
         let e = signing::hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);

@@ -12,6 +12,7 @@ use super::Error;
 use super::key::Key;
 use super::signing::Signing;
 use crate::frost::{Ciphersuite, Ed25519, Scalar, scalar_from_be_mod_l};
+use crate::prelude::*;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::{Parameters, PartyId};
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
@@ -153,10 +154,10 @@ fn strip(b: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
     use crate::frost::random_scalar;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     fn import_test_key() -> (Scalar, Key) {
-        let priv_scalar = random_scalar(&mut OsRng);
+        let priv_scalar = random_scalar(&mut SystemRng);
         let party = PartyId::new("imp", "imp", vec![7]);
         (
             priv_scalar.clone(),

@@ -6,6 +6,7 @@ use super::Error;
 use super::key::{Key, Signature};
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::{ole, ole_check};
+use crate::prelude::*;
 use purecrypto::rng::RngCore;
 
 /// Signs `hash` with the `t+1` parties named by `signer_idx`.
@@ -318,7 +319,7 @@ pub(crate) fn is_high_s(s: &Scalar) -> bool {
         0xff, 0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d, 0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b,
         0x20, 0xa0,
     ];
-    cmp_be(&s.to_bytes_be(), &HALF_N) == std::cmp::Ordering::Greater
+    cmp_be(&s.to_bytes_be(), &HALF_N) == core::cmp::Ordering::Greater
 }
 
 pub(crate) fn make_sid(ssid: &[u8], kind: &str, alice: usize, bob: usize) -> Vec<u8> {
@@ -340,7 +341,7 @@ pub(crate) fn pad32(be: &[u8]) -> Vec<u8> {
     out
 }
 
-pub(crate) fn cmp_be(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+pub(crate) fn cmp_be(a: &[u8], b: &[u8]) -> core::cmp::Ordering {
     let sa = strip(a);
     let sb = strip(b);
     sa.len().cmp(&sb.len()).then_with(|| sa.cmp(sb))
@@ -355,8 +356,8 @@ fn strip(b: &[u8]) -> &[u8] {
 mod tests {
     use super::super::keygen::keygen;
     use super::*;
+    use crate::rng::SystemRng;
     use purecrypto::hash::sha256;
-    use purecrypto::rng::OsRng;
 
     fn party_ids(n: usize) -> Vec<crate::tss::PartyId> {
         crate::tss::PartyId::sort(
@@ -370,9 +371,9 @@ mod tests {
     #[test]
     fn keygen_sign_verify_2_of_3() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let msg = sha256(b"hello dkls");
-        let sig = sign(&keys, &[0, 2], &msg, &mut OsRng).unwrap();
+        let sig = sign(&keys, &[0, 2], &msg, &mut SystemRng).unwrap();
 
         // Independently verify under the joint public key.
         let e = hash_to_scalar(&msg);
@@ -385,9 +386,9 @@ mod tests {
     #[test]
     fn keygen_sign_verify_3_of_5() {
         let ids = party_ids(5);
-        let keys = keygen(5, 2, &ids, &mut OsRng).unwrap();
+        let keys = keygen(5, 2, &ids, &mut SystemRng).unwrap();
         let msg = sha256(b"another message");
-        let sig = sign(&keys, &[1, 3, 4], &msg, &mut OsRng).unwrap();
+        let sig = sign(&keys, &[1, 3, 4], &msg, &mut SystemRng).unwrap();
         let e = hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);
@@ -400,9 +401,9 @@ mod tests {
     #[test]
     fn keygen_sign_checked_verify_2_of_3() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let msg = sha256(b"hello dkls checked");
-        let sig = sign_checked(&keys, &[0, 2], &msg, &mut OsRng).unwrap();
+        let sig = sign_checked(&keys, &[0, 2], &msg, &mut SystemRng).unwrap();
 
         let e = hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
@@ -414,9 +415,9 @@ mod tests {
     #[test]
     fn keygen_sign_checked_verify_3_of_5() {
         let ids = party_ids(5);
-        let keys = keygen(5, 2, &ids, &mut OsRng).unwrap();
+        let keys = keygen(5, 2, &ids, &mut SystemRng).unwrap();
         let msg = sha256(b"checked another message");
-        let sig = sign_checked(&keys, &[1, 3, 4], &msg, &mut OsRng).unwrap();
+        let sig = sign_checked(&keys, &[1, 3, 4], &msg, &mut SystemRng).unwrap();
         let e = hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);
@@ -431,12 +432,12 @@ mod tests {
     #[test]
     fn sign_checked_matches_default_validity() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let msg = sha256(b"checked vs default");
         let e = hash_to_scalar(&msg);
 
-        let def = sign(&keys, &[0, 1], &msg, &mut OsRng).unwrap();
-        let chk = sign_checked(&keys, &[0, 1], &msg, &mut OsRng).unwrap();
+        let def = sign(&keys, &[0, 1], &msg, &mut SystemRng).unwrap();
+        let chk = sign_checked(&keys, &[0, 1], &msg, &mut SystemRng).unwrap();
         for sig in [&def, &chk] {
             let r = secp::scalar_from_be_reduce(&sig.r);
             let s = secp::scalar_from_be_reduce(&sig.s);

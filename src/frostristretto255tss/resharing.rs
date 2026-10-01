@@ -14,16 +14,18 @@ use crate::frost::binding::lagrange_coefficient;
 use crate::frost::{
     Ciphersuite, Ristretto255, Scalar, aead, encode_scalar, scalar_from_be_mod_l, vss,
 };
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use purecrypto::ec::ristretto255::RistrettoPoint;
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 
 const ROUND1: &str = "frost:ristretto255:reshare:round1";
 const ROUND2: &str = "frost:ristretto255:reshare:round2";
@@ -99,8 +101,8 @@ struct State {
     v_decommit: Vec<u8>,
     eph_priv: [u8; 32],
     eph_pub: [u8; 32],
-    new_eph_pubs: HashMap<Vec<u8>, [u8; 32]>,
-    new_session_nonces: HashMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
+    new_eph_pubs: BTreeMap<Vec<u8>, [u8; 32]>,
+    new_session_nonces: BTreeMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
     // new member
     group_pub_key: Option<RistrettoPoint>,
     my_eph_priv: [u8; 32],
@@ -145,11 +147,11 @@ impl Resharing {
             // share. Sampled before any old-side round runs: a dual member's
             // `round3_old` seals to its own entry and may fire before
             // `round2_new` does.
-            let mut rng = OsRng;
+            let mut rng = SystemRng;
             let (my_eph_priv, my_eph_pub) = aead::new_ephemeral_key(&mut rng);
             let mut my_nonce = [0u8; SESSION_NONCE_LEN];
             rng.fill_bytes(&mut my_nonce);
-            let mut st = shared.state.lock().unwrap();
+            let mut st = shared.state.lock();
             st.my_eph_priv = my_eph_priv;
             st.my_eph_pub = my_eph_pub;
             st.my_session_nonce = my_nonce;
@@ -183,6 +185,7 @@ impl Resharing {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> ReshareResult {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -193,13 +196,13 @@ impl Resharing {
 
 impl Shared {
     fn deliver(&self, r: ReshareResult) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1_old(self: &Arc<Self>, input: Key) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let me = self.params.party_id().clone();
         let subset = input.subset_for_parties(self.params.old_parties())?;
         if self.params.old_threshold() + 1 > subset.ks.len() {
@@ -241,7 +244,7 @@ impl Shared {
         };
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.new_shares = new_shares;
             st.v_decommit = v_decommit;
             st.eph_priv = eph_priv;
@@ -249,7 +252,7 @@ impl Shared {
         }
 
         for pj in self.params.new_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal {
+            if pj.cmp_key(&me) != core::cmp::Ordering::Equal {
                 self.send_to(ROUND1, &r1, pj)?;
             }
         }
@@ -279,7 +282,7 @@ impl Shared {
     }
 
     fn harvest_new_eph_keys(&self, others: &[PartyId], msgs: &[JsonMessage]) -> Result<(), Error> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock();
         for (pid, msg) in others.iter().zip(msgs.iter()) {
             let r2: Round2Msg = json_get(msg)?;
             if r2.eph_pub.len() != aead::EPHEMERAL_KEY_BYTES
@@ -323,7 +326,7 @@ impl Shared {
 
         // Publish the ephemeral key + nonce sampled in `Resharing::new`.
         let (my_eph_pub, my_nonce) = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.group_pub_key = group_pub;
             st.r1 = Some(r1msgs);
             (st.my_eph_pub, st.my_session_nonce)
@@ -334,7 +337,7 @@ impl Shared {
             session_nonce: my_nonce.to_vec(),
         };
         for pj in self.params.old_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+            if pj.cmp_key(&me) != core::cmp::Ordering::Equal
                 && let Err(e) = self.send_to(ROUND2, &r2, pj)
             {
                 return self.deliver(Err(e));
@@ -350,7 +353,7 @@ impl Shared {
             ROUND3_1,
             old_parties.clone(),
             Box::new(move |msgs| {
-                me1.state.lock().unwrap().r3m1 = Some(msgs);
+                me1.state.lock().r3m1 = Some(msgs);
                 me1.try_round4();
             }),
         );
@@ -361,7 +364,7 @@ impl Shared {
             ROUND3_2,
             old_parties,
             Box::new(move |msgs| {
-                me2.state.lock().unwrap().r3m2 = Some(msgs);
+                me2.state.lock().r3m2 = Some(msgs);
                 me2.try_round4();
             }),
         );
@@ -369,9 +372,9 @@ impl Shared {
     }
 
     fn round3_old(self: &Arc<Self>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let (new_shares, v_decommit, eph_priv, eph_pub, new_eph_pubs, new_nonces) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.new_shares.clone(),
                 st.v_decommit.clone(),
@@ -443,7 +446,7 @@ impl Shared {
 
     fn try_round4(self: &Arc<Self>) {
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let ready =
                 !st.round4_started && st.r1.is_some() && st.r3m1.is_some() && st.r3m2.is_some();
             st.round4_started |= ready;
@@ -460,7 +463,7 @@ impl Shared {
         let old_parties = self.params.old_parties().to_vec();
 
         let (r1msgs, r3m1, r3m2, group_pub, my_eph_priv, my_eph_pub, my_nonce) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.r1.clone().unwrap(),
                 st.r3m1.clone().unwrap(),
@@ -585,11 +588,11 @@ impl Shared {
             big_xj,
             group_public_key: group_pub,
         };
-        self.state.lock().unwrap().round5_new_key = Some(new_key.clone());
+        self.state.lock().round5_new_key = Some(new_key.clone());
 
         let ack = Round4Msg {};
         for pj in self.params.old_and_new_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+            if pj.cmp_key(&me) != core::cmp::Ordering::Equal
                 && let Err(e) = self.send_to(ROUND4, &ack, &pj)
             {
                 return self.deliver(Err(e));
@@ -600,7 +603,7 @@ impl Shared {
             // Dual path: the result needs both this key and the other new
             // parties' ACKs. Whichever of `round4_new` / `round5_old` finishes
             // last delivers.
-            if self.state.lock().unwrap().acks_done {
+            if self.state.lock().acks_done {
                 self.deliver(Ok(Some(new_key)));
             }
             return;
@@ -615,7 +618,7 @@ impl Shared {
             ROUND4,
             new_others,
             Box::new(move |_| {
-                let k = me2.state.lock().unwrap().round5_new_key.clone();
+                let k = me2.state.lock().round5_new_key.clone();
                 me2.deliver(Ok(k));
             }),
         );
@@ -629,7 +632,7 @@ impl Shared {
         // Dual member: the ACKs can complete before our own `round4_new` has
         // produced the key; in that case `round4_new` delivers.
         let new_key = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.acks_done = true;
             st.round5_new_key.clone()
         };
@@ -644,7 +647,7 @@ impl Shared {
         self.params
             .new_parties()
             .iter()
-            .filter(|p| p.cmp_key(me) != std::cmp::Ordering::Equal)
+            .filter(|p| p.cmp_key(me) != core::cmp::Ordering::Equal)
             .cloned()
             .collect()
     }
@@ -884,7 +887,7 @@ mod tests {
                     );
                     let input = old_ids
                         .iter()
-                        .position(|o| o.cmp_key(p) == std::cmp::Ordering::Equal)
+                        .position(|o| o.cmp_key(p) == core::cmp::Ordering::Equal)
                         .map(|j| old_keys[j].clone());
                     (i, Resharing::new(params, input).unwrap())
                 })
@@ -896,7 +899,7 @@ mod tests {
                     .unwrap_or_else(|e| panic!("order {order:?}: party {i} failed: {e}"));
                 let is_new = new_ids
                     .iter()
-                    .any(|n| n.cmp_key(&all[*i]) == std::cmp::Ordering::Equal);
+                    .any(|n| n.cmp_key(&all[*i]) == core::cmp::Ordering::Equal);
                 assert_eq!(r.is_some(), is_new, "order {order:?}: party {i}");
                 if let Some(k) = r {
                     k.validate_basic().unwrap();

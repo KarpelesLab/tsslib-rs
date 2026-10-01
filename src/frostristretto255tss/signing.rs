@@ -12,13 +12,15 @@ use crate::frost::binding::{
     lagrange_coefficient, nonce_generate_labeled,
 };
 use crate::frost::{Ciphersuite, Ristretto255, Scalar, encode_scalar};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::ec::ristretto255::RistrettoPoint;
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 
 const ROUND1_TYPE: &str = "frost:ristretto255:sign:round1";
 const ROUND2_TYPE: &str = "frost:ristretto255:sign:round2";
@@ -103,6 +105,7 @@ impl Signing {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<SignatureData, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -113,13 +116,13 @@ impl Signing {
 
 impl Shared {
     fn deliver(&self, r: Result<SignatureData, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1(self: &Arc<Self>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let mut rand = [0u8; 32];
         rng.fill_bytes(&mut rand);
         let di = nonce_generate_labeled::<Ristretto255>(&rand, &self.key.xi, HIDING_LABEL);
@@ -127,7 +130,7 @@ impl Shared {
         let ei = nonce_generate_labeled::<Ristretto255>(&rand, &self.key.xi, BINDING_LABEL);
         let big_d = Ristretto255::mul_base(&di);
         let big_e = Ristretto255::mul_base(&ei);
-        *self.nonces.lock().unwrap() = Some(Nonces {
+        *self.nonces.lock() = Some(Nonces {
             di,
             ei,
             big_d,
@@ -153,7 +156,7 @@ impl Shared {
     }
 
     fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<JsonMessage>) {
-        let nonces = self.nonces.lock().unwrap().take();
+        let nonces = self.nonces.lock().take();
         let Some(nonces) = nonces else {
             return self.deliver(Err(Error::Validation(
                 "round2 without round1 nonces".into(),
@@ -231,14 +234,14 @@ impl Shared {
         self: &Arc<Self>,
         others: &[PartyId],
         commitments: Vec<NonceCommitment<Ristretto255>>,
-        binding_factors: std::collections::HashMap<Vec<u8>, Scalar>,
+        binding_factors: alloc::collections::BTreeMap<Vec<u8>, Scalar>,
         r: RistrettoPoint,
         c: Scalar,
         my_zi: Scalar,
         r2msgs: Vec<JsonMessage>,
     ) {
         let signer_ids: Vec<Vec<u8>> = commitments.iter().map(|cm| cm.identifier.clone()).collect();
-        let big_x_by_id: std::collections::HashMap<&[u8], RistrettoPoint> = self
+        let big_x_by_id: alloc::collections::BTreeMap<&[u8], RistrettoPoint> = self
             .key
             .ks
             .iter()
@@ -337,7 +340,7 @@ mod tests {
 
     fn rand_scalar() -> Scalar {
         let mut b = [0u8; 64];
-        OsRng.fill_bytes(&mut b);
+        SystemRng.fill_bytes(&mut b);
         Scalar::from_bytes_mod_order(&b)
     }
 

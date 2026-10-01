@@ -2,7 +2,8 @@
 //! transport broker.
 
 use super::{MessageBroker, PartyId};
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::sync::Arc;
 
 /// Shared configuration for a single run of a threshold protocol.
 ///
@@ -46,7 +47,7 @@ impl Parameters {
         reindex(&mut parties);
         let self_index = parties
             .iter()
-            .position(|p| p.cmp_key(self_id) == std::cmp::Ordering::Equal)
+            .position(|p| p.cmp_key(self_id) == core::cmp::Ordering::Equal)
             .expect("self_id must be one of the parties");
         Parameters {
             parties,
@@ -168,19 +169,19 @@ impl ReSharingParameters {
     pub fn is_old_committee(&self) -> bool {
         self.old_parties
             .iter()
-            .any(|p| p.cmp_key(&self.self_id) == std::cmp::Ordering::Equal)
+            .any(|p| p.cmp_key(&self.self_id) == core::cmp::Ordering::Equal)
     }
     /// Whether this party is in the new committee.
     pub fn is_new_committee(&self) -> bool {
         self.new_parties
             .iter()
-            .any(|p| p.cmp_key(&self.self_id) == std::cmp::Ordering::Equal)
+            .any(|p| p.cmp_key(&self.self_id) == core::cmp::Ordering::Equal)
     }
     /// This party's index within the old committee, if a member.
     pub fn old_index(&self) -> Option<usize> {
         self.old_parties
             .iter()
-            .position(|p| p.cmp_key(&self.self_id) == std::cmp::Ordering::Equal)
+            .position(|p| p.cmp_key(&self.self_id) == core::cmp::Ordering::Equal)
     }
     /// The old committee followed by the new-only parties: every participant
     /// once. (Go concatenates the two lists; a member of both would then be
@@ -188,7 +189,7 @@ impl ReSharingParameters {
     pub fn old_and_new_parties(&self) -> Vec<PartyId> {
         let mut v = self.old_parties.clone();
         for p in &self.new_parties {
-            if !v.iter().any(|q| q.cmp_key(p) == std::cmp::Ordering::Equal) {
+            if !v.iter().any(|q| q.cmp_key(p) == core::cmp::Ordering::Equal) {
                 v.push(p.clone());
             }
         }

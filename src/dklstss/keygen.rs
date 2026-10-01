@@ -5,6 +5,7 @@ use super::key::Key;
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::setup::setup_pairs;
 use super::vss;
+use crate::prelude::*;
 use crate::tss::PartyId;
 use purecrypto::hash::sha256;
 use purecrypto::rng::RngCore;
@@ -92,7 +93,7 @@ pub fn keygen(
             xi: xj[i].clone(),
             big_xj: big_xj.clone(),
             ecdsa_pub: pub_key,
-            ot: std::mem::take(&mut ot[i]),
+            ot: core::mem::take(&mut ot[i]),
             chain_code,
         };
         key.validate_basic()?;
@@ -129,7 +130,7 @@ fn check_indexes(ids: &[Scalar]) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     pub(crate) fn party_ids(n: usize) -> Vec<PartyId> {
         PartyId::sort(
@@ -143,7 +144,7 @@ mod tests {
     #[test]
     fn keygen_consistent() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         // All parties agree on the public key and commitments.
         for k in &keys[1..] {
             assert!(secp::point_eq(&keys[0].ecdsa_pub, &k.ecdsa_pub));

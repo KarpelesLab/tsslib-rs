@@ -12,6 +12,7 @@ pub(crate) fn fixtures() -> Value {
 mod tests {
     use super::super::key::Key;
     use super::fixtures;
+    use crate::prelude::*;
 
     #[test]
     fn go_keys_load_and_round_trip() {

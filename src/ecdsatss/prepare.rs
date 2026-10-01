@@ -10,6 +10,7 @@
 
 use super::bn::{self, Modulus};
 use super::paillier::PrivateKey;
+use crate::prelude::*;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
 
@@ -113,7 +114,7 @@ impl LocalPreParams {
 mod tests {
     use super::*;
     use crate::ecdsatss::dlnproof;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn peer_modulus_bounds() {
@@ -132,7 +133,7 @@ mod tests {
     #[test]
     #[ignore = "safe-prime generation is slow"]
     fn generate_yields_valid_dln_setup() {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let pp = LocalPreParams::generate(256, &mut rng);
         // h2 = h1^alpha and the dlnproof (witness = Germain factors) verifies.
         let proof = dlnproof::prove(

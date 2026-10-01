@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i;
 use purecrypto::rng::RngCore;
 

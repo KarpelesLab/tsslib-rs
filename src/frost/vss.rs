@@ -5,6 +5,7 @@
 //! verifies against the commitments via `share·G == Σ_j id^j · v_j`.
 
 use super::{Ciphersuite, Scalar, random_scalar, scalar_from_be_mod_l};
+use crate::prelude::*;
 use purecrypto::rng::RngCore;
 
 /// A single Shamir share: the recipient identifier (big-endian, `= PartyId.key`)
@@ -22,13 +23,13 @@ pub struct Share {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VssError(&'static str);
 
-impl std::fmt::Display for VssError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for VssError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.0)
     }
 }
 
-impl std::error::Error for VssError {}
+impl core::error::Error for VssError {}
 
 /// Port of tss-lib `vss.CheckIndexes` plus the `Create` threshold checks:
 /// rejects `threshold < 1`, fewer than `threshold + 1` identifiers, and any
@@ -125,13 +126,13 @@ fn eval(poly: &[Scalar], x: &Scalar) -> Scalar {
 mod tests {
     use super::*;
     use crate::frost::Ed25519;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn shares_verify_and_reconstruct() {
         let ids: Vec<Vec<u8>> = (1u8..=4).map(|i| vec![i]).collect();
-        let secret = random_scalar(&mut OsRng);
-        let (commitments, shares) = create::<Ed25519>(2, &secret, &ids, &mut OsRng).unwrap();
+        let secret = random_scalar(&mut SystemRng);
+        let (commitments, shares) = create::<Ed25519>(2, &secret, &ids, &mut SystemRng).unwrap();
 
         // Every share verifies against the commitments.
         for sh in &shares {
@@ -148,11 +149,11 @@ mod tests {
 
     #[test]
     fn create_rejects_identifier_that_would_receive_the_secret() {
-        let secret = random_scalar(&mut OsRng);
+        let secret = random_scalar(&mut SystemRng);
         // f(0) is the secret, so neither a literal zero nor L may be an id.
         for zero in [vec![0u8], vec![], order_be()] {
             let ids = vec![vec![1], vec![2], zero];
-            assert!(create::<Ed25519>(1, &secret, &ids, &mut OsRng).is_err());
+            assert!(create::<Ed25519>(1, &secret, &ids, &mut SystemRng).is_err());
         }
     }
 
@@ -183,8 +184,8 @@ mod tests {
     #[test]
     fn tampered_share_fails_verification() {
         let ids: Vec<Vec<u8>> = (1u8..=3).map(|i| vec![i]).collect();
-        let secret = random_scalar(&mut OsRng);
-        let (commitments, shares) = create::<Ed25519>(1, &secret, &ids, &mut OsRng).unwrap();
+        let secret = random_scalar(&mut SystemRng);
+        let (commitments, shares) = create::<Ed25519>(1, &secret, &ids, &mut SystemRng).unwrap();
         let bad = shares[0].value.add(&Scalar::ONE);
         assert!(!verify::<Ed25519>(&shares[0].id, &bad, 1, &commitments));
     }
@@ -194,8 +195,8 @@ mod tests {
         // Σ λ_i · v(share_i)·G over t+1 shares == secret·G is implied by verify;
         // here check the constant term commitment matches secret·G directly.
         let ids: Vec<Vec<u8>> = (1u8..=5).map(|i| vec![i]).collect();
-        let secret = random_scalar(&mut OsRng);
-        let (commitments, _) = create::<Ed25519>(3, &secret, &ids, &mut OsRng).unwrap();
+        let secret = random_scalar(&mut SystemRng);
+        let (commitments, _) = create::<Ed25519>(3, &secret, &ids, &mut SystemRng).unwrap();
         assert_eq!(commitments.len(), 4);
         assert!(Ed25519::eq(&commitments[0], &Ed25519::mul_base(&secret)));
     }

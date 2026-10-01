@@ -2,6 +2,7 @@
 //! proof-of-knowledge challenge. Reproduced precisely so a PoK produced by the
 //! Go library verifies here and vice versa.
 
+use crate::prelude::*;
 use purecrypto::hash::sha512_256;
 
 const DELIMITER: u8 = b'$';

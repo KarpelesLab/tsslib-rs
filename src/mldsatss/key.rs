@@ -2,8 +2,9 @@
 
 use super::Error;
 use super::params::{MAX_PARTIES, ThresholdParams44, sharing_pattern};
+use crate::prelude::*;
+use alloc::collections::BTreeMap;
 use purecrypto::mldsa::hazmat::{self, Poly};
-use std::collections::HashMap;
 
 const K: usize = 4; // ML_DSA_44.k
 const L: usize = 4; // ML_DSA_44.l
@@ -52,7 +53,7 @@ pub struct Key44 {
     /// Public `t1` vector (high bits of `t = A·s1 + s2`).
     pub t1: [Poly; K],
     /// Shares keyed by honest-signer mask.
-    pub shares: HashMap<u8, Share44>,
+    pub shares: BTreeMap<u8, Share44>,
 }
 
 /// The signing-set bitmask for `ids`: exactly `t` distinct party ids, each

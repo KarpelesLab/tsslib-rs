@@ -2,6 +2,7 @@
 
 use super::otext::{ExtReceiver, ExtSender};
 use super::secp::{ProjectivePoint, Scalar};
+use crate::prelude::*;
 use crate::tss::PartyId;
 
 /// The two directions of OT-extension state between this party and one peer,
@@ -98,7 +99,8 @@ impl Key {
 #[cfg(test)]
 mod tests {
     use super::super::{keygen, otext};
-    use purecrypto::rng::OsRng;
+    use crate::prelude::*;
+    use crate::rng::SystemRng;
 
     #[test]
     fn zeroize_clears_share_and_ot_state() {
@@ -108,7 +110,7 @@ mod tests {
                 .collect(),
             0,
         );
-        let mut keys = keygen(2, 1, &ids, &mut OsRng).unwrap();
+        let mut keys = keygen(2, 1, &ids, &mut SystemRng).unwrap();
         let mut key = keys.remove(0);
         assert!(!bool::from(key.xi.is_zero()));
         key.zeroize();

@@ -10,6 +10,7 @@
 use super::bn::{self, Modulus};
 use super::paillier::{PrivateKey, PublicKey};
 use super::{Error, secp};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::ec::secp256k1::ProjectivePoint;
@@ -603,7 +604,7 @@ mod tests {
         let (sk, pk) = alice_pk();
         let (nt, h1, h2) = ring_pedersen();
         let session = b"mta-test";
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
 
         let a = bn::u64(0x9876_5432);
         let b = bn::u64(0x1234_5678);
@@ -626,7 +627,7 @@ mod tests {
         let (sk, pk) = alice_pk();
         let (nt, h1, h2) = ring_pedersen();
         let session = b"mta-wc-test";
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
 
         let a = bn::u64(7777);
         let b = bn::u64(31337);
@@ -652,7 +653,7 @@ mod tests {
     /// point X (W_j in signing) is silently skipped.
     #[test]
     fn wc_verification_rejects_proof_without_u() {
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let session = b"mta-wc-no-u";
 
         // Small test-only Paillier key; the ring-Pedersen modulus reuses N
@@ -716,7 +717,7 @@ mod tests {
     fn range_proof_tamper_rejected() {
         let (_sk, pk) = alice_pk();
         let (nt, h1, h2) = ring_pedersen();
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let m = bn::u64(424242);
         let (c, r) = pk.encrypt(&m, &mut rng).unwrap();
         let mut pf = prove_range_alice(&pk, &c, &nt, &h1, &h2, &m, &r, &mut rng);

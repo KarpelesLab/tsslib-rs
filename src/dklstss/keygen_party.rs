@@ -20,15 +20,17 @@ use super::otext::{self, ExtReceiver, ExtSender};
 use super::schnorr::ZkProof;
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::vss;
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use purecrypto::hash::sha256;
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 const TYPE_R1BC: &str = "dkls:keygen:r1bc";
 const TYPE_R1UC: &str = "dkls:keygen:r1uc";
@@ -54,16 +56,16 @@ struct Shared {
 struct State {
     vs: Vec<ProjectivePoint>,
     shares: Vec<Scalar>,
-    base_snd: HashMap<String, baseot::Sender>,
+    base_snd: BTreeMap<String, baseot::Sender>,
 
     r1_bcasts: Vec<KeygenR1Bcast>,
     r1_unicasts: Vec<KeygenR1Unicast>,
     r1_join: u8,
 
-    base_rcv: HashMap<String, baseot::Receiver>,
-    my_delta: HashMap<String, Vec<u8>>,
-    peer_vs: HashMap<String, Vec<ProjectivePoint>>,
-    peer_shares: HashMap<String, Scalar>,
+    base_rcv: BTreeMap<String, baseot::Receiver>,
+    my_delta: BTreeMap<String, Vec<u8>>,
+    peer_vs: BTreeMap<String, Vec<ProjectivePoint>>,
+    peer_shares: BTreeMap<String, Scalar>,
 }
 
 impl KeygenParty {
@@ -78,14 +80,14 @@ impl KeygenParty {
             state: Mutex::new(State {
                 vs: Vec::new(),
                 shares: Vec::new(),
-                base_snd: HashMap::new(),
+                base_snd: BTreeMap::new(),
                 r1_bcasts: Vec::new(),
                 r1_unicasts: Vec::new(),
                 r1_join: 0,
-                base_rcv: HashMap::new(),
-                my_delta: HashMap::new(),
-                peer_vs: HashMap::new(),
-                peer_shares: HashMap::new(),
+                base_rcv: BTreeMap::new(),
+                my_delta: BTreeMap::new(),
+                peer_vs: BTreeMap::new(),
+                peer_shares: BTreeMap::new(),
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -105,6 +107,7 @@ impl KeygenParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<Key, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -117,13 +120,13 @@ impl KeygenParty {
 
 impl Shared {
     fn deliver(&self, r: Result<Key, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let t = self.params.threshold();
         let parties = self.params.parties().to_vec();
         let me = self.params.party_id().clone();
@@ -152,11 +155,7 @@ impl Shared {
             // base-OT Sender; the sid names j as the OT-extension sender.
             let sid = pair_base_sid(&self.ssid, &me.key, &pj.key, &pj.key);
             let (snd, smsg) = baseot::Sender::new(&sid, otext::KAPPA, &mut rng);
-            self.state
-                .lock()
-                .unwrap()
-                .base_snd
-                .insert(peer_key_str(pj), snd);
+            self.state.lock().base_snd.insert(peer_key_str(pj), snd);
 
             let (sx, sy) = secp::affine_be(&smsg.s);
             let (ax, ay) = secp::affine_be(&smsg.pok.alpha);
@@ -172,7 +171,7 @@ impl Shared {
         }
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.vs = vs;
             st.shares = shares;
         }
@@ -205,7 +204,7 @@ impl Shared {
         let decoded: Result<Vec<KeygenR1Bcast>, Error> =
             msgs.iter().map(|m| Ok(json_get(m)?)).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r1_bcasts = d,
                 Err(e) => return self.deliver(Err(e)),
@@ -222,7 +221,7 @@ impl Shared {
         let decoded: Result<Vec<KeygenR1Unicast>, Error> =
             msgs.iter().map(|m| Ok(json_get(m)?)).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r1_unicasts = d,
                 Err(e) => return self.deliver(Err(e)),
@@ -236,8 +235,8 @@ impl Shared {
     }
 
     fn start_echo(self: &Arc<Self>, others: &[PartyId]) {
-        let digests: HashMap<String, B64Bytes> = {
-            let st = self.state.lock().unwrap();
+        let digests: BTreeMap<String, B64Bytes> = {
+            let st = self.state.lock();
             others
                 .iter()
                 .enumerate()
@@ -272,9 +271,9 @@ impl Shared {
         let me = self.params.party_id().clone();
         let self_key = peer_key_str(&me);
 
-        let my_digests: HashMap<String, Vec<u8>> = {
-            let st = self.state.lock().unwrap();
-            let mut m = HashMap::with_capacity(others.len() + 1);
+        let my_digests: BTreeMap<String, Vec<u8>> = {
+            let st = self.state.lock();
+            let mut m = BTreeMap::new();
             m.insert(
                 self_key.clone(),
                 commit_digest(ECHO_TAG, &me, &flatten_to_bytes(&st.vs)),
@@ -295,14 +294,14 @@ impl Shared {
     }
 
     fn round2(self: &Arc<Self>, others: &[PartyId]) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let t = self.params.threshold();
         let me = self.params.party_id().clone();
         let my_id = secp::scalar_from_be_reduce(&me.key);
 
         // Snapshot the round-1 payloads (others order).
         let (bcasts, ucs) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.r1_bcasts.clone(), st.r1_unicasts.clone())
         };
 
@@ -369,7 +368,7 @@ impl Shared {
             };
 
             {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.state.lock();
                 let k = peer_key_str(pid);
                 st.base_rcv.insert(k.clone(), rcvr);
                 st.my_delta.insert(k.clone(), delta);
@@ -407,7 +406,7 @@ impl Shared {
             Err(e) => return self.deliver(Err(Error::Serde(e))),
         };
 
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock();
 
         // x_i = my own share + Σ peer shares (mod n).
         let mut xi = st.shares[self_idx].clone();
@@ -424,7 +423,7 @@ impl Shared {
         // Per-party verification points BigXj = Σ_dealers eval(V_dealer, id_j).
         let mut all_vss: Vec<Vec<ProjectivePoint>> = vec![Vec::new(); n];
         for p in &parties {
-            if p.cmp_key(&me) == std::cmp::Ordering::Equal {
+            if p.cmp_key(&me) == core::cmp::Ordering::Equal {
                 all_vss[p.index as usize] = st.vs.clone();
             } else {
                 all_vss[p.index as usize] = st.peer_vs[&peer_key_str(p)].clone();
@@ -452,7 +451,7 @@ impl Shared {
             // the peer's round-2 R points.
             let idx = others
                 .iter()
-                .position(|p| p.cmp_key(pj) == std::cmp::Ordering::Equal)
+                .position(|p| p.cmp_key(pj) == core::cmp::Ordering::Equal)
                 .expect("peer present");
             let peer_r = match unflatten_point_xy(&r2s[idx].ot_receiver_r) {
                 Ok(v) => v,
@@ -643,7 +642,7 @@ mod tests {
         let keys = run_keygen(&ids, 1);
         // The broker-generated keys must sign via the existing sync signer.
         let hash = [0x42u8; 32];
-        let sig = super::super::sign(&keys, &[0, 1], &hash, &mut OsRng).expect("sign");
+        let sig = super::super::sign(&keys, &[0, 1], &hash, &mut SystemRng).expect("sign");
         assert!(!sig.r.is_empty() && !sig.s.is_empty());
     }
 }

@@ -7,6 +7,7 @@
 //! Ed25519 variant's commitment for 32-byte encodings with leading zeros.
 
 use crate::frost::{Ciphersuite, Ristretto255};
+use crate::prelude::*;
 use purecrypto::ec::ristretto255::RistrettoPoint;
 use purecrypto::hash::sha512;
 use purecrypto::rng::RngCore;
@@ -50,7 +51,7 @@ pub fn verify_commit_elements(
 mod tests {
     use super::*;
     use crate::frost::Scalar;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     fn point(n: u8) -> RistrettoPoint {
         let mut b = [0u8; 32];
@@ -61,7 +62,7 @@ mod tests {
     #[test]
     fn commit_verify_roundtrip() {
         let els = vec![point(1), point(2), point(3)];
-        let (c, d) = commit_elements(&mut OsRng, &els);
+        let (c, d) = commit_elements(&mut SystemRng, &els);
         let got = verify_commit_elements(&c, &d, 3).unwrap();
         for (a, b) in els.iter().zip(got.iter()) {
             assert!(Ristretto255::eq(a, b));
@@ -71,10 +72,10 @@ mod tests {
     #[test]
     fn tampered_fails() {
         let els = vec![point(1), point(2)];
-        let (mut c, d) = commit_elements(&mut OsRng, &els);
+        let (mut c, d) = commit_elements(&mut SystemRng, &els);
         c[0] ^= 1;
         assert!(verify_commit_elements(&c, &d, 2).is_none());
-        let (c2, mut d2) = commit_elements(&mut OsRng, &els);
+        let (c2, mut d2) = commit_elements(&mut SystemRng, &els);
         d2[40] ^= 1;
         assert!(verify_commit_elements(&c2, &d2, 2).is_none());
     }
@@ -82,7 +83,7 @@ mod tests {
     #[test]
     fn wrong_count_fails() {
         let els = vec![point(1), point(2)];
-        let (c, d) = commit_elements(&mut OsRng, &els);
+        let (c, d) = commit_elements(&mut SystemRng, &els);
         assert!(verify_commit_elements(&c, &d, 3).is_none());
     }
 }

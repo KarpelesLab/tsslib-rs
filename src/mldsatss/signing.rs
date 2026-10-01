@@ -18,6 +18,7 @@ use super::Error;
 use super::hyperball::{FVec, sample_hyperball};
 use super::key::Key44;
 use super::params::ThresholdParams44;
+use crate::prelude::*;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{self, D, GAMMA2_88, ML_DSA_44, N, Poly, Q};
@@ -385,7 +386,7 @@ mod tests {
         let signers: Vec<&Key44> = signer_idx.iter().map(|&i| &keys[i]).collect();
         let msg = b"threshold ml-dsa message";
         let ctx = b"ctx";
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let sig = sign44(&signers, &params, msg, ctx, &mut rng).expect("sign succeeds");
         assert!(
             pk.verify(&sig, msg, ctx),
@@ -400,7 +401,7 @@ mod tests {
     fn duplicate_or_out_of_range_signers_are_rejected() {
         let params = get_threshold_params44(2, 6).unwrap();
         let (_pk, keys) = trusted_dealer_keygen44(&[3u8; 32], &params).unwrap();
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         assert!(sign44(&[&keys[0], &keys[0]], &params, b"m", b"", &mut rng).is_err());
         // The share-level entry point enforces the same shape.
         assert!(keys[0].recover_share(0b0000_0001, &params).is_err());
@@ -428,7 +429,7 @@ mod tests {
         let params = get_threshold_params44(2, 2).unwrap();
         let (pk, keys) = trusted_dealer_keygen44(&[5u8; 32], &params).unwrap();
         let signers: Vec<&Key44> = keys.iter().collect();
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let sig = sign44_checked(&pk, &signers, &params, b"hi", b"", &mut rng).unwrap();
         assert!(pk.verify(&sig, b"hi", b""));
     }

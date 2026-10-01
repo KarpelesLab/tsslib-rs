@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use super::bn::{self, Modulus};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
@@ -185,7 +186,7 @@ mod tests {
     fn rust_prove_verify_roundtrip() {
         // Use the fixture's (h1, h2, Ñ); reprove needs the dlog + factors, which
         // the fixture does not expose, so build a fresh small instance here.
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         // Small Sophie-Germain primes p, q with Ñ = (2p+1)(2q+1).
         let (p, sp) = loop {
             let p = bn::rand_bits(64, &mut rng);

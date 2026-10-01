@@ -58,6 +58,34 @@ jobs:
             echo "::endgroup::"
           done
 
+  no_std:
+    name: no_std build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Bare-metal targets have no `std` at all, so any std leak fails to link.
+        target: [thumbv7em-none-eabihf, x86_64-unknown-none, wasm32-unknown-unknown]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Clippy (all protocols, no std)
+        run: >-
+          cargo clippy --target ${{ matrix.target }} --no-default-features
+          --features frosttss,frostristretto255tss,mldsatss,dklstss,ecdsatss,eddsatss
+          -- -D warnings
+
   docs:
     name: Docs build (warnings denied)
     runs-on: ubuntu-latest

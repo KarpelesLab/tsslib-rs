@@ -27,16 +27,17 @@ use super::prepare::LocalPreParams;
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::vss;
 use super::{Error, bn};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
 use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::bignum::BoxedUint;
-use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 const TYPE_R1: &str = "ecdsa:resharing:round1";
 const TYPE_R2_1: &str = "ecdsa:resharing:round2-1";
@@ -169,6 +170,7 @@ impl ResharingParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<Key, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -181,8 +183,8 @@ impl ResharingParty {
 
 impl Shared {
     fn deliver(&self, r: Result<Key, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -193,7 +195,7 @@ impl Shared {
     // --- old committee ---
 
     fn round1_old(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let ssid = self.compute_ssid();
         let new_t = self.params.new_threshold();
 
@@ -217,7 +219,7 @@ impl Shared {
         let (px, py) = secp::coords(&pub_pt);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.ssid = ssid.clone();
             st.vd = vd;
             st.new_shares = shares.iter().map(|s| s.value.clone()).collect();
@@ -243,7 +245,7 @@ impl Shared {
     fn round3_old(self: &Arc<Self>) {
         let new_ids = self.params.new_parties().to_vec();
         let (new_shares, vd) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.new_shares.clone(), st.vd.clone())
         };
         for (j, pj) in new_ids.iter().enumerate() {
@@ -291,7 +293,7 @@ impl Shared {
     }
 
     fn on_r1_new(self: &Arc<Self>, old_ids: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let decoded: Result<Vec<R1Msg>, _> = msgs.iter().map(json_get).collect();
         let r1msgs = match decoded {
             Ok(d) => d,
@@ -358,7 +360,7 @@ impl Shared {
         };
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.ssid = ssid;
             st.ecdsa_pub = ecdsa_pub;
             st.r1msgs = r1msgs;
@@ -410,7 +412,7 @@ impl Shared {
     fn on_r2msg1_new(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R2Msg1>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r2msg1 = d,
                 Err(e) => return self.deliver(Err(Error::from(e))),
@@ -427,7 +429,7 @@ impl Shared {
     fn on_r3msg1_new(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R3Msg1>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r3msg1 = d,
                 Err(e) => return self.deliver(Err(Error::from(e))),
@@ -444,7 +446,7 @@ impl Shared {
     fn on_r3msg2_new(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R3Msg2>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r3msg2 = d,
                 Err(e) => return self.deliver(Err(Error::from(e))),
@@ -459,7 +461,7 @@ impl Shared {
     }
 
     fn round4_new(self: &Arc<Self>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let new_t = self.params.new_threshold();
         let i = self.new_index();
         let new_ids = self.params.new_parties().to_vec();
@@ -477,7 +479,7 @@ impl Shared {
             r3msg2,
             r3msg2_from,
         ) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.ssid.clone(),
                 st.ecdsa_pub.unwrap(),
@@ -543,7 +545,7 @@ impl Shared {
             if !dlnproof::verify(&d1, &h1, &h2, &ntj) || !dlnproof::verify(&d2, &h2, &h1, &ntj) {
                 return self.fail("resharing: DLN proof failed");
             }
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.ntildej[jidx] = Some(ntj);
             st.h1j[jidx] = Some(h1);
             st.h2j[jidx] = Some(h2);
@@ -623,7 +625,7 @@ impl Shared {
         }
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.new_xi = secp::scalar_to_uint(&new_xi);
             st.new_ks = new_ks;
             st.new_big_xjs = new_big_xjs;
@@ -635,7 +637,7 @@ impl Shared {
         for pj in &new_others {
             let jidx = index_of(&new_ids, pj);
             let (ntj, h1, h2) = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 (
                     st.ntildej[jidx].clone().unwrap(),
                     st.h1j[jidx].clone().unwrap(),
@@ -678,7 +680,7 @@ impl Shared {
             let me = Arc::clone(self);
             move |_msgs| {
                 let ready = {
-                    let mut st = me.state.lock().unwrap();
+                    let mut st = me.state.lock();
                     st.r5_join += 1;
                     st.r5_join == 2
                 };
@@ -692,7 +694,7 @@ impl Shared {
     fn on_r4msg1_new(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R4Msg1>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r4msg1 = d,
                 Err(e) => return self.deliver(Err(Error::from(e))),
@@ -707,13 +709,13 @@ impl Shared {
     }
 
     fn round5_new(self: &Arc<Self>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.new_index();
         let new_ids = self.params.new_parties().to_vec();
         let pre = self.pre.clone().unwrap();
 
         let (ssid, r4msg1, r4msg1_from, new_xi, new_ks, new_big_xjs) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.ssid.clone(),
                 st.r4msg1.clone(),
@@ -729,7 +731,7 @@ impl Shared {
         for (k, msg) in r4msg1.iter().enumerate() {
             let jidx = index_of(&new_ids, &r4msg1_from[k]);
             let peer_n = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 st.paillier_pks[jidx].clone().unwrap().n
             };
             let fp = match ProofFac::from_parts(&parts_bytes(&msg.fac_proof)) {
@@ -743,7 +745,7 @@ impl Shared {
         let _ = &mut rng;
 
         // Assemble the new save-data key.
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock();
         let ntilde_j = st
             .ntildej
             .iter()
@@ -1016,8 +1018,8 @@ mod tests {
     use crate::ecdsatss::import::import_key;
     use crate::ecdsatss::prepare::LocalPreParams;
     use crate::ecdsatss::vss::Share;
+    use crate::rng::SystemRng;
     use crate::tss::testhub::ReshareHub;
-    use purecrypto::rng::OsRng;
 
     fn pid(key: u8) -> PartyId {
         PartyId::new(key.to_string(), format!("P{key}"), vec![key])
@@ -1046,7 +1048,7 @@ mod tests {
                     p.clone(),
                     hub.broker(p),
                 );
-                let pre = LocalPreParams::generate(256, &mut OsRng);
+                let pre = LocalPreParams::generate(256, &mut SystemRng);
                 ResharingParty::new(params, input.clone(), Some(pre)).unwrap()
             })
             .collect();
@@ -1074,7 +1076,7 @@ mod tests {
         let (old_t, new_t) = (0usize, 1usize);
 
         let pres: Vec<LocalPreParams> = (0..new_ids.len())
-            .map(|_| LocalPreParams::generate(256, &mut OsRng))
+            .map(|_| LocalPreParams::generate(256, &mut SystemRng))
             .collect();
 
         let mut all = old_ids.clone();

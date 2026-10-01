@@ -41,6 +41,7 @@ use super::Error;
 use super::ole::{self, AliceState, BobMsg};
 use super::otext::{ExtReceiver, ExtSender, ExtendMsg1};
 use super::secp::Scalar;
+use crate::prelude::*;
 
 /// Error message returned when the cross-run consistency check rejects: Bob
 /// used different `β` values in the two parallel ΠMul runs (or tampered with
@@ -138,14 +139,16 @@ mod tests {
     use super::super::otext;
     use super::super::secp;
     use super::*;
-    use purecrypto::rng::{OsRng, RngCore as _};
+    use crate::rng::SystemRng;
+    use purecrypto::rng::RngCore as _;
 
     fn ot_setup() -> (ExtSender, ExtReceiver) {
         let sid = b"ole-check-base";
         let mut delta = [0u8; otext::DELTA_BYTES];
-        OsRng.fill_bytes(&mut delta);
-        let (bs, m1) = baseot::Sender::new(sid, otext::KAPPA, &mut OsRng);
-        let (br, m2) = baseot::Receiver::new(sid, otext::KAPPA, &delta, &m1, &mut OsRng).unwrap();
+        SystemRng.fill_bytes(&mut delta);
+        let (bs, m1) = baseot::Sender::new(sid, otext::KAPPA, &mut SystemRng);
+        let (br, m2) =
+            baseot::Receiver::new(sid, otext::KAPPA, &delta, &m1, &mut SystemRng).unwrap();
         let (k0, k1) = bs.finalize(&m2).unwrap();
         let chosen = br.finalize();
         (
@@ -159,8 +162,8 @@ mod tests {
     fn checked_shares_reconstruct_product() {
         let (ext_sender, ext_receiver) = ot_setup();
         let sid = b"checked-correctness";
-        let alpha = secp::random_scalar(&mut OsRng);
-        let beta = secp::random_scalar(&mut OsRng);
+        let alpha = secp::random_scalar(&mut SystemRng);
+        let beta = secp::random_scalar(&mut SystemRng);
 
         let (m1, m2, state) = checked_alice_step1(sid, &ext_receiver, &alpha).unwrap();
         let (bmsg, u_b) = checked_bob_step1(sid, &ext_sender, &beta, &m1, &m2).unwrap();
@@ -182,9 +185,9 @@ mod tests {
     fn checked_detects_inconsistent_beta() {
         let (ext_sender, ext_receiver) = ot_setup();
         let sid = b"checked-inconsistent";
-        let alpha = secp::random_scalar(&mut OsRng);
-        let beta1 = secp::random_scalar(&mut OsRng);
-        let beta2 = secp::random_scalar(&mut OsRng);
+        let alpha = secp::random_scalar(&mut SystemRng);
+        let beta1 = secp::random_scalar(&mut SystemRng);
+        let beta2 = secp::random_scalar(&mut SystemRng);
 
         let (m1, m2, state) = checked_alice_step1(sid, &ext_receiver, &alpha).unwrap();
 
@@ -216,11 +219,11 @@ mod tests {
     fn checked_does_not_detect_same_offset_in_both_runs() {
         let (ext_sender, ext_receiver) = ot_setup();
         let sid = b"checked-same-offset";
-        let beta = secp::random_scalar(&mut OsRng);
-        let delta = secp::random_scalar(&mut OsRng);
+        let beta = secp::random_scalar(&mut SystemRng);
+        let delta = secp::random_scalar(&mut SystemRng);
         let mut wrong = 0;
         for _ in 0..40 {
-            let alpha = secp::random_scalar(&mut OsRng);
+            let alpha = secp::random_scalar(&mut SystemRng);
             let (m1, m2, state) = checked_alice_step1(sid, &ext_receiver, &alpha).unwrap();
             let (mut bmsg, u_b) = checked_bob_step1(sid, &ext_sender, &beta, &m1, &m2).unwrap();
             bmsg.msg1.corrections[0] = bmsg.msg1.corrections[0].add(&delta);
@@ -240,8 +243,8 @@ mod tests {
     fn checked_detects_tampered_z() {
         let (ext_sender, ext_receiver) = ot_setup();
         let sid = b"checked-tampered-z";
-        let alpha = secp::random_scalar(&mut OsRng);
-        let beta = secp::random_scalar(&mut OsRng);
+        let alpha = secp::random_scalar(&mut SystemRng);
+        let beta = secp::random_scalar(&mut SystemRng);
 
         let (m1, m2, state) = checked_alice_step1(sid, &ext_receiver, &alpha).unwrap();
         let (mut bmsg, _u_b) = checked_bob_step1(sid, &ext_sender, &beta, &m1, &m2).unwrap();

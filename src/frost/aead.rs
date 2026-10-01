@@ -7,6 +7,7 @@
 //! data as `info`) into a ChaCha20-Poly1305 key. The sealed payload is
 //! `nonce(12) || ciphertext || tag(16)`.
 
+use crate::prelude::*;
 use purecrypto::cipher::ChaCha20Poly1305;
 use purecrypto::ec::x25519::x25519;
 use purecrypto::hash::Sha256;
@@ -37,8 +38,8 @@ pub enum AeadError {
     TagMismatch,
 }
 
-impl std::fmt::Display for AeadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for AeadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let m = match self {
             AeadError::SmallSubgroup => "shared secret is all-zero (small-subgroup public key)",
             AeadError::TooShort => "ciphertext too short",
@@ -48,7 +49,7 @@ impl std::fmt::Display for AeadError {
     }
 }
 
-impl std::error::Error for AeadError {}
+impl core::error::Error for AeadError {}
 
 /// Samples a fresh ephemeral X25519 keypair, returning `(private, public)`.
 pub fn new_ephemeral_key(rng: &mut impl RngCore) -> ([u8; 32], [u8; 32]) {
@@ -141,25 +142,25 @@ fn derive_key(shared: &[u8; 32], ad: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn seal_open_roundtrip() {
-        let (a_priv, a_pub) = new_ephemeral_key(&mut OsRng);
-        let (b_priv, b_pub) = new_ephemeral_key(&mut OsRng);
+        let (a_priv, a_pub) = new_ephemeral_key(&mut SystemRng);
+        let (b_priv, b_pub) = new_ephemeral_key(&mut SystemRng);
         let ad = b"frosttss/keygen/r2/v1|context";
         let msg = b"a secret share value";
 
-        let ct = seal_share(&mut OsRng, &a_priv, &b_pub, ad, msg).unwrap();
+        let ct = seal_share(&mut SystemRng, &a_priv, &b_pub, ad, msg).unwrap();
         let pt = open_share(&b_priv, &a_pub, ad, &ct).unwrap();
         assert_eq!(pt.as_slice(), msg);
     }
 
     #[test]
     fn wrong_ad_fails() {
-        let (a_priv, a_pub) = new_ephemeral_key(&mut OsRng);
-        let (b_priv, b_pub) = new_ephemeral_key(&mut OsRng);
-        let ct = seal_share(&mut OsRng, &a_priv, &b_pub, b"ad1", b"x").unwrap();
+        let (a_priv, a_pub) = new_ephemeral_key(&mut SystemRng);
+        let (b_priv, b_pub) = new_ephemeral_key(&mut SystemRng);
+        let ct = seal_share(&mut SystemRng, &a_priv, &b_pub, b"ad1", b"x").unwrap();
         assert_eq!(
             open_share(&b_priv, &a_pub, b"ad2", &ct),
             Err(AeadError::TagMismatch)
@@ -168,9 +169,9 @@ mod tests {
 
     #[test]
     fn tampered_ciphertext_fails() {
-        let (a_priv, a_pub) = new_ephemeral_key(&mut OsRng);
-        let (b_priv, b_pub) = new_ephemeral_key(&mut OsRng);
-        let mut ct = seal_share(&mut OsRng, &a_priv, &b_pub, b"ad", b"hello").unwrap();
+        let (a_priv, a_pub) = new_ephemeral_key(&mut SystemRng);
+        let (b_priv, b_pub) = new_ephemeral_key(&mut SystemRng);
+        let mut ct = seal_share(&mut SystemRng, &a_priv, &b_pub, b"ad", b"hello").unwrap();
         let last = ct.len() - 1;
         ct[last] ^= 0x01;
         assert_eq!(
@@ -181,8 +182,8 @@ mod tests {
 
     #[test]
     fn shared_secret_is_symmetric() {
-        let (a_priv, a_pub) = new_ephemeral_key(&mut OsRng);
-        let (b_priv, b_pub) = new_ephemeral_key(&mut OsRng);
+        let (a_priv, a_pub) = new_ephemeral_key(&mut SystemRng);
+        let (b_priv, b_pub) = new_ephemeral_key(&mut SystemRng);
         assert_eq!(
             shared_secret(&a_priv, &b_pub),
             shared_secret(&b_priv, &a_pub)

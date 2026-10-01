@@ -4,6 +4,7 @@
 //! compressed encoding on the wire and affine `(x, y)` big-endian magnitudes
 //! when hashed into challenges.
 
+use crate::prelude::*;
 pub use purecrypto::ec::secp256k1::{AffinePoint, ProjectivePoint, Scalar};
 use purecrypto::rng::RngCore;
 
@@ -32,7 +33,7 @@ pub fn scalar_from_be_reduce(be: &[u8]) -> Scalar {
     let mut acc = Scalar::from_bytes_be_reduce(&[0u8; 32]);
     let head = b.len() % 32;
     let (first, rest) = b.split_at(head);
-    for chunk in std::iter::once(first).chain(rest.chunks(32)) {
+    for chunk in core::iter::once(first).chain(rest.chunks(32)) {
         let mut buf = [0u8; 32];
         buf[32 - chunk.len()..].copy_from_slice(chunk);
         acc = acc.mul(&two256).add(&Scalar::from_bytes_be_reduce(&buf));
@@ -89,7 +90,7 @@ fn strip(b: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn reduce_handles_inputs_longer_than_32_bytes() {
@@ -105,7 +106,7 @@ mod tests {
 
     #[test]
     fn sec1_roundtrip() {
-        let s = random_scalar(&mut OsRng);
+        let s = random_scalar(&mut SystemRng);
         let p = mul_base(&s);
         let enc = to_sec1_compressed(&p).unwrap();
         assert_eq!(enc.len(), 33);

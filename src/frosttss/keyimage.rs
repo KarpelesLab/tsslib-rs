@@ -63,15 +63,17 @@ use super::key::Key;
 use super::point::point_to_affine_be;
 use crate::frost::binding::lagrange_coefficient;
 use crate::frost::{Ciphersuite, Ed25519, Scalar, encode_scalar, random_scalar};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i_tagged;
 use crate::tss::keyimage_hash::{digest32, digest64, validate as validate_hash};
 use crate::tss::{HashAlgorithm, JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 
 const ROUND1_TYPE: &str = "frost:ed25519:keyimage:round1";
 
@@ -208,7 +210,7 @@ impl Key {
             &me_id,
             hash,
         );
-        let proof = Dleq::prove(&session, &point, &w, &statement, &partial, &mut OsRng);
+        let proof = Dleq::prove(&session, &point, &w, &statement, &partial, &mut SystemRng);
 
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {
@@ -238,6 +240,7 @@ impl KeyImageParty {
     }
 
     /// Blocks until the ceremony completes.
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<KeyImageSecret, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -250,8 +253,8 @@ impl KeyImageParty {
 
 impl Shared {
     fn deliver(&self, r: Result<KeyImageSecret, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -290,7 +293,7 @@ impl Shared {
             .collect();
 
         // Verification share Y_j by identifier.
-        let big_x_by_id: std::collections::HashMap<&[u8], EdwardsPoint> = self
+        let big_x_by_id: alloc::collections::BTreeMap<&[u8], EdwardsPoint> = self
             .key
             .ks
             .iter()
@@ -566,7 +569,7 @@ mod tests {
 
     fn rand_scalar() -> Scalar {
         let mut b = [0u8; 64];
-        OsRng.fill_bytes(&mut b);
+        SystemRng.fill_bytes(&mut b);
         Scalar::from_bytes_mod_order(&b)
     }
 
@@ -748,7 +751,7 @@ mod tests {
         let p = hash_to_point(b"dleq", &Ed25519::mul_base(&rand_scalar()), H).unwrap();
         let y = Ed25519::mul_base(&w);
         let w_pt = Ed25519::scalar_mul(&p, &w);
-        let proof = Dleq::prove(b"s", &p, &w, &y, &w_pt, &mut OsRng);
+        let proof = Dleq::prove(b"s", &p, &w, &y, &w_pt, &mut SystemRng);
         assert!(proof.verify(b"s", &p, &y, &w_pt));
         // Same witness, wrong claimed partial.
         let bogus = Ed25519::scalar_mul(&p, &rand_scalar());
@@ -762,7 +765,7 @@ mod tests {
     fn each_hash_gives_an_unrelated_secret() {
         let (ids, keys, _) = trusted_dealer(3, 1);
         let committee = PartyId::sort(ids[..2].to_vec(), 0);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = alloc::collections::BTreeSet::new();
         for alg in [
             HashAlgorithm::Sha512,
             HashAlgorithm::Sha256,
@@ -1082,7 +1085,7 @@ mod vectors {
     #[test]
     #[ignore]
     fn print() {
-        println!("{}", serde_json::to_string_pretty(&build()).unwrap());
+        std::println!("{}", serde_json::to_string_pretty(&build()).unwrap());
     }
 
     /// The construction still produces exactly the checked-in values.

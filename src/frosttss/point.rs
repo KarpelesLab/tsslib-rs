@@ -4,6 +4,7 @@
 //! where `X`/`Y` are the affine coordinates as bare decimal `big.Int` numbers.
 //! We reproduce that exactly so persisted keys round-trip across both libraries.
 
+use crate::prelude::*;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use serde::{Deserialize, Serialize};
@@ -24,13 +25,13 @@ pub(crate) struct EcPointJson {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PointError(pub(crate) String);
 
-impl std::fmt::Display for PointError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for PointError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "frosttss: invalid point: {}", self.0)
     }
 }
 
-impl std::error::Error for PointError {}
+impl core::error::Error for PointError {}
 
 /// Encodes an Edwards25519 point as its Go `ECPoint` JSON form (affine `X`,`Y`).
 pub(crate) fn point_to_json(p: &EdwardsPoint) -> EcPointJson {

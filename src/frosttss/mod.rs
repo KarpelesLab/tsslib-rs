@@ -53,6 +53,7 @@ mod schnorr;
 mod signature;
 mod signing;
 
+use crate::prelude::*;
 pub use hd::{HARDENED_KEY_START, derive_chain_code, import_key};
 pub use key::{KEY_VERSION, Key};
 pub use keygen::Keygen;
@@ -76,8 +77,8 @@ pub enum Error {
     Tss(Box<crate::tss::TssError>),
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Validation(m) => write!(f, "frosttss: {m}"),
             Error::Point(e) => write!(f, "{e}"),
@@ -87,7 +88,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl From<PointError> for Error {
     fn from(e: PointError) -> Self {

@@ -17,17 +17,18 @@ use super::ed;
 use super::key::Key;
 use super::schnorr::ZkProof;
 use super::{Error, vss};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use purecrypto::ec::{Ed25519PublicKey, Ed25519Signature};
 use purecrypto::hash::sha512;
-use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 const TYPE_R1: &str = "eddsa:sign:round1";
 const TYPE_R2: &str = "eddsa:sign:round2";
@@ -138,6 +139,7 @@ impl SigningParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<SignatureData, Error> {
         self.result_rx
             .recv()
@@ -147,8 +149,8 @@ impl SigningParty {
 
 impl Shared {
     fn deliver(&self, r: Result<SignatureData, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -157,7 +159,7 @@ impl Shared {
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let wi = self.prepare_wi()?;
         let ri = vss::random_scalar(&mut rng);
         let point_ri = ed::mul_base(&ri);
@@ -165,7 +167,7 @@ impl Shared {
         let (c, d) = super::commit::commit(&[rx, ry], &mut rng);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.wi = wi;
             st.ri = ri;
             st.point_ri = Some(point_ri);
@@ -188,7 +190,7 @@ impl Shared {
     }
 
     fn round2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.params.party_index();
 
         for (k, m) in msgs.iter().enumerate() {
@@ -196,11 +198,11 @@ impl Shared {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
-            self.state.lock().unwrap().cjs[others[k].index as usize] = Some(r1.commitment.0);
+            self.state.lock().cjs[others[k].index as usize] = Some(r1.commitment.0);
         }
 
         let (ri, point_ri, decommit) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.ri.clone(), st.point_ri.unwrap(), st.decommit.clone())
         };
         let context_i = context_bytes(&self.ssid, i);
@@ -226,7 +228,7 @@ impl Shared {
 
     fn round3(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
         let (ri, point_ri, wi) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.ri.clone(), st.point_ri.unwrap(), st.wi.clone())
         };
 
@@ -237,7 +239,7 @@ impl Shared {
                 Err(e) => return self.deliver(Err(e.into())),
             };
             let jidx = oid.index as usize;
-            let cj = match &self.state.lock().unwrap().cjs[jidx] {
+            let cj = match &self.state.lock().cjs[jidx] {
                 Some(c) => c.clone(),
                 None => return self.fail("signing: missing round1 commitment"),
             };
@@ -286,7 +288,7 @@ impl Shared {
         let local_s = lambda.mul(&wi).add(&ri);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.encoded_r = encoded_r;
             st.local_s = local_s.clone();
         }
@@ -306,7 +308,7 @@ impl Shared {
 
     fn finalize(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
         let (encoded_r, local_s) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.encoded_r, st.local_s.clone())
         };
         let mut sum_s = local_s;

@@ -21,15 +21,16 @@ use super::ed::{self, EcPointJson};
 use super::key::Key;
 use super::vss;
 use super::{Error, ed::point_to_json};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
-use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 use zeroize::Zeroize;
 
 const TYPE_R1: &str = "eddsa:reshare:round1";
@@ -127,6 +128,7 @@ impl ResharingParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<Key, Error> {
         self.result_rx
             .recv()
@@ -136,8 +138,8 @@ impl ResharingParty {
 
 impl Shared {
     fn deliver(&self, r: Result<Key, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -148,7 +150,7 @@ impl Shared {
     // --- old committee ---
 
     fn round1_old(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let new_t = self.params.new_threshold();
         let wi = self.prepare_wi()?;
 
@@ -165,7 +167,7 @@ impl Shared {
         let (px, py) = ed::coords_be(&pub_pt);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.vd = vd;
             st.new_shares = shares.iter().map(|s| s.value.clone()).collect();
             st.eddsa_pub = Some(pub_pt);
@@ -198,7 +200,7 @@ impl Shared {
     fn round3_old(self: &Arc<Self>) {
         let new_ids = self.params.new_parties().to_vec();
         let (new_shares, vd) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.new_shares.clone(), st.vd.clone())
         };
         for (j, pj) in new_ids.iter().enumerate() {
@@ -240,7 +242,7 @@ impl Shared {
         // before our own `round4_new` has produced the key; in that case
         // `round4_new` delivers.
         let new_key = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.acks_done = true;
             st.new_key.clone()
         };
@@ -281,7 +283,7 @@ impl Shared {
             }
         }
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.eddsa_pub = eddsa_pub;
             st.r1msgs = r1msgs;
             st.r1_from = old_ids.to_vec();
@@ -309,7 +311,7 @@ impl Shared {
     fn on_r3m1(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R3Msg1>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r3m1 = d,
                 Err(e) => return self.deliver(Err(e.into())),
@@ -326,7 +328,7 @@ impl Shared {
     fn on_r3m2(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R3Msg2>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r3m2 = d,
                 Err(e) => return self.deliver(Err(e.into())),
@@ -346,7 +348,7 @@ impl Shared {
         let me_id = ed::scalar_from_be(&self.params.party_id().key);
 
         let (eddsa_pub, r1msgs, r1_from, r3m1, r3m1_from, r3m2, r3m2_from) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.eddsa_pub.unwrap(),
                 st.r1msgs.clone(),
@@ -432,7 +434,7 @@ impl Shared {
             eddsa_pub: ec_point(&eddsa_pub),
         };
         new_xi_be.zeroize();
-        self.state.lock().unwrap().new_key = Some(new_key.clone());
+        self.state.lock().new_key = Some(new_key.clone());
 
         // Ack round4 to every other old+new party.
         for pj in &self.params.old_and_new_parties() {
@@ -446,7 +448,7 @@ impl Shared {
             // Dual member: `round3_old` owns the ROUND4 handler (a second
             // `connect` would replace it and lose ACKs). Whichever of
             // `round4_new` / `round5_old` finishes last delivers.
-            if self.state.lock().unwrap().acks_done {
+            if self.state.lock().acks_done {
                 self.deliver(Ok(new_key));
             }
         } else if new_others.is_empty() {
@@ -455,7 +457,7 @@ impl Shared {
             self.connect(TYPE_R4, &new_others, {
                 let me = Arc::clone(self);
                 move |_| {
-                    let k = me.state.lock().unwrap().new_key.clone();
+                    let k = me.state.lock().new_key.clone();
                     if let Some(k) = k {
                         me.deliver(Ok(k));
                     }

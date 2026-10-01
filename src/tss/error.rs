@@ -1,6 +1,7 @@
 //! Rich protocol error type.
 
 use super::PartyId;
+use crate::prelude::*;
 
 /// An error raised during a protocol round.
 ///
@@ -62,8 +63,8 @@ impl TssError {
     }
 }
 
-impl std::fmt::Display for TssError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for TssError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let victim = match &self.victim {
             Some(v) => v.to_string(),
             None => "<nil>".to_string(),
@@ -89,7 +90,7 @@ impl std::fmt::Display for TssError {
     }
 }
 
-impl std::error::Error for TssError {}
+impl core::error::Error for TssError {}
 
 #[cfg(test)]
 mod tests {

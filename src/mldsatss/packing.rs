@@ -12,6 +12,7 @@
 //! their round-trip tests.
 #![allow(dead_code)]
 
+use crate::prelude::*;
 use purecrypto::mldsa::hazmat::{N, Poly};
 
 /// Packed size of one full-range polynomial: `N · 23 / 8 = 736` bytes.

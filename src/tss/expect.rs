@@ -2,7 +2,8 @@
 //! and fires a callback once all have arrived (port of Go `NewJsonExpect`).
 
 use super::{JsonMessage, MessageReceiver, PartyId};
-use std::sync::Mutex;
+use crate::prelude::*;
+use crate::sync::Mutex;
 
 /// Collects messages of a single type from a fixed set of senders, then invokes
 /// a one-shot callback with the messages in sender order.
@@ -55,11 +56,11 @@ impl MessageReceiver for JsonExpect {
 
         // Locate the sender's slot; ignore duplicates of an already-filled slot.
         let cb = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let idx = self
                 .from
                 .iter()
-                .position(|p| p.cmp_key(from) == std::cmp::Ordering::Equal)
+                .position(|p| p.cmp_key(from) == core::cmp::Ordering::Equal)
                 .ok_or_else(|| "message from an unexpected sender".to_string())?;
             // Once complete every slot was filled, so this is a late duplicate.
             if st.missing == 0 || st.packets[idx].is_some() {
@@ -72,7 +73,7 @@ impl MessageReceiver for JsonExpect {
 
         // Fire the callback outside the lock so it may re-enter the broker.
         if let Some(cb) = cb {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let packets: Vec<JsonMessage> =
                 st.packets.iter_mut().map(|p| p.take().unwrap()).collect();
             drop(st);

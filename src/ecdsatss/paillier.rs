@@ -5,6 +5,7 @@
 
 use super::Error;
 use super::bn::{self, Modulus};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256_parts;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
@@ -278,7 +279,7 @@ mod tests {
 
     #[test]
     fn roundtrip_fresh_key() {
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         // Small generated key for a quick self-contained round-trip.
         let p = bn::generate_safe_prime(128, &mut rng);
         let q = bn::generate_safe_prime(128, &mut rng);

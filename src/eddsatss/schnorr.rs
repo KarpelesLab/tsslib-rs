@@ -66,11 +66,11 @@ impl ZkProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn zkproof_roundtrip() {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let x = random_scalar(&mut rng);
         let xp = ed::mul_base(&x);
         let pf = ZkProof::prove(b"sess", &x, &xp, &mut rng);

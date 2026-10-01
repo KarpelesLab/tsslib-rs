@@ -2,7 +2,8 @@
 //! and nonce generation — RFC 9591 §4. Written once against `Ciphersuite`.
 
 use super::{Ciphersuite, Scalar, encode_scalar, scalar_from_be_mod_l};
-use std::collections::HashMap;
+use crate::prelude::*;
+use alloc::collections::BTreeMap;
 
 /// One signer's pair of nonce commitments `(D_i, E_i)` (RFC 9591 §5.1):
 /// `D_i = d_i·G` (hiding) and `E_i = e_i·G` (binding).
@@ -17,7 +18,7 @@ pub struct NonceCommitment<C: Ciphersuite> {
 }
 
 /// Compares two big-endian magnitudes numerically.
-fn cmp_be(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+fn cmp_be(a: &[u8], b: &[u8]) -> core::cmp::Ordering {
     let a = strip(a);
     let b = strip(b);
     a.len().cmp(&b.len()).then_with(|| a.cmp(b))
@@ -53,7 +54,7 @@ pub fn encode_commitment_list<C: Ciphersuite>(commitments: &[NonceCommitment<C>]
 pub fn compute_binding_factors<C: Ciphersuite>(
     msg: &[u8],
     commitments: &[NonceCommitment<C>],
-) -> HashMap<Vec<u8>, Scalar> {
+) -> BTreeMap<Vec<u8>, Scalar> {
     let encoded_msg = C::h4(msg);
     let encoded_commitments = encode_commitment_list(commitments);
     let encoded_commitment_hash = C::h5(&encoded_commitments);
@@ -62,7 +63,7 @@ pub fn compute_binding_factors<C: Ciphersuite>(
     prefix.extend_from_slice(&encoded_msg);
     prefix.extend_from_slice(&encoded_commitment_hash);
 
-    let mut out = HashMap::with_capacity(commitments.len());
+    let mut out = BTreeMap::new();
     for c in commitments {
         let mut input = prefix.clone();
         input.extend_from_slice(&encode_scalar(&scalar_from_be_mod_l(&c.identifier)));
@@ -76,7 +77,7 @@ pub fn compute_binding_factors<C: Ciphersuite>(
 /// or a missing binding factor.
 pub fn compute_group_commitment<C: Ciphersuite>(
     commitments: &[NonceCommitment<C>],
-    binding_factors: &HashMap<Vec<u8>, Scalar>,
+    binding_factors: &BTreeMap<Vec<u8>, Scalar>,
 ) -> Option<C::Point> {
     let mut r: Option<C::Point> = None;
     for c in commitments {
@@ -188,7 +189,7 @@ mod tests {
     #[test]
     fn lagrange_single_signer_is_one() {
         let id = vec![7u8];
-        let lam = lagrange_coefficient::<Ed25519>(&id, std::slice::from_ref(&id)).unwrap();
+        let lam = lagrange_coefficient::<Ed25519>(&id, core::slice::from_ref(&id)).unwrap();
         assert!(bool::from(lam.ct_eq(&Scalar::ONE)));
     }
 

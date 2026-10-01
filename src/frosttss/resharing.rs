@@ -13,15 +13,17 @@ use super::schnorr::ZkProof;
 use crate::frost::binding::lagrange_coefficient;
 use crate::frost::commitments;
 use crate::frost::{Ciphersuite, Ed25519, Scalar, scalar_from_be_mod_l, scalar_to_be, vss};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 
 const ROUND1: &str = "frost:ed25519:reshare:round1";
 const ROUND2: &str = "frost:ed25519:reshare:round2";
@@ -150,6 +152,7 @@ impl Resharing {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> ReshareResult {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -160,15 +163,15 @@ impl Resharing {
 
 impl Shared {
     fn deliver(&self, r: ReshareResult) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     /// Round 1 (old): Lagrange-weight the share, VSS-share it to the new
     /// committee, broadcast commitments + PoK to all new parties.
     fn round1_old(self: &Arc<Self>, input: Key) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let me = self.params.party_id().clone();
         let subset = input.subset_for_parties(self.params.old_parties())?;
         if self.params.old_threshold() + 1 > subset.ks.len() {
@@ -216,14 +219,14 @@ impl Shared {
         };
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.new_shares = new_shares;
             st.v_d = v_d;
         }
 
         // Send round 1 to every new party (and to self if dual-membership).
         for pj in self.params.new_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal {
+            if pj.cmp_key(&me) != core::cmp::Ordering::Equal {
                 self.send_to(ROUND1, &r1, pj)?;
             }
         }
@@ -236,7 +239,7 @@ impl Shared {
             .params
             .new_parties()
             .iter()
-            .filter(|p| p.cmp_key(&me) != std::cmp::Ordering::Equal)
+            .filter(|p| p.cmp_key(&me) != core::cmp::Ordering::Equal)
             .cloned()
             .collect();
         if new_others.is_empty() {
@@ -275,7 +278,7 @@ impl Shared {
             }
         }
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.group_pub_key = group_pub;
             st.r1 = Some(r1msgs);
         }
@@ -283,7 +286,7 @@ impl Shared {
         // ACK every old party (except self if dual).
         let ack = Round2Msg {};
         for pj in self.params.old_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+            if pj.cmp_key(&me) != core::cmp::Ordering::Equal
                 && let Err(e) = self.send_to(ROUND2, &ack, pj)
             {
                 return self.deliver(Err(e));
@@ -342,7 +345,7 @@ impl Shared {
             ROUND3_1,
             old_parties.clone(),
             Box::new(move |msgs| {
-                me1.state.lock().unwrap().r3m1 = Some(msgs);
+                me1.state.lock().r3m1 = Some(msgs);
                 me1.try_round4();
             }),
         );
@@ -353,7 +356,7 @@ impl Shared {
             ROUND3_2,
             old_parties,
             Box::new(move |msgs| {
-                me2.state.lock().unwrap().r3m2 = Some(msgs);
+                me2.state.lock().r3m2 = Some(msgs);
                 me2.try_round4();
             }),
         );
@@ -363,7 +366,7 @@ impl Shared {
     /// Round 3 (old): send each new party its sub-share and the VSS decommitment.
     fn round3_old(self: &Arc<Self>) {
         let (new_shares, v_d) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.new_shares.clone(), st.v_d.clone())
         };
         for (pj, share) in self.params.new_parties().iter().zip(new_shares.iter()) {
@@ -391,7 +394,7 @@ impl Shared {
             .params
             .new_parties()
             .iter()
-            .filter(|p| p.cmp_key(&me) != std::cmp::Ordering::Equal)
+            .filter(|p| p.cmp_key(&me) != core::cmp::Ordering::Equal)
             .cloned()
             .collect();
         if new_others.is_empty() {
@@ -405,7 +408,7 @@ impl Shared {
 
     fn try_round4(self: &Arc<Self>) {
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let ready =
                 !st.round4_started && st.r1.is_some() && st.r3m1.is_some() && st.r3m2.is_some();
             st.round4_started |= ready;
@@ -424,7 +427,7 @@ impl Shared {
         let old_parties = self.params.old_parties().to_vec();
 
         let (r1msgs, r3m1, r3m2, group_pub) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.r1.clone().unwrap(),
                 st.r3m1.clone().unwrap(),
@@ -528,12 +531,12 @@ impl Shared {
             group_public_key: group_pub,
             chain_code: Some(super::hd::derive_chain_code(&group_pub)),
         };
-        self.state.lock().unwrap().round5_new_key = Some(new_key.clone());
+        self.state.lock().round5_new_key = Some(new_key.clone());
 
         // ACK all old+new parties (except self).
         let ack = Round4Msg {};
         for pj in self.params.old_and_new_parties() {
-            if pj.cmp_key(&me) != std::cmp::Ordering::Equal
+            if pj.cmp_key(&me) != core::cmp::Ordering::Equal
                 && let Err(e) = self.send_to(ROUND4, &ack, &pj)
             {
                 return self.deliver(Err(e));
@@ -544,7 +547,7 @@ impl Shared {
             // Dual path: the result needs both this key and the other new
             // parties' ACKs. Whichever of `round4_new` / `round5_old` finishes
             // last delivers.
-            if self.state.lock().unwrap().acks_done {
+            if self.state.lock().acks_done {
                 self.deliver(Ok(Some(new_key)));
             }
             return;
@@ -555,7 +558,7 @@ impl Shared {
             .params
             .new_parties()
             .iter()
-            .filter(|p| p.cmp_key(&me) != std::cmp::Ordering::Equal)
+            .filter(|p| p.cmp_key(&me) != core::cmp::Ordering::Equal)
             .cloned()
             .collect();
         if new_others.is_empty() {
@@ -567,7 +570,7 @@ impl Shared {
             ROUND4,
             new_others,
             Box::new(move |_| {
-                let k = me2.state.lock().unwrap().round5_new_key.clone();
+                let k = me2.state.lock().round5_new_key.clone();
                 me2.deliver(Ok(k));
             }),
         );
@@ -581,7 +584,7 @@ impl Shared {
         // Dual member: the ACKs can complete before our own `round4_new` has
         // produced the key; in that case `round4_new` delivers.
         let new_key = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.acks_done = true;
             st.round5_new_key.clone()
         };
@@ -795,7 +798,7 @@ mod tests {
                     );
                     let input = old_ids
                         .iter()
-                        .position(|o| o.cmp_key(p) == std::cmp::Ordering::Equal)
+                        .position(|o| o.cmp_key(p) == core::cmp::Ordering::Equal)
                         .map(|j| old_keys[j].clone());
                     (i, Resharing::new(params, input).unwrap())
                 })
@@ -807,7 +810,7 @@ mod tests {
                     .unwrap_or_else(|e| panic!("order {order:?}: party {i} failed: {e}"));
                 let is_new = new_ids
                     .iter()
-                    .any(|n| n.cmp_key(&all[*i]) == std::cmp::Ordering::Equal);
+                    .any(|n| n.cmp_key(&all[*i]) == core::cmp::Ordering::Equal);
                 assert_eq!(r.is_some(), is_new, "order {order:?}: party {i}");
                 if let Some(k) = r {
                     k.validate_basic().unwrap();

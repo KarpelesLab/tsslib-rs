@@ -3,6 +3,7 @@
 use super::baseot;
 use super::key::PairOTState;
 use super::otext::{self, ExtReceiver, ExtSender};
+use crate::prelude::*;
 use purecrypto::rng::RngCore;
 
 /// Runs one base-OT batch in-process, returning `(ExtReceiver, ExtSender)` where

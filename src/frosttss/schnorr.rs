@@ -8,6 +8,7 @@
 use super::Error;
 use super::point::{point_from_affine_be, point_to_affine_be};
 use crate::frost::{Ciphersuite, Ed25519, Scalar, random_scalar};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use purecrypto::rng::RngCore;
@@ -106,7 +107,7 @@ fn be_to_scalar_canonical(be: &[u8]) -> Option<Scalar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     fn secret(n: u8) -> Scalar {
         let mut b = [0u8; 32];
@@ -116,9 +117,9 @@ mod tests {
 
     #[test]
     fn prove_then_verify() {
-        let x = random_scalar(&mut OsRng);
+        let x = random_scalar(&mut SystemRng);
         let xp = Ed25519::mul_base(&x);
-        let pf = ZkProof::prove(b"session-a", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"session-a", &x, &xp, &mut SystemRng);
         assert!(pf.verify(b"session-a", &xp));
     }
 
@@ -126,7 +127,7 @@ mod tests {
     fn wrong_session_fails() {
         let x = secret(5);
         let xp = Ed25519::mul_base(&x);
-        let pf = ZkProof::prove(b"session-a", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"session-a", &x, &xp, &mut SystemRng);
         assert!(!pf.verify(b"session-b", &xp));
     }
 
@@ -134,16 +135,16 @@ mod tests {
     fn wrong_statement_fails() {
         let x = secret(5);
         let xp = Ed25519::mul_base(&x);
-        let pf = ZkProof::prove(b"s", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"s", &x, &xp, &mut SystemRng);
         let other = Ed25519::mul_base(&secret(6));
         assert!(!pf.verify(b"s", &other));
     }
 
     #[test]
     fn wire_roundtrip() {
-        let x = random_scalar(&mut OsRng);
+        let x = random_scalar(&mut SystemRng);
         let xp = Ed25519::mul_base(&x);
-        let pf = ZkProof::prove(b"s", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"s", &x, &xp, &mut SystemRng);
         let (ax, ay, t) = pf.to_wire();
         let back = ZkProof::from_wire(&ax, &ay, &t).unwrap();
         assert!(back.verify(b"s", &xp));

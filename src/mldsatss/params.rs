@@ -2,6 +2,8 @@
 //! Ported verbatim from the reference implementation
 //! (github.com/GuilhemN/threshold-ml-dsa-and-raccoon, via tss-lib mldsatss).
 
+use crate::prelude::*;
+
 /// Upper bound on N in the supported (t, n) table.
 pub const MAX_PARTIES: usize = 6;
 
@@ -27,12 +29,12 @@ pub struct ThresholdParams44 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetThresholdParams44Error(pub String);
 
-impl std::fmt::Display for GetThresholdParams44Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for GetThresholdParams44Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "mldsatss: {}", self.0)
     }
 }
-impl std::error::Error for GetThresholdParams44Error {}
+impl core::error::Error for GetThresholdParams44Error {}
 
 /// Returns the parameters for `(t, n)` if supported (2 ≤ t ≤ n ≤ 6).
 pub fn get_threshold_params44(

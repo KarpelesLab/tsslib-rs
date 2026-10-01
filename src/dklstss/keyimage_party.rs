@@ -62,15 +62,17 @@ use super::echo::{other_parties, strip};
 use super::key::Key;
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::signing::lagrange_coefficient;
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i_tagged;
 use crate::tss::keyimage_hash::{digest32, validate as validate_hash};
 use crate::tss::{HashAlgorithm, JsonMessage, Parameters, PartyId, json_get, json_wrap};
-use purecrypto::rng::{OsRng, RngCore};
+use alloc::sync::Arc;
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 
 const TYPE_R1: &str = "dkls:keyimage:r1";
 
@@ -193,7 +195,7 @@ impl KeyImageParty {
         let me = params.party_id().clone();
         let my_pos = subset
             .iter()
-            .position(|p| p.cmp_key(&me) == std::cmp::Ordering::Equal)
+            .position(|p| p.cmp_key(&me) == core::cmp::Ordering::Equal)
             .ok_or_else(|| Error::Validation("self not in key-image subset".into()))?;
 
         let point = hash_to_point(&identifier, &key.ecdsa_pub, hash)?;
@@ -207,7 +209,7 @@ impl KeyImageParty {
         let statement = secp::mul_base(&w);
 
         let session = dleq_session(&identifier, &key.ecdsa_pub, &subset, &me.key, hash);
-        let proof = Dleq::prove(&session, &point, &w, &statement, &partial, &mut OsRng);
+        let proof = Dleq::prove(&session, &point, &w, &statement, &partial, &mut SystemRng);
 
         let other_subset = other_parties(&subset, &me);
         let (tx, rx) = channel();
@@ -238,6 +240,7 @@ impl KeyImageParty {
     }
 
     /// Blocks until the ceremony completes.
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<KeyImageSecret, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -250,8 +253,8 @@ impl KeyImageParty {
 
 impl Shared {
     fn deliver(&self, r: Result<KeyImageSecret, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -322,7 +325,7 @@ impl Shared {
             let Some(pos) = self
                 .subset
                 .iter()
-                .position(|p| p.cmp_key(pid) == std::cmp::Ordering::Equal)
+                .position(|p| p.cmp_key(pid) == core::cmp::Ordering::Equal)
             else {
                 return self.deliver(Err(Error::Validation(format!("{pid} not in subset"))));
             };
@@ -330,7 +333,7 @@ impl Shared {
                 .key
                 .party_ids
                 .iter()
-                .position(|p| p.cmp_key(pid) == std::cmp::Ordering::Equal)
+                .position(|p| p.cmp_key(pid) == core::cmp::Ordering::Equal)
             else {
                 return self.deliver(Err(Error::Validation(format!(
                     "missing public share for {pid}"
@@ -561,7 +564,7 @@ fn push_field(buf: &mut Vec<u8>, field: &[u8]) {
 
 fn validate_sorted_subset(subset: &[PartyId]) -> Result<(), Error> {
     for w in subset.windows(2) {
-        if w[0].cmp_key(&w[1]) != std::cmp::Ordering::Less {
+        if w[0].cmp_key(&w[1]) != core::cmp::Ordering::Less {
             return Err(Error::Validation(
                 "key-image subset must be sorted and distinct by key".into(),
             ));
@@ -627,7 +630,7 @@ mod tests {
     #[test]
     fn key_image_equals_x_times_p() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let out = run(&ids, &keys, &[0, 1], 1, b"customer/42");
 
         // Reconstruct x from two shares to check V == x·P centrally.
@@ -653,7 +656,7 @@ mod tests {
     #[test]
     fn different_committees_derive_the_same_secret() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let a = run(&ids, &keys, &[0, 1], 1, b"same-id");
         let b = run(&ids, &keys, &[1, 2], 1, b"same-id");
         assert_eq!(a[0].secret_bytes(), b[0].secret_bytes());
@@ -663,7 +666,7 @@ mod tests {
     #[test]
     fn different_identifiers_give_different_secrets() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let a = run(&ids, &keys, &[0, 1], 1, b"id-a");
         let b = run(&ids, &keys, &[0, 1], 1, b"id-b");
         assert_ne!(a[0].secret_bytes(), b[0].secret_bytes());
@@ -673,11 +676,12 @@ mod tests {
     #[test]
     fn derived_secret_signs_as_child_key() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let derived = run(&ids, &keys, &[0, 1], 1, b"hardened/0");
 
         let msg = sha256(b"signed under a key-image-derived child key");
-        let sig = sign_with_tweak(&keys, &[0, 1], &derived[0].secret, &msg, &mut OsRng).unwrap();
+        let sig =
+            sign_with_tweak(&keys, &[0, 1], &derived[0].secret, &msg, &mut SystemRng).unwrap();
         let e = hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);
@@ -689,7 +693,7 @@ mod tests {
     #[test]
     fn hash_to_point_is_deterministic_and_identifier_bound() {
         let ids = party_ids(2);
-        let keys = keygen(2, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(2, 1, &ids, &mut SystemRng).unwrap();
         let a = hash_to_point(b"x", &keys[0].ecdsa_pub, H).unwrap();
         assert!(secp::point_eq(
             &a,
@@ -705,14 +709,14 @@ mod tests {
     #[test]
     fn dleq_rejects_a_wrong_partial() {
         let ids = party_ids(2);
-        let keys = keygen(2, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(2, 1, &ids, &mut SystemRng).unwrap();
         let p = hash_to_point(b"dleq", &keys[0].ecdsa_pub, H).unwrap();
-        let w = secp::random_scalar(&mut OsRng);
+        let w = secp::random_scalar(&mut SystemRng);
         let y = secp::mul_base(&w);
         let w_pt = p.mul(&w);
-        let proof = Dleq::prove(b"s", &p, &w, &y, &w_pt, &mut OsRng);
+        let proof = Dleq::prove(b"s", &p, &w, &y, &w_pt, &mut SystemRng);
         assert!(proof.verify(b"s", &p, &y, &w_pt));
-        let bogus = p.mul(&secp::random_scalar(&mut OsRng));
+        let bogus = p.mul(&secp::random_scalar(&mut SystemRng));
         assert!(!proof.verify(b"s", &p, &y, &bogus));
         assert!(!proof.verify(b"other", &p, &y, &w_pt));
     }
@@ -721,9 +725,9 @@ mod tests {
     #[test]
     fn each_hash_gives_an_unrelated_secret() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let committee = PartyId::sort(ids[..2].to_vec(), 0);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = alloc::collections::BTreeSet::new();
         for alg in [
             HashAlgorithm::Sha256,
             HashAlgorithm::Sha512,
@@ -760,7 +764,7 @@ mod tests {
     #[test]
     fn unusable_hashes_are_rejected() {
         let ids = party_ids(2);
-        let keys = keygen(2, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(2, 1, &ids, &mut SystemRng).unwrap();
         let committee = PartyId::sort(ids.clone(), 0);
         for alg in [
             HashAlgorithm::Sha1,
@@ -788,7 +792,7 @@ mod tests {
     #[test]
     fn subset_smaller_than_threshold_is_rejected() {
         let ids = party_ids(3);
-        let keys = keygen(3, 2, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 2, &ids, &mut SystemRng).unwrap();
         let committee = PartyId::sort(ids[..2].to_vec(), 0);
         let hub = TestHub::new(&committee);
         let params = Parameters::new(committee.clone(), &committee[0], 2, hub.broker(0));
@@ -1059,7 +1063,7 @@ mod vectors {
     #[test]
     #[ignore]
     fn print() {
-        println!("{}", serde_json::to_string_pretty(&build()).unwrap());
+        std::println!("{}", serde_json::to_string_pretty(&build()).unwrap());
     }
 
     /// The construction still produces exactly the checked-in values.

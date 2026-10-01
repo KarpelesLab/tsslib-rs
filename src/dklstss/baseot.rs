@@ -7,6 +7,7 @@
 
 use super::schnorr::ZkProof;
 use super::secp::{self, ProjectivePoint, Scalar};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::ct::{Choice, ConditionallySelectable};
 use purecrypto::rng::RngCore;
@@ -180,7 +181,7 @@ fn int_be_min(n: u64) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn ot_correctness() {
@@ -188,10 +189,10 @@ mod tests {
         let sid = b"test-sid".to_vec();
         // Random choice bits.
         let mut bits = vec![0u8; n.div_ceil(8)];
-        OsRng.fill_bytes(&mut bits);
+        SystemRng.fill_bytes(&mut bits);
 
-        let (sender, m1) = Sender::new(&sid, n, &mut OsRng);
-        let (receiver, m2) = Receiver::new(&sid, n, &bits, &m1, &mut OsRng).unwrap();
+        let (sender, m1) = Sender::new(&sid, n, &mut SystemRng);
+        let (receiver, m2) = Receiver::new(&sid, n, &bits, &m1, &mut SystemRng).unwrap();
         let (k0, k1) = sender.finalize(&m2).unwrap();
         let rk = receiver.finalize();
 
@@ -208,10 +209,10 @@ mod tests {
     #[test]
     fn rejects_bad_pok() {
         let sid = b"sid".to_vec();
-        let (_s, mut m1) = Sender::new(&sid, 4, &mut OsRng);
+        let (_s, mut m1) = Sender::new(&sid, 4, &mut SystemRng);
         // Corrupt S so the PoK no longer matches.
-        m1.s = secp::mul_base(&secp::random_scalar(&mut OsRng));
+        m1.s = secp::mul_base(&secp::random_scalar(&mut SystemRng));
         let bits = vec![0u8; 1];
-        assert!(Receiver::new(&sid, 4, &bits, &m1, &mut OsRng).is_none());
+        assert!(Receiver::new(&sid, 4, &bits, &m1, &mut SystemRng).is_none());
     }
 }

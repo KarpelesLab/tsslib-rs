@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use crate::prelude::*;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,7 @@ pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
     let mut acc = Scalar::ZERO;
     let head = be.len() % 64;
     let (first, rest) = be.split_at(head);
-    for chunk in std::iter::once(first).chain(rest.chunks(64)) {
+    for chunk in core::iter::once(first).chain(rest.chunks(64)) {
         // Reverse to little-endian into a 64-byte buffer, then reduce mod L.
         let mut le = [0u8; 64];
         for (i, &b) in chunk.iter().rev().enumerate() {

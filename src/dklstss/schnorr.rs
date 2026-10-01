@@ -4,6 +4,7 @@
 //! Challenge `c = SHA512_256i_TAGGED(session, X.x, X.y, G.x, G.y, α.x, α.y) mod n`.
 
 use super::secp::{self, ProjectivePoint, Scalar};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::rng::RngCore;
 
@@ -77,24 +78,24 @@ fn challenge(session: &[u8], x_pub: &ProjectivePoint, alpha: &ProjectivePoint) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn prove_then_verify() {
-        let x = secp::random_scalar(&mut OsRng);
+        let x = secp::random_scalar(&mut SystemRng);
         let xp = secp::mul_base(&x);
-        let pf = ZkProof::prove(b"session", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"session", &x, &xp, &mut SystemRng);
         assert!(pf.verify(b"session", &xp));
         assert!(!pf.verify(b"other", &xp));
-        let other = secp::mul_base(&secp::random_scalar(&mut OsRng));
+        let other = secp::mul_base(&secp::random_scalar(&mut SystemRng));
         assert!(!pf.verify(b"session", &other));
     }
 
     #[test]
     fn wire_roundtrip() {
-        let x = secp::random_scalar(&mut OsRng);
+        let x = secp::random_scalar(&mut SystemRng);
         let xp = secp::mul_base(&x);
-        let pf = ZkProof::prove(b"s", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"s", &x, &xp, &mut SystemRng);
         let (a, t) = pf.to_wire().unwrap();
         assert!(ZkProof::from_wire(&a, &t).unwrap().verify(b"s", &xp));
     }

@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use super::bn;
+use crate::prelude::*;
 use purecrypto::bignum::BoxedUint;
 pub(crate) use purecrypto::ec::secp256k1::{AffinePoint, ProjectivePoint, Scalar};
 

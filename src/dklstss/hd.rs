@@ -91,8 +91,9 @@ mod tests {
     use super::super::keygen::keygen;
     use super::super::signing::sign;
     use super::*;
+    use crate::prelude::*;
+    use crate::rng::SystemRng;
     use purecrypto::hash::sha256;
-    use purecrypto::rng::OsRng;
 
     fn party_ids(n: usize) -> Vec<PartyId> {
         PartyId::sort(
@@ -106,7 +107,7 @@ mod tests {
     #[test]
     fn child_pub_equals_parent_plus_tweak_g() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let (tweak, child) = derive_child(&keys[0], &[1, 5, 9]).unwrap();
         let expect = keys[0].ecdsa_pub.add(&secp::mul_base(&tweak));
         assert!(secp::point_eq(&child, &expect));
@@ -118,9 +119,10 @@ mod tests {
     #[test]
     fn derive_and_sign_verifies_under_child_key() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let msg = sha256(b"hd ecdsa");
-        let (sig, child_pub) = derive_and_sign(&keys, &[0, 1], &[7, 2], &msg, &mut OsRng).unwrap();
+        let (sig, child_pub) =
+            derive_and_sign(&keys, &[0, 1], &[7, 2], &msg, &mut SystemRng).unwrap();
         // Verify under the derived child public key.
         let e = super::super::signing::hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
@@ -130,7 +132,7 @@ mod tests {
 
     #[test]
     fn import_then_sign() {
-        let priv_scalar = secp::random_scalar(&mut OsRng);
+        let priv_scalar = secp::random_scalar(&mut SystemRng);
         let party = PartyId::new("imp", "imp", vec![7]);
         let key = import_key(&priv_scalar, &party).unwrap();
         assert!(secp::point_eq(
@@ -139,7 +141,7 @@ mod tests {
         ));
         // A 1-of-1 import can sign by itself (T+1 = 1 signer).
         let msg = sha256(b"imported");
-        let sig = sign(std::slice::from_ref(&key), &[0], &msg, &mut OsRng).unwrap();
+        let sig = sign(core::slice::from_ref(&key), &[0], &msg, &mut SystemRng).unwrap();
         let e = super::super::signing::hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);

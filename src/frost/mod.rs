@@ -20,6 +20,7 @@ mod ristretto255;
 
 // The tss-lib hash helpers live in `tss` (every protocol uses them); re-exported
 // here to keep the original `frost::hashing` path.
+use crate::prelude::*;
 pub use crate::tss::hashing;
 pub use ed25519::Ed25519;
 pub use purecrypto::ec::edwards25519::hazmat::Scalar;
@@ -121,7 +122,7 @@ pub fn scalar_from_be_mod_l(be: &[u8]) -> Scalar {
     let mut acc = Scalar::ZERO;
     let head = be.len() % 64;
     let (first, rest) = be.split_at(head);
-    for chunk in std::iter::once(first).chain(rest.chunks(64)) {
+    for chunk in core::iter::once(first).chain(rest.chunks(64)) {
         // Big-endian -> little-endian, into the 64-byte wide-reduction buffer.
         let mut le = [0u8; 64];
         for (i, &byte) in chunk.iter().rev().enumerate() {

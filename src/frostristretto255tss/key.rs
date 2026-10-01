@@ -7,6 +7,7 @@
 
 use super::Error;
 use crate::frost::{Ciphersuite, Ristretto255, Scalar};
+use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;

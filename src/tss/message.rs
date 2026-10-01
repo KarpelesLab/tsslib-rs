@@ -7,10 +7,11 @@
 //! `tss.JsonMessage`.
 
 use super::PartyId;
+use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Boxed error returned by transport callbacks, matching Go's generic `error`.
-pub type BrokerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+pub type BrokerResult = Result<(), Box<dyn core::error::Error + Send + Sync>>;
 
 /// An envelope carrying an arbitrary payload for JSON transmission.
 ///
@@ -66,7 +67,7 @@ pub trait MessageReceiver {
 /// messages, which the broker routes to the destination party's broker.
 pub trait MessageBroker: MessageReceiver {
     /// Registers `dest` as the handler for messages of type `typ`.
-    fn connect(&self, typ: &str, dest: std::sync::Arc<dyn MessageReceiver + Send + Sync>);
+    fn connect(&self, typ: &str, dest: alloc::sync::Arc<dyn MessageReceiver + Send + Sync>);
 }
 
 #[cfg(test)]

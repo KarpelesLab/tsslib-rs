@@ -12,6 +12,7 @@ use super::Error;
 use super::bn;
 use super::paillier::{PrivateKey, PublicKey};
 use super::secp;
+use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::bignum::BoxedUint;
@@ -168,7 +169,7 @@ impl Key {
                 "key: per-party slice length mismatch".into(),
             ));
         }
-        for p in self.big_xj.iter().chain(std::iter::once(&self.ecdsa_pub)) {
+        for p in self.big_xj.iter().chain(core::iter::once(&self.ecdsa_pub)) {
             if p.curve != "secp256k1" {
                 return Err(Error::Validation(format!(
                     "key: unexpected curve {}",

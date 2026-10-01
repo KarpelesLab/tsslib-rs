@@ -31,17 +31,19 @@ use super::key::{Key44, Share44, expand_matrix};
 use super::keygen::gosper_masks;
 use super::packing::{PACK_POLYQ_SIZE, pack_polyq, unpack_polyq};
 use super::params::ThresholdParams44;
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{self, ML_DSA_44, N, Poly, pack_t1, power2_round};
-use purecrypto::rng::{OsRng, RngCore};
+use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 const L: usize = 4;
 const K: usize = 4;
@@ -80,10 +82,10 @@ struct Shared {
 struct State {
     own_contrib: [u8; 32],
     contribs: Vec<Option<[u8; 32]>>, // by committee slot (= id)
-    dealt: HashMap<u8, ([Poly; L], [Poly; K])>,
-    received: HashMap<u8, ([Poly; L], [Poly; K])>,
-    t_by_mask: HashMap<u8, [Poly; K]>,
-    commit_by_mask: HashMap<u8, [u8; 32]>,
+    dealt: BTreeMap<u8, ([Poly; L], [Poly; K])>,
+    received: BTreeMap<u8, ([Poly; L], [Poly; K])>,
+    t_by_mask: BTreeMap<u8, [Poly; K]>,
+    commit_by_mask: BTreeMap<u8, [u8; 32]>,
     /// Joint `rho`, fixed at the end of round 1.
     rho: [u8; 32],
     /// This party's round-2 reveal, held back until every commitment is in.
@@ -119,7 +121,7 @@ impl DkgParty44 {
             .collect();
 
         let mut own_contrib = [0u8; 32];
-        OsRng.fill_bytes(&mut own_contrib);
+        SystemRng.fill_bytes(&mut own_contrib);
 
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {
@@ -131,10 +133,10 @@ impl DkgParty44 {
             state: Mutex::new(State {
                 own_contrib,
                 contribs: vec![None; n],
-                dealt: HashMap::new(),
-                received: HashMap::new(),
-                t_by_mask: HashMap::new(),
-                commit_by_mask: HashMap::new(),
+                dealt: BTreeMap::new(),
+                received: BTreeMap::new(),
+                t_by_mask: BTreeMap::new(),
+                commit_by_mask: BTreeMap::new(),
                 rho: [0u8; 32],
                 own_reveal: Vec::new(),
                 t_commits: vec![None; n],
@@ -159,6 +161,7 @@ impl DkgParty44 {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> DkgResult {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -168,20 +171,20 @@ impl DkgParty44 {
 
     /// The group public key, available after [`wait`](DkgParty44::wait) succeeds.
     pub fn public_key(&self) -> Option<MlDsa44PublicKey> {
-        self.shared.pk.lock().unwrap().clone()
+        self.shared.pk.lock().clone()
     }
 }
 
 impl Shared {
     fn deliver(&self, r: DkgResult) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
         let contrib = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.contribs[self.id as usize] = Some(st.own_contrib);
             st.own_contrib
         };
@@ -208,7 +211,7 @@ impl Shared {
             Err(e) => return self.deliver(Err::<Key44, Error>(e)),
         };
         let rho = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (pid, r1) in others.iter().zip(r1s.iter()) {
                 let slot = self.committee_slot(pid);
                 if r1.contrib.0.len() != 32 {
@@ -248,7 +251,7 @@ impl Shared {
         let mut bcast_entries = Vec::new();
         for &mask in &self.masks_deal {
             let mut sseed = [0u8; 64];
-            OsRng.fill_bytes(&mut sseed);
+            SystemRng.fill_bytes(&mut sseed);
             let mut s1 = [Poly::zero(); L];
             let mut s2 = [Poly::zero(); K];
             for (j, p) in s1.iter_mut().enumerate() {
@@ -263,7 +266,7 @@ impl Shared {
             let t_m = compute_t_m(&a, &s1, &s2);
             let commit = commit_share(mask, &s1, &s2);
             {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.state.lock();
                 st.dealt.insert(mask, (s1, s2));
                 st.t_by_mask.insert(mask, t_m);
                 st.commit_by_mask.insert(mask, commit);
@@ -276,7 +279,7 @@ impl Shared {
         }
         let t_commit = commit_reveal(rho, self.id, &bcast_entries);
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.own_reveal = bcast_entries;
             st.t_commits[self.id as usize] = Some(t_commit);
         }
@@ -303,7 +306,7 @@ impl Shared {
             Err(e) => return self.deliver(Err::<Key44, Error>(e)),
         };
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (pid, c) in others.iter().zip(cs.iter()) {
                 let Ok(commit) = <[u8; 32]>::try_from(c.commit.0.as_slice()) else {
                     return self.deliver(Err(Error::Validation("bad t_M commitment".into())));
@@ -318,7 +321,7 @@ impl Shared {
 
     /// Round 2b: every commitment is in — reveal `t_M` and hand out the shares.
     fn round2_reveal(self: &Arc<Self>, others: &[PartyId]) -> Result<(), Error> {
-        let entries = std::mem::take(&mut self.state.lock().unwrap().own_reveal);
+        let entries = core::mem::take(&mut self.state.lock().own_reveal);
         self.broadcast(TYPE_R2BC, &Dkg2Bcast { entries })?;
 
         // Unicast shares to co-holders, grouped by recipient.
@@ -328,7 +331,7 @@ impl Shared {
             for &mask in &self.masks_deal {
                 if (mask >> rid) & 1 == 1 {
                     let (s1, s2) = {
-                        let st = self.state.lock().unwrap();
+                        let st = self.state.lock();
                         st.dealt[&mask]
                     };
                     entries.push(MaskShare {
@@ -352,7 +355,7 @@ impl Shared {
                 let pid = parties[dealer].clone();
                 if !share_senders
                     .iter()
-                    .any(|p| p.cmp_key(&pid) == std::cmp::Ordering::Equal)
+                    .any(|p| p.cmp_key(&pid) == core::cmp::Ordering::Equal)
                 {
                     share_senders.push(pid);
                 }
@@ -360,7 +363,7 @@ impl Shared {
         }
 
         let expects = 1 + if share_senders.is_empty() { 0 } else { 1 };
-        self.state.lock().unwrap().pending = expects;
+        self.state.lock().pending = expects;
 
         let me = Arc::clone(self);
         let exp_bc = JsonExpect::new(
@@ -392,7 +395,7 @@ impl Shared {
             Err(e) => return self.deliver(Err::<Key44, Error>(e)),
         };
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (from, bc) in &bcs {
                 let dealer = self.committee_slot(from) as u8;
                 // The reveal must be what this party committed to in round 2a.
@@ -442,7 +445,7 @@ impl Shared {
             Err(e) => return self.deliver(Err::<Key44, Error>(e)),
         };
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (from, sh) in &shares {
                 let dealer = self.committee_slot(from) as u8;
                 for e in &sh.entries {
@@ -476,7 +479,7 @@ impl Shared {
 
     fn maybe_finalize(self: &Arc<Self>) {
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.pending = st.pending.saturating_sub(1);
             st.pending == 0
         };
@@ -486,7 +489,7 @@ impl Shared {
     }
 
     fn finalize(self: &Arc<Self>) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock();
         let rho_input = {
             let mut input = RHO_DOMAIN.to_vec();
             for c in &st.contribs {
@@ -525,7 +528,7 @@ impl Shared {
         }
 
         // Assemble + verify this party's held shares.
-        let mut shares: HashMap<u8, Share44> = HashMap::new();
+        let mut shares: BTreeMap<u8, Share44> = BTreeMap::new();
         for &mask in &self.masks_hold {
             let (s1, s2) = if let Some(v) = st.dealt.get(&mask) {
                 *v
@@ -640,7 +643,7 @@ impl Shared {
                         Err(e) => return me.deliver(Err(e.into())),
                     }
                 }
-                *me.pk.lock().unwrap() = Some(pk);
+                *me.pk.lock() = Some(pk);
                 me.deliver(Ok(key));
             }),
         );
@@ -651,7 +654,7 @@ impl Shared {
         self.params
             .parties()
             .iter()
-            .position(|q| q.cmp_key(p) == std::cmp::Ordering::Equal)
+            .position(|q| q.cmp_key(p) == core::cmp::Ordering::Equal)
             .expect("sender in committee")
     }
 
@@ -868,21 +871,21 @@ mod tests {
     struct Tap {
         me: Vec<u8>,
         out: Mutex<Vec<JsonMessage>>,
-        handlers: Mutex<HashMap<String, Arc<dyn crate::tss::MessageReceiver + Send + Sync>>>,
+        handlers: Mutex<BTreeMap<String, Arc<dyn crate::tss::MessageReceiver + Send + Sync>>>,
         pending: Mutex<Vec<JsonMessage>>,
     }
 
     impl crate::tss::MessageReceiver for Tap {
         fn receive(&self, m: &JsonMessage) -> crate::tss::BrokerResult {
             if m.from.as_ref().map(|p| &p.key) == Some(&self.me) {
-                self.out.lock().unwrap().push(m.clone());
+                self.out.lock().push(m.clone());
                 return Ok(());
             }
-            let h = self.handlers.lock().unwrap().get(&m.typ).cloned();
+            let h = self.handlers.lock().get(&m.typ).cloned();
             match h {
                 Some(h) => h.receive(m),
                 None => {
-                    self.pending.lock().unwrap().push(m.clone());
+                    self.pending.lock().push(m.clone());
                     Ok(())
                 }
             }
@@ -891,12 +894,9 @@ mod tests {
 
     impl crate::tss::MessageBroker for Tap {
         fn connect(&self, typ: &str, dest: Arc<dyn crate::tss::MessageReceiver + Send + Sync>) {
-            self.handlers
-                .lock()
-                .unwrap()
-                .insert(typ.into(), dest.clone());
+            self.handlers.lock().insert(typ.into(), dest.clone());
             let queued: Vec<JsonMessage> = {
-                let mut p = self.pending.lock().unwrap();
+                let mut p = self.pending.lock();
                 let (mine, rest) = p.drain(..).partition(|m| m.typ == typ);
                 *p = rest;
                 mine
@@ -922,7 +922,7 @@ mod tests {
         });
         let party =
             DkgParty44::new(Parameters::new(ids.clone(), &honest, 2, tap.clone()), th).unwrap();
-        let sent = |typ: &str| tap.out.lock().unwrap().iter().any(|m| m.typ == typ);
+        let sent = |typ: &str| tap.out.lock().iter().any(|m| m.typ == typ);
         let inject = |typ: &str, body: serde_json::Value| {
             let m = json_wrap(typ, &body, Some(evil.clone()), None).unwrap();
             crate::tss::MessageReceiver::receive(&*tap, &m).unwrap();
@@ -983,7 +983,7 @@ mod tests {
         let th = get_threshold_params44(2, 3).unwrap();
         let signers: Vec<&Key44> = vec![&keys[0], &keys[1]];
         let msg = b"dealerless dkg then sign";
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let sig = sign44(&signers, &th, msg, b"", &mut rng).expect("sign");
         assert!(
             pk.verify(&sig, msg, b""),
@@ -997,7 +997,7 @@ mod tests {
         let th = get_threshold_params44(3, 5).unwrap();
         let signers: Vec<&Key44> = vec![&keys[0], &keys[2], &keys[4]];
         let msg = b"3 of 5 dkg";
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let sig = sign44(&signers, &th, msg, b"", &mut rng).unwrap();
         assert!(pk.verify(&sig, msg, b""));
     }

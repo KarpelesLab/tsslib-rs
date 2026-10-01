@@ -36,6 +36,7 @@ mod params;
 mod signing;
 mod signing_party;
 
+use crate::prelude::*;
 pub use key::{Key44, Share44};
 pub use keygen::trusted_dealer_keygen44;
 pub use keygen_party::DkgParty44;
@@ -51,15 +52,15 @@ pub enum Error {
     Validation(String),
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Validation(m) => write!(f, "mldsatss: {m}"),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {

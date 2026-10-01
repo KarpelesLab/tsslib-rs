@@ -32,15 +32,16 @@ use super::otext::{self, ExtendMsg1};
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::signing::{ecdsa_verify, hash_to_scalar, is_high_s, lagrange_coefficient};
 use super::{Error, echo::verify_echoes};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use purecrypto::hash::sha256;
-use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 const TYPE_R1: &str = "dkls:csign:r1";
 const TYPE_R1ECHO: &str = "dkls:csign:r1echo";
@@ -87,14 +88,14 @@ struct State {
     r: Scalar,
     // Alice-side state: per peer × per ΠMul-kind. The checked variant holds a
     // `CheckedAliceState` (two parallel runs) rather than a plain `AliceState`.
-    alice_k: HashMap<String, CheckedAliceState>,
-    alice_x: HashMap<String, CheckedAliceState>,
-    peer_k: HashMap<String, ProjectivePoint>,
+    alice_k: BTreeMap<String, CheckedAliceState>,
+    alice_x: BTreeMap<String, CheckedAliceState>,
+    peer_k: BTreeMap<String, ProjectivePoint>,
     k_rho_mine: Scalar,
     x_rho_mine: Scalar,
     phi_i: Scalar,
     shat_i: Scalar,
-    r4msgs: HashMap<String, SignR4>,
+    r4msgs: BTreeMap<String, SignR4>,
 }
 
 impl CheckedSigningParty {
@@ -125,7 +126,7 @@ impl CheckedSigningParty {
         let me = params.party_id().clone();
         let my_pos = subset
             .iter()
-            .position(|p| p.cmp_key(&me) == std::cmp::Ordering::Equal)
+            .position(|p| p.cmp_key(&me) == core::cmp::Ordering::Equal)
             .ok_or_else(|| Error::Validation("self not in signing subset".into()))?;
 
         let ids: Vec<Scalar> = subset
@@ -159,14 +160,14 @@ impl CheckedSigningParty {
                 rho_i: Scalar::ZERO,
                 big_k_i: secp::generator(),
                 r: Scalar::ZERO,
-                alice_k: HashMap::new(),
-                alice_x: HashMap::new(),
-                peer_k: HashMap::new(),
+                alice_k: BTreeMap::new(),
+                alice_x: BTreeMap::new(),
+                peer_k: BTreeMap::new(),
                 k_rho_mine: Scalar::ZERO,
                 x_rho_mine: Scalar::ZERO,
                 phi_i: Scalar::ZERO,
                 shat_i: Scalar::ZERO,
-                r4msgs: HashMap::new(),
+                r4msgs: BTreeMap::new(),
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -188,6 +189,7 @@ impl CheckedSigningParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<Signature, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -200,19 +202,19 @@ impl CheckedSigningParty {
 
 impl Shared {
     fn deliver(&self, r: Result<Signature, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let k_i = secp::random_scalar(&mut rng);
         let rho_i = secp::random_scalar(&mut rng);
         let big_k_i = secp::mul_base(&k_i);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.k_rho_mine = k_i.mul(&rho_i);
             st.x_rho_mine = self.sx_mine.mul(&rho_i);
             st.k_i = k_i;
@@ -244,8 +246,8 @@ impl Shared {
             Err(e) => return self.deliver(Err(e)),
         };
 
-        let digests: HashMap<String, B64Bytes> = {
-            let mut st = self.state.lock().unwrap();
+        let digests: BTreeMap<String, B64Bytes> = {
+            let mut st = self.state.lock();
             let mut r_point = st.big_k_i;
             for (pid, r1) in others.iter().zip(r1s.iter()) {
                 let Some(kj) = point_from_be_xy(&r1.k_i_x.0, &r1.k_i_y.0) else {
@@ -294,9 +296,9 @@ impl Shared {
         let me = self.params.party_id().clone();
         let self_key = peer_key_str(&me);
 
-        let my_digests: HashMap<String, Vec<u8>> = {
-            let st = self.state.lock().unwrap();
-            let mut m = HashMap::with_capacity(others.len() + 1);
+        let my_digests: BTreeMap<String, Vec<u8>> = {
+            let st = self.state.lock();
+            let mut m = BTreeMap::new();
             for pid in others {
                 let kj = st.peer_k[&peer_key_str(pid)];
                 m.insert(peer_key_str(pid), ki_digest(pid, &kj));
@@ -319,7 +321,7 @@ impl Shared {
 
         // Mix every signer's K_i into the effective ssid for rounds 2+.
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let peer_k = st.peer_k.clone();
             let base = st.ssid.clone();
             st.ssid = mix_round_one_ssid(&base, &me, &st.big_k_i, others, &peer_k);
@@ -338,7 +340,7 @@ impl Shared {
                 }
             };
             let (ssid, k_i) = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 (st.ssid.clone(), st.k_i.clone())
             };
             let sid_k = sign_mul_sid(&ssid, "checked-kxrho", &me.key, &pj.key);
@@ -355,7 +357,7 @@ impl Shared {
                     Err(e) => return self.deliver(Err(e)),
                 };
             {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.state.lock();
                 st.alice_k.insert(peer_key_str(pj), st_k);
                 st.alice_x.insert(peer_key_str(pj), st_x);
             }
@@ -414,7 +416,7 @@ impl Shared {
                 Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
             let (ssid, rho_i) = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 (st.ssid.clone(), st.rho_i.clone())
             };
             // peer is Alice, self is Bob.
@@ -432,7 +434,7 @@ impl Shared {
                     Err(e) => return self.deliver(Err(peer_fail(pid, e))),
                 };
             {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.state.lock();
                 st.k_rho_mine = st.k_rho_mine.add(&u_bk);
                 st.x_rho_mine = st.x_rho_mine.add(&u_bx);
             }
@@ -506,7 +508,7 @@ impl Shared {
 
             let key = peer_key_str(pid);
             let (u_ak, u_ax) = {
-                let st = self.state.lock().unwrap();
+                let st = self.state.lock();
                 let st_k = match st.alice_k.get(&key) {
                     Some(s) => s,
                     None => {
@@ -548,7 +550,7 @@ impl Shared {
                 };
                 (u_ak, u_ax)
             };
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.k_rho_mine = st.k_rho_mine.add(&u_ak);
             st.x_rho_mine = st.x_rho_mine.add(&u_ax);
         }
@@ -556,7 +558,7 @@ impl Shared {
         // φ_i = k_rho_mine ; ŝ_i = ρ_i·H + r·x_rho_mine.
         let e = hash_to_scalar(&self.hash);
         let r4 = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             let phi_i = st.k_rho_mine.clone();
             let shat_i = st.rho_i.mul(&e).add(&st.r.mul(&st.x_rho_mine));
             st.phi_i = phi_i.clone();
@@ -585,9 +587,9 @@ impl Shared {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
         };
-        let digests: HashMap<String, B64Bytes> = {
-            let mut st = self.state.lock().unwrap();
-            let mut d = HashMap::with_capacity(others.len());
+        let digests: BTreeMap<String, B64Bytes> = {
+            let mut st = self.state.lock();
+            let mut d = BTreeMap::new();
             for (pid, r4) in others.iter().zip(r4s.iter()) {
                 st.r4msgs.insert(peer_key_str(pid), r4.clone());
                 d.insert(peer_key_str(pid), B64Bytes(r4_digest(pid, r4)));
@@ -615,11 +617,11 @@ impl Shared {
         let me = self.params.party_id().clone();
         let self_key = peer_key_str(&me);
 
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock();
 
         // Cross-check every signer's (φ, ŝ) reveal for equivocation.
-        let my_digests: HashMap<String, Vec<u8>> = {
-            let mut m = HashMap::with_capacity(others.len() + 1);
+        let my_digests: BTreeMap<String, Vec<u8>> = {
+            let mut m = BTreeMap::new();
             for pid in others {
                 m.insert(
                     peer_key_str(pid),
@@ -702,7 +704,7 @@ impl Shared {
         self.key
             .party_ids
             .iter()
-            .position(|q| q.cmp_key(p) == std::cmp::Ordering::Equal)
+            .position(|q| q.cmp_key(p) == core::cmp::Ordering::Equal)
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
@@ -940,7 +942,7 @@ fn mix_round_one_ssid(
     self_id: &PartyId,
     self_k: &ProjectivePoint,
     peer_ids: &[PartyId],
-    peer_k: &HashMap<String, ProjectivePoint>,
+    peer_k: &BTreeMap<String, ProjectivePoint>,
 ) -> Vec<u8> {
     let mut all: Vec<(Vec<u8>, ProjectivePoint)> = vec![(strip(&self_id.key).to_vec(), *self_k)];
     for pid in peer_ids {
@@ -989,7 +991,7 @@ fn pad32(be: &[u8]) -> Vec<u8> {
 
 fn validate_sorted_subset(subset: &[PartyId]) -> Result<(), Error> {
     for w in subset.windows(2) {
-        if w[0].cmp_key(&w[1]) != std::cmp::Ordering::Less {
+        if w[0].cmp_key(&w[1]) != core::cmp::Ordering::Less {
             return Err(Error::Validation(
                 "signing subset must be sorted and distinct by key".into(),
             ));
@@ -1027,7 +1029,7 @@ mod tests {
 
     fn key_for<'a>(keys: &'a [Key], sid: &PartyId) -> &'a Key {
         keys.iter()
-            .find(|k| k.party_ids[k.idx].cmp_key(sid) == std::cmp::Ordering::Equal)
+            .find(|k| k.party_ids[k.idx].cmp_key(sid) == core::cmp::Ordering::Equal)
             .unwrap()
     }
 
@@ -1090,7 +1092,7 @@ mod tests {
                 && msg
                     .from
                     .as_ref()
-                    .map(|f| f.cmp_key(&self.bob) == std::cmp::Ordering::Equal)
+                    .map(|f| f.cmp_key(&self.bob) == core::cmp::Ordering::Equal)
                     .unwrap_or(false)
                 && let Ok(mut r3) = json_get::<CheckedSignR3>(msg)
                 && let Some(last) = r3.bob_kz.0.last_mut()
@@ -1157,7 +1159,7 @@ mod tests {
             if let Err(Error::Tss(e)) = p.wait()
                 && e.culprits()
                     .iter()
-                    .any(|c| c.cmp_key(&bob) == std::cmp::Ordering::Equal)
+                    .any(|c| c.cmp_key(&bob) == core::cmp::Ordering::Equal)
             {
                 saw_attribution = true;
             }

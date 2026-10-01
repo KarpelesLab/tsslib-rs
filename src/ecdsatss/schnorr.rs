@@ -9,6 +9,7 @@
 
 use super::bn;
 use super::secp::{self, ProjectivePoint, Scalar};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::rng::RngCore;
 
@@ -113,11 +114,11 @@ fn v_challenge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn zkproof_roundtrip() {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let x = super::super::vss::random_scalar(&mut rng);
         let xp = ProjectivePoint::mul_generator(&x);
         let pf = ZkProof::prove(b"sess", &x, &xp, &mut rng);
@@ -130,7 +131,7 @@ mod tests {
 
     #[test]
     fn zkvproof_roundtrip() {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let s = super::super::vss::random_scalar(&mut rng);
         let l = super::super::vss::random_scalar(&mut rng);
         let r = ProjectivePoint::mul_generator(&super::super::vss::random_scalar(&mut rng));

@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 use super::bn::{self, Modulus};
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
@@ -248,7 +249,7 @@ mod tests {
         let (n0, n0p, n0q) = (dec(&pp["n"]), dec(&pp["p"]), dec(&pp["q"]));
         let (ncap, s, t) = (dec(&fp["ncap"]), dec(&fp["s"]), dec(&fp["t"]));
         let session = b"rust-fac-session";
-        let mut rng = purecrypto::rng::OsRng;
+        let mut rng = crate::rng::SystemRng;
         let proof = prove(session, &n0, &ncap, &s, &t, &n0p, &n0q, &mut rng);
         assert!(verify(session, &n0, &ncap, &s, &t, &proof));
         // Different session must fail.

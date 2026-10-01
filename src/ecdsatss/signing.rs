@@ -21,15 +21,16 @@ use super::mta::{self, ProofBob, RangeProofAlice};
 use super::schnorr::{ZkProof, ZkVProof};
 use super::secp::{self, ProjectivePoint};
 use super::{Error, bn};
+use crate::prelude::*;
+use crate::rng::SystemRng;
+use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
 use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use alloc::sync::Arc;
 use purecrypto::bignum::BoxedUint;
-use purecrypto::rng::OsRng;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender, channel};
-use std::sync::{Arc, Mutex};
 
 /// A completed threshold-ECDSA signature.
 #[derive(Clone, Debug)]
@@ -211,6 +212,7 @@ impl SigningParty {
         self.result_rx.try_recv().ok()
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn wait(&self) -> Result<SignatureData, Error> {
         match self.result_rx.recv() {
             Ok(r) => r,
@@ -223,8 +225,8 @@ impl SigningParty {
 
 impl Shared {
     fn deliver(&self, r: Result<SignatureData, Error>) {
-        if let Some(tx) = self.result_tx.lock().unwrap().take() {
-            let _ = tx.send(r);
+        if let Some(tx) = self.result_tx.lock().take() {
+            tx.send(r);
         }
     }
 
@@ -233,7 +235,7 @@ impl Shared {
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.params.party_index();
         let q = bn::secp256k1_order();
 
@@ -254,7 +256,7 @@ impl Shared {
             let j = pj.index as usize;
             let (ntj, h1j, h2j, _) = self.key.peer_params(j);
             let (ca, rp) = mta::alice_init(&own_pk, &k, &ntj, &h1j, &h2j, &mut rng)?;
-            self.state.lock().unwrap().cis[j] = Some(ca.clone());
+            self.state.lock().cis[j] = Some(ca.clone());
             let r1m1 = R1Msg1 {
                 c: B64Bytes(bn::to_be(&ca)),
                 range_proof_alice: parts_b64(&rp.to_parts()),
@@ -269,7 +271,7 @@ impl Shared {
         }
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.k = k;
             st.gamma = gamma;
             st.point_gamma = Some(point_gamma);
@@ -295,7 +297,7 @@ impl Shared {
     fn on_r1_1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
         let decoded: Result<Vec<R1Msg1>, _> = msgs.iter().map(json_get).collect();
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             match decoded {
                 Ok(d) => st.r1m1 = d,
                 Err(e) => return self.deliver(Err(Error::from(e))),
@@ -311,7 +313,7 @@ impl Shared {
 
     fn on_r1_2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
         let ready = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (k, m) in msgs.iter().enumerate() {
                 let r1m2: R1Msg2 = match json_get(m) {
                     Ok(v) => v,
@@ -329,16 +331,16 @@ impl Shared {
     }
 
     fn round2(self: &Arc<Self>, _others: &[PartyId]) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.params.party_index();
         let context_i = context_bytes(&self.ssid, i);
         let (r1m1, r1m1_from) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.r1m1.clone(), st.r1m1_from.clone())
         };
         let (my_nt, my_h1, my_h2, _) = self.key.peer_params(i);
         let (gamma, w, big_w_i) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.gamma.clone(), st.w.clone(), st.big_ws[i])
         };
 
@@ -366,7 +368,7 @@ impl Shared {
                 Err(e) => return self.deliver(Err(e)),
             };
             {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.state.lock();
                 st.betas[j] = Some(beta);
                 st.c1jis[j] = Some(c1.clone());
                 st.vs[j] = Some(v);
@@ -400,7 +402,7 @@ impl Shared {
 
         let from = self.params.other_parties();
         let (cis, betas, vs, k, gamma, w, big_ws) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.cis.clone(),
                 st.betas.clone(),
@@ -474,7 +476,7 @@ impl Shared {
         }
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.theta = theta.clone();
             st.sigma = sigma;
         }
@@ -493,13 +495,13 @@ impl Shared {
     }
 
     fn round4(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.params.party_index();
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
 
         let (theta0, gamma, point_gamma, decommit) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.theta.clone(),
                 st.gamma.clone(),
@@ -519,7 +521,7 @@ impl Shared {
             Some(v) => v,
             None => return self.fail("signing: theta not invertible"),
         };
-        self.state.lock().unwrap().theta_inverse = theta_inverse;
+        self.state.lock().theta_inverse = theta_inverse;
 
         let context_i = context_bytes(&self.ssid, i);
         let pf = ZkProof::prove(&context_i, &secp::scalar(&gamma), &point_gamma, &mut rng);
@@ -544,13 +546,13 @@ impl Shared {
     }
 
     fn round5(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
         let from = self.params.other_parties();
 
         let (point_gamma, theta_inverse, m_hash, k, sigma, r1_commitments) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.point_gamma.unwrap(),
                 st.theta_inverse.clone(),
@@ -618,7 +620,7 @@ impl Shared {
         let (c, d) = super::commit::commit(&[vx, vy, ax, ay], &mut rng);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.li = li;
             st.roi = roi;
             st.big_ai = Some(big_ai);
@@ -645,11 +647,11 @@ impl Shared {
     }
 
     fn round6(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let i = self.params.party_index();
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (k, msg) in msgs.iter().enumerate() {
                 let r5: R5Msg = match json_get(msg) {
                     Ok(v) => v,
@@ -662,7 +664,7 @@ impl Shared {
 
         let context_i = context_bytes(&self.ssid, i);
         let (roi, big_ai, big_vi, big_r, si, li, decommit) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.roi.clone(),
                 st.big_ai.unwrap(),
@@ -708,12 +710,12 @@ impl Shared {
     }
 
     fn round7(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
-        let mut rng = OsRng;
+        let mut rng = SystemRng;
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
 
         let (big_r, big_ai, big_vi, roi, li, m_hash, rx) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.big_r.unwrap(),
                 st.big_ai.unwrap(),
@@ -724,7 +726,7 @@ impl Shared {
                 st.rx.clone(),
             )
         };
-        let r5_commitments = self.state.lock().unwrap().r5_commitments.clone();
+        let r5_commitments = self.state.lock().r5_commitments.clone();
 
         // Σ V_j and Σ A_j (starting from own).
         let minus_m = modq.sub(&bn::u64(0), &m_hash);
@@ -802,7 +804,7 @@ impl Shared {
         let (c, d) = super::commit::commit(&[ux, uy, tx, ty], &mut rng);
 
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             st.ui = Some(ui);
             st.ti = Some(ti);
             st.r7_decommit = d;
@@ -824,7 +826,7 @@ impl Shared {
 
     fn round8(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lock();
             for (k, msg) in msgs.iter().enumerate() {
                 let r7: R7Msg = match json_get(msg) {
                     Ok(v) => v,
@@ -834,7 +836,7 @@ impl Shared {
                 st.r7_commitments[j] = Some(bn::from_be(&r7.commitment.0));
             }
         }
-        let decommit = self.state.lock().unwrap().r7_decommit.clone();
+        let decommit = self.state.lock().r7_decommit.clone();
         let r8 = R8Msg {
             de_commitment: parts_b64(&decommit.iter().map(bn::to_be).collect::<Vec<_>>()),
         };
@@ -852,7 +854,7 @@ impl Shared {
 
     fn round9(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
         let (ui, ti, r7_commitments, si) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (
                 st.ui.unwrap(),
                 st.ti.unwrap(),
@@ -913,7 +915,7 @@ impl Shared {
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
         let (si, rx, ry) = {
-            let st = self.state.lock().unwrap();
+            let st = self.state.lock();
             (st.si.clone(), st.rx.clone(), st.ry.clone())
         };
         let mut sum_s = si;

@@ -8,6 +8,7 @@
 
 use super::Error;
 use super::baseot;
+use crate::prelude::*;
 use purecrypto::cipher::{Aes128, Ctr};
 use purecrypto::hash::sha512_256;
 use zeroize::Zeroize;
@@ -413,16 +414,18 @@ fn chunk_seeds(b: &[u8]) -> Vec<[u8; SEED_LEN]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::{OsRng, RngCore};
+    use crate::rng::SystemRng;
+    use purecrypto::rng::RngCore;
 
     /// Wires a base-OT batch into an (ExtSender, ExtReceiver) pair.
     fn setup() -> (ExtSender, ExtReceiver) {
         let sid = b"otext-sid";
         // ExtSender is base-OT receiver (choice bits = Δ); ExtReceiver is base-OT sender.
         let mut delta = [0u8; DELTA_BYTES];
-        OsRng.fill_bytes(&mut delta);
-        let (b_sender, m1) = baseot::Sender::new(sid, KAPPA, &mut OsRng);
-        let (b_receiver, m2) = baseot::Receiver::new(sid, KAPPA, &delta, &m1, &mut OsRng).unwrap();
+        SystemRng.fill_bytes(&mut delta);
+        let (b_sender, m1) = baseot::Sender::new(sid, KAPPA, &mut SystemRng);
+        let (b_receiver, m2) =
+            baseot::Receiver::new(sid, KAPPA, &delta, &m1, &mut SystemRng).unwrap();
         let (k0, k1) = b_sender.finalize(&m2).unwrap();
         let chosen = b_receiver.finalize();
         let ext_receiver = ExtReceiver::from_base(&k0, &k1).unwrap();
@@ -436,7 +439,7 @@ mod tests {
         let sid = b"session-1";
         let l = 256;
         let mut c = vec![0u8; l / 8];
-        OsRng.fill_bytes(&mut c);
+        SystemRng.fill_bytes(&mut c);
 
         let (msg, r_keys) = er.extend(sid, &c, l).unwrap();
         let (m0, m1) = es.extend(sid, &msg).unwrap();

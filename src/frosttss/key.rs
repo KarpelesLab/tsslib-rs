@@ -3,6 +3,7 @@
 use super::Error;
 use super::point::{EcPointJson, point_from_json, point_to_json};
 use crate::frost::{Ciphersuite, Ed25519, Scalar};
+use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;

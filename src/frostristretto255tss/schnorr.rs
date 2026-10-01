@@ -4,6 +4,7 @@
 
 use super::Error;
 use crate::frost::{Ciphersuite, Ristretto255, Scalar, scalar_from_be_mod_l, scalar_to_be};
+use crate::prelude::*;
 use purecrypto::ec::ristretto255::RistrettoPoint;
 use purecrypto::hash::sha512;
 use purecrypto::rng::RngCore;
@@ -76,11 +77,11 @@ fn challenge(session: &[u8], x_pub: &RistrettoPoint, r: &RistrettoPoint) -> Scal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     fn rand_scalar() -> Scalar {
         let mut b = [0u8; 64];
-        OsRng.fill_bytes(&mut b);
+        SystemRng.fill_bytes(&mut b);
         Scalar::from_bytes_mod_order(&b)
     }
 
@@ -88,7 +89,7 @@ mod tests {
     fn prove_then_verify() {
         let x = rand_scalar();
         let xp = Ristretto255::mul_base(&x);
-        let pf = ZkProof::prove(b"session", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"session", &x, &xp, &mut SystemRng);
         assert!(pf.verify(b"session", &xp));
         assert!(!pf.verify(b"other", &xp));
     }
@@ -97,7 +98,7 @@ mod tests {
     fn wire_roundtrip() {
         let x = rand_scalar();
         let xp = Ristretto255::mul_base(&x);
-        let pf = ZkProof::prove(b"s", &x, &xp, &mut OsRng);
+        let pf = ZkProof::prove(b"s", &x, &xp, &mut SystemRng);
         let (r, t) = pf.to_wire();
         assert!(ZkProof::from_wire(&r, &t).unwrap().verify(b"s", &xp));
     }

@@ -14,9 +14,10 @@ use super::secp::{self, ProjectivePoint, Scalar};
 use super::signing::{
     cmp_be, ecdsa_verify, hash_to_scalar, is_high_s, lagrange_coefficient, make_sid, pad32,
 };
+use crate::prelude::*;
 use crate::tss::hashing::sha512_256i_tagged;
+use core::sync::atomic::{AtomicBool, Ordering};
 use purecrypto::rng::RngCore;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// One party's offline pre-signing shares.
 struct PartyPresign {
@@ -256,7 +257,7 @@ pub trait UsedPresignStore {
 /// A non-durable [`UsedPresignStore`] for tests. Does NOT survive restart.
 #[derive(Default)]
 pub struct InMemoryPresignStore {
-    seen: std::sync::Mutex<std::collections::HashSet<[u8; 32]>>,
+    seen: crate::sync::Mutex<alloc::collections::BTreeSet<[u8; 32]>>,
 }
 
 impl InMemoryPresignStore {
@@ -268,7 +269,7 @@ impl InMemoryPresignStore {
 
 impl UsedPresignStore for InMemoryPresignStore {
     fn check_and_record(&self, r_hash: &[u8; 32]) -> Result<bool, Error> {
-        Ok(self.seen.lock().unwrap().insert(*r_hash))
+        Ok(self.seen.lock().insert(*r_hash))
     }
 }
 
@@ -297,8 +298,8 @@ pub fn sign_with_presign_durable(
 mod tests {
     use super::super::keygen::keygen;
     use super::*;
+    use crate::rng::SystemRng;
     use purecrypto::hash::sha256;
-    use purecrypto::rng::OsRng;
 
     fn party_ids(n: usize) -> Vec<crate::tss::PartyId> {
         crate::tss::PartyId::sort(
@@ -312,8 +313,8 @@ mod tests {
     #[test]
     fn presign_then_sign_verifies() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
-        let po = presign(&keys, &[0, 2], &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
+        let po = presign(&keys, &[0, 2], &mut SystemRng).unwrap();
         let msg = sha256(b"presigned message");
         let sig = sign_with_presign(&po, &msg, None).unwrap();
 
@@ -327,8 +328,8 @@ mod tests {
     #[test]
     fn presign_is_single_use() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
-        let po = presign(&keys, &[0, 1], &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
+        let po = presign(&keys, &[0, 1], &mut SystemRng).unwrap();
         let msg = sha256(b"once");
         assert!(!po.consumed());
         sign_with_presign(&po, &msg, None).unwrap();
@@ -340,11 +341,11 @@ mod tests {
     #[test]
     fn durable_store_rejects_reuse() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
         let store = InMemoryPresignStore::new();
         let msg = sha256(b"durable");
 
-        let po1 = presign(&keys, &[0, 1], &mut OsRng).unwrap();
+        let po1 = presign(&keys, &[0, 1], &mut SystemRng).unwrap();
         sign_with_presign_durable(&po1, &msg, None, &store).unwrap();
         // Re-recording the same R-hash is rejected.
         assert!(!store.check_and_record(&po1.r_hash()).unwrap());
@@ -353,8 +354,8 @@ mod tests {
     #[test]
     fn presign_tweak_verifies_under_child_key() {
         let ids = party_ids(3);
-        let keys = keygen(3, 1, &ids, &mut OsRng).unwrap();
-        let po = presign(&keys, &[1, 2], &mut OsRng).unwrap();
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
+        let po = presign(&keys, &[1, 2], &mut SystemRng).unwrap();
         let tweak = secp::scalar_from_be_reduce(&[0x11, 0x22, 0x33]);
         let msg = sha256(b"tweaked presign");
         let sig = sign_with_presign(&po, &msg, Some(&tweak)).unwrap();

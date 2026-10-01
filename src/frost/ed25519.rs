@@ -1,6 +1,7 @@
 //! FROST(Ed25519, SHA-512) ciphersuite — RFC 9591 §6.1.
 
 use super::{Ciphersuite, Scalar};
+use crate::prelude::*;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use purecrypto::hash::sha512;
 

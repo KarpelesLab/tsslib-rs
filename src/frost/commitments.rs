@@ -7,6 +7,7 @@
 //! returning the secrets.
 
 use super::hashing::sha512_256i;
+use crate::prelude::*;
 use purecrypto::rng::RngCore;
 
 /// Produces a commitment `C` and decommitment `D = [r, secrets...]` over the
@@ -51,12 +52,12 @@ fn strip(b: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::OsRng;
+    use crate::rng::SystemRng;
 
     #[test]
     fn commit_decommit_roundtrip() {
         let secrets = vec![vec![1, 2, 3], vec![0xff, 0x00, 0x11], vec![42]];
-        let (c, d) = commit(&mut OsRng, &secrets);
+        let (c, d) = commit(&mut SystemRng, &secrets);
         let opened = decommit(&c, &d).unwrap();
         assert_eq!(opened, secrets);
     }
@@ -64,7 +65,7 @@ mod tests {
     #[test]
     fn tampered_commitment_fails() {
         let secrets = vec![vec![1, 2, 3]];
-        let (mut c, d) = commit(&mut OsRng, &secrets);
+        let (mut c, d) = commit(&mut SystemRng, &secrets);
         c[0] ^= 0x01;
         assert!(decommit(&c, &d).is_none());
     }
@@ -72,7 +73,7 @@ mod tests {
     #[test]
     fn tampered_decommitment_fails() {
         let secrets = vec![vec![1, 2, 3]];
-        let (c, mut d) = commit(&mut OsRng, &secrets);
+        let (c, mut d) = commit(&mut SystemRng, &secrets);
         d[1][0] ^= 0x01;
         assert!(decommit(&c, &d).is_none());
     }
