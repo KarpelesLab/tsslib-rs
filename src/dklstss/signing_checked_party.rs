@@ -36,7 +36,7 @@ use crate::rng::SystemRng;
 use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::sha256;
@@ -238,7 +238,7 @@ impl Shared {
         Ok(())
     }
 
-    fn on_r1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let r1s: Vec<SignR1> = match decode_all(others, &msgs) {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -286,7 +286,7 @@ impl Shared {
         self.params.broker().connect(TYPE_R1ECHO, Arc::new(exp));
     }
 
-    fn on_r1_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r1_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let echoes: Vec<EchoMsg> = match decode_all(others, &msgs) {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -380,7 +380,7 @@ impl Shared {
         self.params.broker().connect(TYPE_R2, Arc::new(exp));
     }
 
-    fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let r2s: Vec<CheckedSignR2> = match decode_all(others, &msgs) {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -459,7 +459,7 @@ impl Shared {
         self.params.broker().connect(TYPE_R3, Arc::new(exp));
     }
 
-    fn on_r3(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r3(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let r3s: Vec<CheckedSignR3> = match decode_all(others, &msgs) {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -580,7 +580,7 @@ impl Shared {
         self.params.broker().connect(TYPE_R4, Arc::new(exp));
     }
 
-    fn on_r4_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r4_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let r4s: Vec<SignR4> = match decode_all(others, &msgs) {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -607,7 +607,7 @@ impl Shared {
         self.params.broker().connect(TYPE_R4ECHO, Arc::new(exp));
     }
 
-    fn finalize(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn finalize(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let echoes: Vec<EchoMsg> = match decode_all(others, &msgs) {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -706,7 +706,13 @@ impl Shared {
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
-        let msg = json_wrap(typ, body, Some(self.params.party_id().clone()), None)?;
+        let msg = encode(
+            self.params.wire_format(),
+            typ,
+            body,
+            Some(self.params.party_id().clone()),
+            None,
+        )?;
         self.params
             .broker()
             .receive(&msg)
@@ -714,7 +720,8 @@ impl Shared {
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),
@@ -758,11 +765,11 @@ fn peer_fail(culprit: &PartyId, e: Error) -> Error {
 /// sender of a malformed one.
 fn decode_all<T: serde::de::DeserializeOwned>(
     from: &[PartyId],
-    msgs: &[JsonMessage],
+    msgs: &[Message],
 ) -> Result<Vec<T>, Error> {
     from.iter()
         .zip(msgs)
-        .map(|(pid, m)| json_get(m).map_err(|e| peer_fail(pid, Error::Serde(e))))
+        .map(|(pid, m)| decode(m).map_err(|e| peer_fail(pid, Error::Serde(e))))
         .collect()
 }
 
@@ -1085,18 +1092,24 @@ mod tests {
     }
 
     impl MessageReceiver for BetaTamperingBroker {
-        fn receive(&self, msg: &JsonMessage) -> BrokerResult {
+        fn receive(&self, msg: &Message) -> BrokerResult {
             if msg.typ == TYPE_R3
                 && msg
                     .from
                     .as_ref()
                     .map(|f| f.cmp_key(&self.bob) == core::cmp::Ordering::Equal)
                     .unwrap_or(false)
-                && let Ok(mut r3) = json_get::<CheckedSignR3>(msg)
+                && let Ok(mut r3) = decode::<CheckedSignR3>(msg)
                 && let Some(last) = r3.bob_kz.0.last_mut()
             {
                 *last ^= 0x01;
-                let rewritten = json_wrap(&msg.typ, &r3, msg.from.clone(), msg.to.clone())?;
+                let rewritten = encode(
+                    msg.format(),
+                    &msg.typ,
+                    &r3,
+                    msg.from.clone(),
+                    msg.to.clone(),
+                )?;
                 return self.inner.receive(&rewritten);
             }
             self.inner.receive(msg)

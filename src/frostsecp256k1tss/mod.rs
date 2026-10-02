@@ -54,8 +54,8 @@ pub use signing::{SignOptions, Signing, TaprootTweak};
 pub enum Error {
     /// A [`Key`] or message failed a consistency check.
     Validation(String),
-    /// A JSON (de)serialization error.
-    Serde(serde_json::Error),
+    /// A key or message failed to encode or decode (JSON or binary).
+    Serde(crate::tss::CodecError),
     /// A protocol-round error (carries victim / culprits).
     Tss(Box<crate::tss::TssError>),
 }
@@ -64,7 +64,7 @@ impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Validation(m) => write!(f, "frostsecp256k1tss: {m}"),
-            Error::Serde(e) => write!(f, "frostsecp256k1tss: json: {e}"),
+            Error::Serde(e) => write!(f, "frostsecp256k1tss: {e}"),
             Error::Tss(e) => write!(f, "{e}"),
         }
     }
@@ -72,9 +72,22 @@ impl core::fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
+impl From<crate::tss::CodecError> for Error {
+    fn from(e: crate::tss::CodecError) -> Self {
+        Error::Serde(e)
+    }
+}
+
+impl From<crate::wire::Error> for Error {
+    fn from(e: crate::wire::Error) -> Self {
+        Error::Serde(e.into())
+    }
+}
+
+#[cfg(feature = "json")]
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
-        Error::Serde(e)
+        Error::Serde(e.into())
     }
 }
 

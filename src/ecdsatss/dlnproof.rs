@@ -132,7 +132,7 @@ pub(crate) fn verify(proof: &DlnProof, h1: &BoxedUint, h2: &BoxedUint, ntilde: &
     true
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::testvec::{dec, fixtures};
     use super::*;

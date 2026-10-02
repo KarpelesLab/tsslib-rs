@@ -17,12 +17,17 @@ name = "tsslib"
 # Each protocol is gated so downstream users can compile only what they need;
 # each pulls in exactly the purecrypto curve/lattice features it requires.
 # `default` pulls in everything.
-default = ["std", "frosttss", "frostristretto255tss", "frostsecp256k1tss", "mldsatss", "dklstss", "ecdsatss", "eddsatss"]
+default = ["std", "json", "frosttss", "frostristretto255tss", "frostsecp256k1tss", "mldsatss", "dklstss", "ecdsatss", "eddsatss"]
 
 # The crate is `#![no_std]` + `alloc`. `std` adds OS randomness (without it,
 # register one with `rng::set_entropy_source`), the blocking `wait()` on every
 # session, and OS-backed locks in place of spin locks.
-std = ["purecrypto/std", "serde/std", "serde_json/std", "base64/std", "hex/std", "zeroize/std", "subtle/std"]
+std = ["purecrypto/std", "serde/std", "serde_json?/std", "base64/std", "hex/std", "zeroize/std", "subtle/std"]
+
+# JSON keys and messages (serde_json). Without it, keys and messages use only
+# the compact binary encoding in `tsslib::wire`, which needs neither std nor
+# serde_json. Independent of `std`.
+json = ["dep:serde_json"]
 
 # FROST(Ed25519, SHA-512) — RFC 9591. Ed25519-compatible output.
 # cipher/kdf back the X25519+HKDF+ChaCha20-Poly1305 encrypted-share envelope.
@@ -56,7 +61,7 @@ purecrypto = { version = "0.9", default-features = false, features = ["alloc", "
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 # arbitrary_precision: emit/parse big-integer JSON numbers (>2^53) losslessly,
 # as the save formats store them.
-serde_json = { version = "1", default-features = false, features = ["alloc", "arbitrary_precision"] }
+serde_json = { version = "1", default-features = false, features = ["alloc", "arbitrary_precision"], optional = true }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }

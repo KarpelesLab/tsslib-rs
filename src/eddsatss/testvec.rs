@@ -8,7 +8,7 @@ pub(crate) fn fixtures() -> Value {
     serde_json::from_str(raw).expect("valid eddsa.json fixture")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::key::Key;
     use super::fixtures;

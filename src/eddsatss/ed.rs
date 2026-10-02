@@ -197,6 +197,7 @@ mod tests {
         assert!(bool::from(scalar_from_be(&be[..32]).ct_eq(&Scalar::ZERO)));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn point_json_roundtrip() {
         for n in 1u8..6 {

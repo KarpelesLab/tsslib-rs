@@ -26,7 +26,19 @@ impl Key {
     /// Serializes the key to JSON in the version-4 save format
     /// (unencrypted — the secret share and OT state are in cleartext; the caller
     /// is responsible for confidentiality).
+    #[cfg(feature = "json")]
     pub fn to_json(&self) -> Result<String, Error> {
+        Ok(serde_json::to_string(&self.to_wire()?)?)
+    }
+
+    /// Parses a key in the JSON save format (versions 1–4).
+    #[cfg(feature = "json")]
+    pub fn from_json(s: &str) -> Result<Key, Error> {
+        Key::from_wire(serde_json::from_str(s)?)
+    }
+
+    /// The save-format struct both encodings serialize.
+    fn to_wire(&self) -> Result<KeyWire, Error> {
         self.validate_basic()?;
         let ot = self
             .ot
@@ -51,12 +63,11 @@ impl Key {
             ot,
             chain_code: B64Vec(self.chain_code.to_vec()),
         };
-        Ok(serde_json::to_string(&wire)?)
+        Ok(wire)
     }
 
-    /// Parses a key in the JSON save format (versions 1–4).
-    pub fn from_json(s: &str) -> Result<Key, Error> {
-        let wire: KeyWire = serde_json::from_str(s)?;
+    /// Checks and converts a decoded save-format struct.
+    fn from_wire(wire: KeyWire) -> Result<Key, Error> {
         if !matches!(wire.version, 1..=KEY_VERSION) {
             return Err(Error::Validation(format!(
                 "unsupported key version {}",
@@ -111,6 +122,11 @@ impl Key {
 }
 
 // --- wire format -----------------------------------------------------------
+
+crate::wire::key_codec!(Key, Error, KeyWire,
+    to_wire: |k| k.to_wire(),
+    from_wire: |w| Key::from_wire(w),
+);
 
 #[derive(Serialize, Deserialize)]
 struct KeyWire {
@@ -256,7 +272,7 @@ fn biguint_to_scalar(v: &BigUintDec) -> Result<Scalar, Error> {
     Scalar::from_bytes_be(&arr).map_err(|_| Error::Validation("Xi >= n".into()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::keygen::keygen;
     use super::super::signing::sign;
@@ -311,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn save_format_shape_matches_go() {
+    fn save_format_shape_is_stable() {
         let ids = party_ids(2);
         let keys = keygen(2, 1, &ids, &mut SystemRng).unwrap();
         let v: serde_json::Value = serde_json::from_str(&keys[0].to_json().unwrap()).unwrap();
@@ -332,7 +348,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod fixture_tests {
     use super::super::signing::{self, sign};
     use super::*;
@@ -382,5 +398,44 @@ mod fixture_tests {
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);
         assert!(signing::ecdsa_verify(&keys[0].ecdsa_pub, &e, &r, &s));
+    }
+}
+
+#[cfg(test)]
+mod binary_tests {
+    use super::super::keygen::keygen;
+    use super::super::signing::{self, sign};
+    use super::*;
+    use crate::rng::SystemRng;
+    use purecrypto::hash::sha256;
+
+    #[test]
+    fn key_binary_roundtrip_then_sign() {
+        let ids: Vec<PartyId> = PartyId::sort(
+            (1..=3u8)
+                .map(|i| PartyId::new(i.to_string(), format!("P{i}"), vec![i]))
+                .collect(),
+            0,
+        );
+        let keys = keygen(3, 1, &ids, &mut SystemRng).unwrap();
+        let loaded: Vec<Key> = keys
+            .iter()
+            .map(|k| Key::from_bytes(&k.to_bytes().unwrap()).unwrap())
+            .collect();
+        for (a, b) in keys.iter().zip(&loaded) {
+            assert!(bool::from(a.xi.ct_eq(&b.xi)));
+            assert_eq!(a.chain_code, b.chain_code);
+            #[cfg(feature = "json")]
+            assert_eq!(a.to_json().unwrap(), b.to_json().unwrap());
+        }
+        let bytes = keys[0].to_bytes().unwrap();
+        assert!(Key::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+
+        let msg = sha256(b"binary reload sign");
+        let sig = sign(&loaded, &[0, 2], &msg, &mut SystemRng).unwrap();
+        let e = signing::hash_to_scalar(&msg);
+        let r = secp::scalar_from_be_reduce(&sig.r);
+        let s = secp::scalar_from_be_reduce(&sig.s);
+        assert!(signing::ecdsa_verify(&loaded[0].ecdsa_pub, &e, &r, &s));
     }
 }

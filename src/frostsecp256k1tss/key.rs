@@ -113,11 +113,13 @@ impl Key {
     }
 
     /// Serializes the key to JSON.
+    #[cfg(feature = "json")]
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(&KeyWire::from_key(self))?)
     }
 
     /// Parses and validates a key from JSON.
+    #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
         let key = serde_json::from_str::<KeyWire>(s)?.into_key()?;
         key.validate_basic()?;
@@ -129,6 +131,15 @@ impl Key {
         self.xi = Scalar::ZERO;
     }
 }
+
+crate::wire::key_codec!(Key, Error, KeyWire,
+    to_wire: |k| Ok::<_, Error>(KeyWire::from_key(k)),
+    from_wire: |w| {
+        let key = w.into_key()?;
+        key.validate_basic()?;
+        Ok(key)
+    },
+);
 
 #[derive(Serialize, Deserialize)]
 struct KeyWire {
@@ -204,6 +215,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip() {
         let k = single_party_key(9);
@@ -229,6 +241,7 @@ mod tests {
         assert!(k.validate_basic().is_err());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn from_json_rejects_out_of_range_xi() {
         let mut v: serde_json::Value =
@@ -237,5 +250,24 @@ mod tests {
         let n = "115792089237316195423570985008687907852837564279074904382605163141518161494337";
         v["Xi"] = serde_json::Value::Number(n.parse().unwrap());
         assert!(Key::from_json(&v.to_string()).is_err());
+    }
+
+    #[test]
+    fn binary_roundtrip() {
+        let k = single_party_key(9);
+        let bytes = k.to_bytes().unwrap();
+        let back = Key::from_bytes(&bytes).unwrap();
+        back.validate_basic().unwrap();
+        assert!(bool::from(k.xi.ct_eq(&back.xi)));
+        assert!(point_eq(&k.group_public_key, &back.group_public_key));
+        assert!(Key::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn binary_preserves_everything_json_does() {
+        let k = single_party_key(11);
+        let back = Key::from_bytes(&k.to_bytes().unwrap()).unwrap();
+        assert_eq!(back.to_json().unwrap(), k.to_json().unwrap());
     }
 }

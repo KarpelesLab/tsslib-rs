@@ -20,7 +20,7 @@ pub mod keygen;
 pub mod resharing;
 pub(crate) mod schnorr;
 pub mod signing;
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod testvec;
 pub(crate) mod vss;
 
@@ -36,23 +36,36 @@ pub use signing::{SignatureData, SigningParty};
 pub enum Error {
     /// A value failed an internal consistency or proof check.
     Validation(String),
-    /// A JSON (de)serialization error.
-    Serde(serde_json::Error),
+    /// A key or message failed to encode or decode (JSON or binary).
+    Serde(crate::tss::CodecError),
 }
 
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Validation(m) => write!(f, "eddsatss: {m}"),
-            Error::Serde(e) => write!(f, "eddsatss: json: {e}"),
+            Error::Serde(e) => write!(f, "eddsatss: {e}"),
         }
     }
 }
 
 impl core::error::Error for Error {}
 
+impl From<crate::tss::CodecError> for Error {
+    fn from(e: crate::tss::CodecError) -> Self {
+        Error::Serde(e)
+    }
+}
+
+impl From<crate::wire::Error> for Error {
+    fn from(e: crate::wire::Error) -> Self {
+        Error::Serde(e.into())
+    }
+}
+
+#[cfg(feature = "json")]
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
-        Error::Serde(e)
+        Error::Serde(e.into())
     }
 }

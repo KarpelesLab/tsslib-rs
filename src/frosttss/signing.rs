@@ -12,7 +12,7 @@ use crate::prelude::*;
 use crate::rng::SystemRng;
 use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use purecrypto::ec::{Ed25519PublicKey, Ed25519Signature};
@@ -198,7 +198,7 @@ impl Shared {
 
     /// Round 2: assemble commitments, derive binding factors, compute the group
     /// commitment `R` and challenge `c`, emit the partial signature `z_i`.
-    fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<JsonMessage>) {
+    fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<Message>) {
         let nonces = self.nonces.lock().take();
         let Some(nonces) = nonces else {
             return self.deliver(Err(Error::Validation(
@@ -215,7 +215,7 @@ impl Shared {
             binding: nonces.big_e,
         });
         for (pid, msg) in others.iter().zip(r1msgs.iter()) {
-            let r1: SignRound1Msg = match json_get(msg) {
+            let r1: SignRound1Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -289,7 +289,7 @@ impl Shared {
         r: EdwardsPoint,
         c: Scalar,
         my_zi: Scalar,
-        r2msgs: Vec<JsonMessage>,
+        r2msgs: Vec<Message>,
     ) {
         let signer_ids: Vec<Vec<u8>> = commitments.iter().map(|cm| cm.identifier.clone()).collect();
 
@@ -310,7 +310,7 @@ impl Shared {
         for (n, pid) in others.iter().enumerate() {
             // commitments[n+1] aligns with others[n].
             let cm = &commitments[n + 1];
-            let r2: SignRound2Msg = match json_get(&r2msgs[n]) {
+            let r2: SignRound2Msg = match decode(&r2msgs[n]) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -375,7 +375,13 @@ impl Shared {
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
-        let msg = json_wrap(typ, body, Some(self.params.party_id().clone()), None)?;
+        let msg = encode(
+            self.params.wire_format(),
+            typ,
+            body,
+            Some(self.params.party_id().clone()),
+            None,
+        )?;
         self.params
             .broker()
             .receive(&msg)

@@ -23,7 +23,7 @@ use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use purecrypto::ec::{Ed25519PublicKey, Ed25519Signature};
@@ -189,12 +189,12 @@ impl Shared {
         Ok(())
     }
 
-    fn round2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn round2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let mut rng = SystemRng;
         let i = self.params.party_index();
 
         for (k, m) in msgs.iter().enumerate() {
-            let r1: R1Msg = match json_get(m) {
+            let r1: R1Msg = match decode(m) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -226,7 +226,7 @@ impl Shared {
         });
     }
 
-    fn round3(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn round3(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let (ri, point_ri, wi) = {
             let st = self.state.lock();
             (st.ri.clone(), st.point_ri.unwrap(), st.wi.clone())
@@ -234,7 +234,7 @@ impl Shared {
 
         let mut r = point_ri;
         for (k, oid) in others.iter().enumerate() {
-            let r2: R2Msg = match json_get(&msgs[k]) {
+            let r2: R2Msg = match decode(&msgs[k]) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -306,14 +306,14 @@ impl Shared {
         });
     }
 
-    fn finalize(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
+    fn finalize(self: &Arc<Self>, msgs: Vec<Message>) {
         let (encoded_r, local_s) = {
             let st = self.state.lock();
             (st.encoded_r, st.local_s.clone())
         };
         let mut sum_s = local_s;
         for m in &msgs {
-            let r3: R3Msg = match json_get(m) {
+            let r3: R3Msg = match decode(m) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -371,14 +371,15 @@ impl Shared {
 
     fn connect<F>(self: &Arc<Self>, typ: &str, others: &[PartyId], cb: F)
     where
-        F: FnOnce(Vec<JsonMessage>) + Send + 'static,
+        F: FnOnce(Vec<Message>) + Send + 'static,
     {
         let exp = JsonExpect::new(typ, others.to_vec(), Box::new(cb));
         self.params.broker().connect(typ, Arc::new(exp));
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),
@@ -459,6 +460,7 @@ struct R3Msg {
 mod tests {
     use super::*;
     use crate::eddsatss::keygen::KeygenParty;
+    #[cfg(feature = "json")]
     use crate::eddsatss::testvec::fixtures;
     use crate::tss::testhub::TestHub;
 
@@ -475,10 +477,21 @@ mod tests {
     }
 
     fn sign(keys: &[Key], ids: &[PartyId], t: usize, msg: &[u8]) -> Vec<SignatureData> {
+        sign_with(keys, ids, t, msg, crate::tss::WireFormat::default())
+    }
+
+    fn sign_with(
+        keys: &[Key],
+        ids: &[PartyId],
+        t: usize,
+        msg: &[u8],
+        format: crate::tss::WireFormat,
+    ) -> Vec<SignatureData> {
         let hub = TestHub::new(ids);
         let parties: Vec<SigningParty> = (0..ids.len())
             .map(|i| {
-                let params = Parameters::new(ids.to_vec(), &ids[i], t, hub.broker(i));
+                let params = Parameters::new(ids.to_vec(), &ids[i], t, hub.broker(i))
+                    .with_wire_format(format);
                 SigningParty::new(params, keys[i].clone(), msg).unwrap()
             })
             .collect();
@@ -615,6 +628,7 @@ mod tests {
         assert!(ed_verify(&master, msg, &none_sig.signature));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn short_ks_returns_error_not_panic() {
         // A key whose Ks does not cover the whole committee must yield a
@@ -650,6 +664,30 @@ mod tests {
         }
     }
 
+    /// The fixture keys, reloaded from the binary key encoding, sign over a
+    /// binary-wire session.
+    #[cfg(feature = "json")]
+    #[test]
+    fn fixture_keys_sign_over_binary_wire() {
+        let f = fixtures();
+        let keys: Vec<Key> = f["signing_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| serde_json::from_value::<Key>(v.clone()).unwrap())
+            .map(|k| Key::from_bytes(&k.to_bytes().unwrap()).unwrap())
+            .collect();
+        let ids = ids_from_keys(&keys);
+        let msg = b"binary wire eddsa";
+        let sigs = sign_with(&keys, &ids, 1, msg, crate::tss::WireFormat::Binary);
+        assert!(ed_verify(
+            &keys[0].eddsa_pub_point().unwrap(),
+            msg,
+            &sigs[0].signature
+        ));
+    }
+
+    #[cfg(feature = "json")]
     #[test]
     fn fixture_keys_sign_and_verify() {
         let f = fixtures();

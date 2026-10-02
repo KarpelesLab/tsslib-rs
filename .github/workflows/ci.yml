@@ -48,12 +48,16 @@ jobs:
       - name: Test (no default features)
         run: cargo test --no-default-features
 
+      # Every protocol over the binary wire format only (no serde_json).
+      - name: Test (binary encoding, no json)
+        run: cargo test --no-default-features --features std,frosttss,frostristretto255tss,frostsecp256k1tss,mldsatss,dklstss,ecdsatss,eddsatss
+
       # The legacy ecdsatss fixtures (frozen keys in the GG18/GG20 save format)
       # must keep loading and signing. Ignored in debug builds for speed; a few
       # seconds in release.
       - name: Sign with frozen ecdsatss fixture keys
         if: runner.os == 'Linux'
-        run: cargo test --release --lib --no-default-features --features std,ecdsatss fixture_keys_sign -- --ignored
+        run: cargo test --release --lib --no-default-features --features std,json,ecdsatss fixture_keys_sign -- --ignored
 
       - name: Clippy (each protocol feature alone)
         if: runner.os == 'Linux' # feature gating is platform-independent

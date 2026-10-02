@@ -574,7 +574,7 @@ pub(crate) fn alice_end_wc(
     Ok(bn::rem(&alpha_prm, &bn::secp256k1_order()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::paillier::PrivateKey;
     use super::super::testvec::{dec, fixtures};

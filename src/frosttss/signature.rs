@@ -49,8 +49,9 @@ mod tests {
         assert_eq!(&sig.signature[32..], &[2u8; 32]);
     }
 
+    #[cfg(feature = "json")]
     #[test]
-    fn json_uses_go_field_names_and_base64() {
+    fn json_field_names_and_base64() {
         let sig = SignatureData::new(vec![0u8; 32], vec![0u8; 32], b"hi".to_vec());
         let v: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&sig).unwrap()).unwrap();

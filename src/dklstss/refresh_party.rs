@@ -24,7 +24,7 @@ use crate::rng::SystemRng;
 use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::sha256;
@@ -199,9 +199,9 @@ impl Shared {
         Ok(())
     }
 
-    fn on_r1bc(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r1bc(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let decoded: Result<Vec<RefreshR1Bcast>, Error> =
-            msgs.iter().map(|m| Ok(json_get(m)?)).collect();
+            msgs.iter().map(|m| Ok(decode(m)?)).collect();
         let ready = {
             let mut st = self.state.lock();
             match decoded {
@@ -216,9 +216,9 @@ impl Shared {
         }
     }
 
-    fn on_r1uc(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r1uc(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let decoded: Result<Vec<RefreshR1Unicast>, Error> =
-            msgs.iter().map(|m| Ok(json_get(m)?)).collect();
+            msgs.iter().map(|m| Ok(decode(m)?)).collect();
         let ready = {
             let mut st = self.state.lock();
             match decoded {
@@ -261,8 +261,8 @@ impl Shared {
         self.params.broker().connect(TYPE_ECHO, Arc::new(exp));
     }
 
-    fn on_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let echoes: Vec<EchoMsg> = match msgs.iter().map(json_get).collect() {
+    fn on_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let echoes: Vec<EchoMsg> = match msgs.iter().map(decode).collect() {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(Error::Serde(e))),
         };
@@ -379,12 +379,12 @@ impl Shared {
         self.params.broker().connect(TYPE_R2, Arc::new(exp));
     }
 
-    fn finalize(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn finalize(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let parties = self.params.parties().to_vec();
         let n = parties.len();
         let self_idx = self.params.party_index();
 
-        let r2s: Vec<RefreshR2> = match msgs.iter().map(json_get).collect() {
+        let r2s: Vec<RefreshR2> = match msgs.iter().map(decode).collect() {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(Error::Serde(e))),
         };
@@ -478,7 +478,13 @@ impl Shared {
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
-        let msg = json_wrap(typ, body, Some(self.params.party_id().clone()), None)?;
+        let msg = encode(
+            self.params.wire_format(),
+            typ,
+            body,
+            Some(self.params.party_id().clone()),
+            None,
+        )?;
         self.params
             .broker()
             .receive(&msg)
@@ -486,7 +492,8 @@ impl Shared {
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),

@@ -5,7 +5,7 @@
 //! others when `To` is `None`) and dispatches inbound messages to the registered
 //! handler — buffering them until a handler for that type is connected.
 
-use super::{JsonMessage, MessageBroker, MessageReceiver, PartyId};
+use super::{Message, MessageBroker, MessageReceiver, PartyId};
 use crate::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -55,7 +55,7 @@ pub(crate) struct HubBroker {
 
 struct HubInner {
     handlers: HashMap<String, Arc<dyn MessageReceiver + Send + Sync>>,
-    pending: HashMap<String, Vec<JsonMessage>>,
+    pending: HashMap<String, Vec<Message>>,
 }
 
 impl HubBroker {
@@ -64,7 +64,8 @@ impl HubBroker {
     }
 
     /// Dispatches an inbound message to its handler, or buffers it.
-    fn deliver_inbound(&self, msg: &JsonMessage) -> super::BrokerResult {
+    fn deliver_inbound(&self, msg: &Message) -> super::BrokerResult {
+        let msg = &over_the_wire(msg);
         let handler = {
             let mut inner = self.inner.lock().unwrap();
             match inner.handlers.get(&msg.typ) {
@@ -87,7 +88,7 @@ impl HubBroker {
 }
 
 impl MessageReceiver for HubBroker {
-    fn receive(&self, msg: &JsonMessage) -> super::BrokerResult {
+    fn receive(&self, msg: &Message) -> super::BrokerResult {
         let from_index = msg.from.as_ref().map(|p| p.index).unwrap_or(-1);
         if from_index == self.party_index as i32 {
             // Outbound from this party: route to the destination(s).
@@ -183,7 +184,8 @@ pub(crate) struct ReshareBroker {
 }
 
 impl ReshareBroker {
-    fn deliver_inbound(&self, msg: &JsonMessage) -> super::BrokerResult {
+    fn deliver_inbound(&self, msg: &Message) -> super::BrokerResult {
+        let msg = &over_the_wire(msg);
         let handler = {
             let mut inner = self.inner.lock().unwrap();
             match inner.handlers.get(&msg.typ) {
@@ -206,7 +208,7 @@ impl ReshareBroker {
 }
 
 impl MessageReceiver for ReshareBroker {
-    fn receive(&self, msg: &JsonMessage) -> super::BrokerResult {
+    fn receive(&self, msg: &Message) -> super::BrokerResult {
         let from = msg.from.as_ref().map(key_of).unwrap_or_default();
         let hub = self.hub.upgrade().ok_or("reshare hub dropped")?;
         if from == self.party_key {
@@ -242,4 +244,16 @@ impl MessageBroker for ReshareBroker {
             let _ = dest.receive(&msg);
         }
     }
+}
+
+/// Sends `msg` through its full envelope encoding and back, as a real
+/// transport would, so every protocol test exercises both codecs.
+fn over_the_wire(msg: &Message) -> Message {
+    let back = match msg.format() {
+        #[cfg(feature = "json")]
+        super::WireFormat::Json => Message::from_json(&msg.to_json().unwrap()).unwrap(),
+        super::WireFormat::Binary => Message::from_bytes(&msg.to_bytes().unwrap()).unwrap(),
+    };
+    assert_eq!(&back, msg, "message changed over the wire");
+    back
 }

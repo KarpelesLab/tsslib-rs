@@ -68,8 +68,8 @@ pub enum Error {
     Validation(String),
     /// A curve point could not be decoded.
     Point(PointError),
-    /// A JSON (de)serialization error.
-    Serde(serde_json::Error),
+    /// A key or message failed to encode or decode (JSON or binary).
+    Serde(crate::tss::CodecError),
     /// A protocol-round error (carries victim / culprits). Boxed because
     /// [`crate::tss::TssError`] is large relative to the other variants.
     Tss(Box<crate::tss::TssError>),
@@ -80,7 +80,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::Validation(m) => write!(f, "frosttss: {m}"),
             Error::Point(e) => write!(f, "{e}"),
-            Error::Serde(e) => write!(f, "frosttss: json: {e}"),
+            Error::Serde(e) => write!(f, "frosttss: {e}"),
             Error::Tss(e) => write!(f, "{e}"),
         }
     }
@@ -94,9 +94,22 @@ impl From<PointError> for Error {
     }
 }
 
+impl From<crate::tss::CodecError> for Error {
+    fn from(e: crate::tss::CodecError) -> Self {
+        Error::Serde(e)
+    }
+}
+
+impl From<crate::wire::Error> for Error {
+    fn from(e: crate::wire::Error) -> Self {
+        Error::Serde(e.into())
+    }
+}
+
+#[cfg(feature = "json")]
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
-        Error::Serde(e)
+        Error::Serde(e.into())
     }
 }
 

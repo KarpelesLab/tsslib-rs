@@ -69,7 +69,7 @@ use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i_tagged;
 use crate::tss::keyimage_hash::{digest32, validate as validate_hash};
-use crate::tss::{HashAlgorithm, JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{HashAlgorithm, Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
@@ -292,7 +292,7 @@ impl Shared {
 
     /// Verifies every peer's partial, sums them into `V = x·P`, derives the
     /// secret and the child key.
-    fn finalize(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn finalize(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let ids: Vec<Scalar> = self
             .subset
             .iter()
@@ -301,7 +301,7 @@ impl Shared {
 
         let mut v = self.my_partial;
         for (pid, jm) in others.iter().zip(msgs.iter()) {
-            let r1: KeyImageR1 = match json_get(jm) {
+            let r1: KeyImageR1 = match decode(jm) {
                 Ok(m) => m,
                 Err(e) => return self.deliver(Err(Error::Serde(e))),
             };
@@ -385,7 +385,8 @@ impl Shared {
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),
@@ -1060,6 +1061,7 @@ mod vectors {
 
     /// Prints a regenerated vector file. Ignored by default — read the module
     /// docs before ever using its output.
+    #[cfg(feature = "json")]
     #[test]
     #[ignore]
     fn print() {
@@ -1084,6 +1086,7 @@ mod vectors {
     /// The checked-in file is internally consistent: partials sum to the key
     /// image, the key image is `x·P`, secret and child key follow, and the
     /// pinned DLEQ proof verifies.
+    #[cfg(feature = "json")]
     #[test]
     fn checked_in_file_is_self_consistent() {
         let f = checked_in();

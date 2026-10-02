@@ -27,7 +27,7 @@ use crate::rng::SystemRng;
 use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::hazmat::{ML_DSA_44, Poly, inf_norm, unpack_z};
@@ -254,8 +254,8 @@ impl Shared {
         Ok(())
     }
 
-    fn on_r1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<SignR1>, Error> = msgs.iter().map(|m| Ok(json_get(m)?)).collect();
+    fn on_r1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<SignR1>, Error> = msgs.iter().map(|m| Ok(decode(m)?)).collect();
         let r1s = match decoded {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -300,8 +300,8 @@ impl Shared {
         self.params.broker().connect(&self.type_r2, Arc::new(exp));
     }
 
-    fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<SignR2>, Error> = msgs.iter().map(|m| Ok(json_get(m)?)).collect();
+    fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<SignR2>, Error> = msgs.iter().map(|m| Ok(decode(m)?)).collect();
         let r2s = match decoded {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -393,8 +393,8 @@ impl Shared {
         self.params.broker().connect(&self.type_r3, Arc::new(exp));
     }
 
-    fn combine(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<SignR3>, Error> = msgs.iter().map(|m| Ok(json_get(m)?)).collect();
+    fn combine(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<SignR3>, Error> = msgs.iter().map(|m| Ok(decode(m)?)).collect();
         let r3s = match decoded {
             Ok(v) => v,
             Err(e) => return self.deliver(Err(e)),
@@ -470,7 +470,13 @@ impl Shared {
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
-        let msg = json_wrap(typ, body, Some(self.params.party_id().clone()), None)?;
+        let msg = encode(
+            self.params.wire_format(),
+            typ,
+            body,
+            Some(self.params.party_id().clone()),
+            None,
+        )?;
         self.params
             .broker()
             .receive(&msg)

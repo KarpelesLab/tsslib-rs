@@ -142,26 +142,52 @@ fn de_b64<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
     BASE64.decode(s.as_bytes()).map_err(D::Error::custom)
 }
 
+/// The binary [`crate::wire`] form: every field, always present (a positional
+/// format cannot skip empty ones).
+#[derive(Serialize, Deserialize)]
+struct PartyIdBin {
+    id: String,
+    moniker: String,
+    key: super::b64::B64Bytes,
+    index: i32,
+}
+
 impl Serialize for PartyId {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        PartyIdWire {
-            id: self.id.clone(),
-            moniker: self.moniker.clone(),
-            key: self.key.clone(),
-            index: self.index,
+        if s.is_human_readable() {
+            PartyIdWire {
+                id: self.id.clone(),
+                moniker: self.moniker.clone(),
+                key: self.key.clone(),
+                index: self.index,
+            }
+            .serialize(s)
+        } else {
+            PartyIdBin {
+                id: self.id.clone(),
+                moniker: self.moniker.clone(),
+                key: super::b64::B64Bytes(self.key.clone()),
+                index: self.index,
+            }
+            .serialize(s)
         }
-        .serialize(s)
     }
 }
 
 impl<'de> Deserialize<'de> for PartyId {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let w = PartyIdWire::deserialize(d)?;
+        let (id, moniker, key, index) = if d.is_human_readable() {
+            let w = PartyIdWire::deserialize(d)?;
+            (w.id, w.moniker, w.key, w.index)
+        } else {
+            let w = PartyIdBin::deserialize(d)?;
+            (w.id, w.moniker, w.key.0, w.index)
+        };
         Ok(PartyId {
-            id: w.id,
-            moniker: w.moniker,
-            key: into_canonical(w.key),
-            index: w.index,
+            id,
+            moniker,
+            key: into_canonical(key),
+            index,
         })
     }
 }
@@ -195,6 +221,7 @@ mod tests {
         assert_eq!(a.cmp_key(&b), Ordering::Equal);
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip_and_shape() {
         let p = PartyId {
@@ -212,6 +239,7 @@ mod tests {
         assert_eq!(back, p);
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn empty_fields_are_omitted() {
         let p = PartyId {
@@ -226,5 +254,20 @@ mod tests {
         assert!(!obj.contains_key("moniker"));
         assert!(!obj.contains_key("key"));
         assert_eq!(obj["index"], 2);
+    }
+
+    #[test]
+    fn binary_roundtrip_keeps_empty_fields_positional() {
+        for p in [
+            PartyId::new("1", "P[1]", vec![0, 9]),
+            PartyId::new("", "", vec![]),
+        ] {
+            let bytes = crate::wire::to_vec(&p).unwrap();
+            let back: PartyId = crate::wire::from_slice(&bytes).unwrap();
+            assert_eq!(back.id, p.id);
+            assert_eq!(back.moniker, p.moniker);
+            assert_eq!(back.cmp_key(&p), Ordering::Equal);
+            assert_eq!(back.index, p.index);
+        }
     }
 }

@@ -213,7 +213,7 @@ const PRIMES_BELOW_1000: &[u64] = &[
     937, 941, 947, 953, 967, 971, 977, 983, 991, 997,
 ];
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::testvec::{dec, fixtures};
     use super::*;

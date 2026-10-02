@@ -13,17 +13,34 @@ pub struct B64Bytes(pub Vec<u8>);
 
 impl Serialize for B64Bytes {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&BASE64.encode(&self.0))
+        serialize_bytes(&self.0, s)
     }
 }
 
 impl<'de> Deserialize<'de> for B64Bytes {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        use serde::de::Error as _;
+        deserialize_bytes(d).map(B64Bytes)
+    }
+}
+
+/// A base64 string in human-readable formats (JSON), raw bytes in the binary
+/// [`crate::wire`] format.
+pub(crate) fn serialize_bytes<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    if s.is_human_readable() {
+        s.serialize_str(&BASE64.encode(bytes))
+    } else {
+        s.serialize_bytes(bytes)
+    }
+}
+
+/// Inverse of [`serialize_bytes`].
+pub(crate) fn deserialize_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+    use serde::de::Error as _;
+    if d.is_human_readable() {
         let s = String::deserialize(d)?;
-        Ok(B64Bytes(
-            BASE64.decode(s.as_bytes()).map_err(D::Error::custom)?,
-        ))
+        BASE64.decode(s.as_bytes()).map_err(D::Error::custom)
+    } else {
+        d.deserialize_byte_buf(crate::wire::ByteBufVisitor)
     }
 }
 
@@ -32,40 +49,31 @@ pub mod vec {
     use super::*;
 
     pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&BASE64.encode(bytes))
+        serialize_bytes(bytes, s)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        use serde::de::Error as _;
-        let s = String::deserialize(d)?;
-        BASE64.decode(s.as_bytes()).map_err(D::Error::custom)
+        deserialize_bytes(d)
     }
 }
 
 /// `#[serde(with = "crate::tss::b64::opt_array32", default)]` for an
-/// `Option<[u8; 32]>` field: `Some` → base64 string, `None` → `null`.
+/// `Option<[u8; 32]>` field: `Some` → byte string, `None` → `null` / absent.
 pub mod opt_array32 {
     use super::*;
 
     pub fn serialize<S: Serializer>(v: &Option<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
-        match v {
-            Some(bytes) => s.serialize_str(&BASE64.encode(bytes)),
-            None => s.serialize_none(),
-        }
+        v.map(|b| B64Bytes(b.to_vec())).serialize(s)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<[u8; 32]>, D::Error> {
         use serde::de::Error as _;
-        let opt = Option::<String>::deserialize(d)?;
-        match opt {
+        match Option::<B64Bytes>::deserialize(d)? {
             None => Ok(None),
-            Some(s) => {
-                let bytes = BASE64.decode(s.as_bytes()).map_err(D::Error::custom)?;
-                let arr: [u8; 32] = bytes
-                    .try_into()
-                    .map_err(|_| D::Error::custom("chain code must be 32 bytes"))?;
-                Ok(Some(arr))
-            }
+            Some(B64Bytes(bytes)) => bytes
+                .try_into()
+                .map(Some)
+                .map_err(|_| D::Error::custom("chain code must be 32 bytes")),
         }
     }
 }

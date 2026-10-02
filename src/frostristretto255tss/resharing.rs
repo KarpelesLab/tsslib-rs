@@ -20,7 +20,7 @@ use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
+use crate::tss::{Message, PartyId, ReSharingParameters, decode, encode};
 use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::ec::ristretto255::RistrettoPoint;
@@ -108,9 +108,9 @@ struct State {
     my_eph_priv: [u8; 32],
     my_eph_pub: [u8; 32],
     my_session_nonce: [u8; SESSION_NONCE_LEN],
-    r1: Option<Vec<JsonMessage>>,
-    r3m1: Option<Vec<JsonMessage>>,
-    r3m2: Option<Vec<JsonMessage>>,
+    r1: Option<Vec<Message>>,
+    r3m1: Option<Vec<Message>>,
+    r3m2: Option<Vec<Message>>,
     /// Set once `round4_new` has been claimed, so it runs exactly once even if
     /// the last round-3 messages land on two threads.
     round4_started: bool,
@@ -281,10 +281,10 @@ impl Shared {
         Ok(())
     }
 
-    fn harvest_new_eph_keys(&self, others: &[PartyId], msgs: &[JsonMessage]) -> Result<(), Error> {
+    fn harvest_new_eph_keys(&self, others: &[PartyId], msgs: &[Message]) -> Result<(), Error> {
         let mut st = self.state.lock();
         for (pid, msg) in others.iter().zip(msgs.iter()) {
-            let r2: Round2Msg = json_get(msg)?;
+            let r2: Round2Msg = decode(msg)?;
             if r2.eph_pub.len() != aead::EPHEMERAL_KEY_BYTES
                 || r2.session_nonce.len() != SESSION_NONCE_LEN
             {
@@ -311,11 +311,11 @@ impl Shared {
         self.params.broker().connect(ROUND1, Arc::new(expect));
     }
 
-    fn round2_new(self: &Arc<Self>, old_parties: &[PartyId], r1msgs: Vec<JsonMessage>) {
+    fn round2_new(self: &Arc<Self>, old_parties: &[PartyId], r1msgs: Vec<Message>) {
         let me = self.params.party_id().clone();
         let mut group_pub: Option<RistrettoPoint> = None;
         for (pid, msg) in old_parties.iter().zip(r1msgs.iter()) {
-            let r1: Round1Msg = match json_get(msg) {
+            let r1: Round1Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -480,15 +480,15 @@ impl Shared {
 
         for n in 0..old_parties.len() {
             let pid = &old_parties[n];
-            let r1: Round1Msg = match json_get(&r1msgs[n]) {
+            let r1: Round1Msg = match decode(&r1msgs[n]) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
-            let r3a: Round3Msg1 = match json_get(&r3m1[n]) {
+            let r3a: Round3Msg1 = match decode(&r3m1[n]) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
-            let r3b: Round3Msg2 = match json_get(&r3m2[n]) {
+            let r3b: Round3Msg2 = match decode(&r3m2[n]) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -653,7 +653,8 @@ impl Shared {
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),

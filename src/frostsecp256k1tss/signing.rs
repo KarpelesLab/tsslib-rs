@@ -26,7 +26,7 @@ use crate::prelude::*;
 use crate::rng::SystemRng;
 use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::ec::secp256k1::schnorr;
 use purecrypto::rng::RngCore;
@@ -260,7 +260,7 @@ impl Shared {
         self.params.broker().connect(ROUND1_TYPE, Arc::new(expect));
     }
 
-    fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<JsonMessage>) {
+    fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<Message>) {
         let Some(nonces) = self.nonces.lock().take() else {
             return self.fail("round2 without round1 nonces");
         };
@@ -271,7 +271,7 @@ impl Shared {
             binding: nonces.big_e,
         });
         for (pid, msg) in others.iter().zip(&r1msgs) {
-            let r1: SignRound1Msg = match json_get(msg) {
+            let r1: SignRound1Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -332,13 +332,13 @@ impl Shared {
         self.params.broker().connect(ROUND2_TYPE, Arc::new(expect));
     }
 
-    fn finalize(self: &Arc<Self>, others: &[PartyId], round: Round2, r2msgs: Vec<JsonMessage>) {
+    fn finalize(self: &Arc<Self>, others: &[PartyId], round: Round2, r2msgs: Vec<Message>) {
         let sk = &self.signing_key;
         let ids: Vec<Scalar> = round.commitments.iter().map(|cm| cm.id.clone()).collect();
         let nonce_sign = sign_scalar(round.r_negated);
         let mut z = round.my_z.clone();
         for (n, (pid, msg)) in others.iter().zip(&r2msgs).enumerate() {
-            let r2: SignRound2Msg = match json_get(msg) {
+            let r2: SignRound2Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -386,7 +386,13 @@ impl Shared {
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
-        let msg = json_wrap(typ, body, Some(self.params.party_id().clone()), None)?;
+        let msg = encode(
+            self.params.wire_format(),
+            typ,
+            body,
+            Some(self.params.party_id().clone()),
+            None,
+        )?;
         self.params
             .broker()
             .receive(&msg)

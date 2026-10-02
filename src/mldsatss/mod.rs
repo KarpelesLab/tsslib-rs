@@ -62,6 +62,19 @@ impl core::fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
+impl From<crate::tss::CodecError> for Error {
+    fn from(e: crate::tss::CodecError) -> Self {
+        Error::Validation(format!("{e}"))
+    }
+}
+
+impl From<crate::wire::Error> for Error {
+    fn from(e: crate::wire::Error) -> Self {
+        Error::Validation(format!("{e}"))
+    }
+}
+
+#[cfg(feature = "json")]
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
         Error::Validation(format!("json: {e}"))

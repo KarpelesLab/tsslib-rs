@@ -1,7 +1,7 @@
 //! Protocol parameters: the party set, this party, the threshold, and the
 //! transport broker.
 
-use super::{MessageBroker, PartyId};
+use super::{MessageBroker, PartyId, WireFormat};
 use crate::prelude::*;
 use alloc::sync::Arc;
 
@@ -17,6 +17,7 @@ pub struct Parameters {
     self_index: usize,
     threshold: usize,
     broker: Arc<dyn MessageBroker + Send + Sync>,
+    format: WireFormat,
 }
 
 /// Sets every party's `index` to its position in `parties`.
@@ -54,7 +55,20 @@ impl Parameters {
             self_index,
             threshold,
             broker,
+            format: WireFormat::default(),
         }
+    }
+
+    /// Sets the encoding every message of this session uses (default:
+    /// [`WireFormat::default`]). All parties of a session must agree.
+    pub fn with_wire_format(mut self, format: WireFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// The encoding this session's messages use.
+    pub fn wire_format(&self) -> WireFormat {
+        self.format
     }
 
     /// This party's id.
@@ -111,6 +125,7 @@ pub struct ReSharingParameters {
     new_threshold: usize,
     self_id: PartyId,
     broker: Arc<dyn MessageBroker + Send + Sync>,
+    format: WireFormat,
 }
 
 impl ReSharingParameters {
@@ -134,7 +149,20 @@ impl ReSharingParameters {
             new_threshold,
             self_id,
             broker,
+            format: WireFormat::default(),
         }
+    }
+
+    /// Sets the encoding every message of this session uses (default:
+    /// [`WireFormat::default`]). All parties of a session must agree.
+    pub fn with_wire_format(mut self, format: WireFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// The encoding this session's messages use.
+    pub fn wire_format(&self) -> WireFormat {
+        self.format
     }
 
     /// This party's id.

@@ -27,7 +27,7 @@ use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, PartyId, ReSharingParameters, json_get, json_wrap};
+use crate::tss::{Message, PartyId, ReSharingParameters, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
@@ -262,8 +262,8 @@ impl Shared {
         });
     }
 
-    fn round2_new(self: &Arc<Self>, old_ids: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<R1Msg>, _> = msgs.iter().map(json_get).collect();
+    fn round2_new(self: &Arc<Self>, old_ids: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<R1Msg>, _> = msgs.iter().map(decode).collect();
         let r1msgs = match decoded {
             Ok(d) => d,
             Err(e) => return self.deliver(Err(e.into())),
@@ -308,8 +308,8 @@ impl Shared {
         });
     }
 
-    fn on_r3m1(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<R3Msg1>, _> = msgs.iter().map(json_get).collect();
+    fn on_r3m1(self: &Arc<Self>, from: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<R3Msg1>, _> = msgs.iter().map(decode).collect();
         let ready = {
             let mut st = self.state.lock();
             match decoded {
@@ -325,8 +325,8 @@ impl Shared {
         }
     }
 
-    fn on_r3m2(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<R3Msg2>, _> = msgs.iter().map(json_get).collect();
+    fn on_r3m2(self: &Arc<Self>, from: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<R3Msg2>, _> = msgs.iter().map(decode).collect();
         let ready = {
             let mut st = self.state.lock();
             match decoded {
@@ -506,14 +506,15 @@ impl Shared {
 
     fn connect<F>(self: &Arc<Self>, typ: &str, others: &[PartyId], cb: F)
     where
-        F: FnOnce(Vec<JsonMessage>) + Send + 'static,
+        F: FnOnce(Vec<Message>) + Send + 'static,
     {
         let exp = JsonExpect::new(typ, others.to_vec(), Box::new(cb));
         self.params.broker().connect(typ, Arc::new(exp));
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),

@@ -27,7 +27,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bn_gcd_matches_go() {
+    fn bn_gcd_matches_vectors() {
         let f = fixtures();
         for v in f["bn"]["gcd"].as_array().unwrap() {
             let a = dec(&v["a"]);
@@ -38,7 +38,7 @@ mod tests {
     }
 
     #[test]
-    fn bn_jacobi_matches_go() {
+    fn bn_jacobi_matches_vectors() {
         let f = fixtures();
         for v in f["bn"]["jacobi"].as_array().unwrap() {
             let a = dec(&v["a"]);

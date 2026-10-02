@@ -16,7 +16,7 @@ use crate::sync::{Mutex, Receiver, Sender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::ec::ristretto255::RistrettoPoint;
@@ -193,12 +193,12 @@ impl Shared {
         self.params.broker().connect(ROUND1_TYPE, Arc::new(expect));
     }
 
-    fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<JsonMessage>) {
+    fn round2(self: &Arc<Self>, others: &[PartyId], r1msgs: Vec<Message>) {
         let threshold = self.params.threshold();
         let mut rng = SystemRng;
 
         for (pid, msg) in others.iter().zip(r1msgs.iter()) {
-            let r1: KeygenRound1Msg = match json_get(msg) {
+            let r1: KeygenRound1Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -318,7 +318,7 @@ impl Shared {
         Ok(vsj)
     }
 
-    fn finalize(self: &Arc<Self>, others: &[PartyId], r2msgs: Vec<JsonMessage>) {
+    fn finalize(self: &Arc<Self>, others: &[PartyId], r2msgs: Vec<Message>) {
         let threshold = self.params.threshold();
         let me_idx = self.params.party_index();
         let st = self.state.lock();
@@ -333,7 +333,7 @@ impl Shared {
                     "share from {pid} had no matching round-1 commitments"
                 ))));
             };
-            let r2: KeygenRound2Msg = match json_get(msg) {
+            let r2: KeygenRound2Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -398,7 +398,13 @@ impl Shared {
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
-        let msg = json_wrap(typ, body, Some(self.params.party_id().clone()), None)?;
+        let msg = encode(
+            self.params.wire_format(),
+            typ,
+            body,
+            Some(self.params.party_id().clone()),
+            None,
+        )?;
         self.params
             .broker()
             .receive(&msg)
@@ -406,7 +412,8 @@ impl Shared {
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),

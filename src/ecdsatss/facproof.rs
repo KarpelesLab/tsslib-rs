@@ -199,7 +199,7 @@ pub(crate) fn verify(
     lhs3 == rhs3
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::testvec::{dec, fixtures};
     use super::*;

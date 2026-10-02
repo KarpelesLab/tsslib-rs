@@ -110,11 +110,13 @@ impl Key {
     }
 
     /// Serializes the key to its JSON save form.
+    #[cfg(feature = "json")]
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(&KeyWire::from_key(self))?)
     }
 
     /// Parses a key from its JSON save form (without validating).
+    #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
         let wire: KeyWire = serde_json::from_str(s)?;
         wire.into_key()
@@ -130,6 +132,11 @@ impl Key {
 }
 
 // --- serde wire form (capitalized field names) ---
+
+crate::wire::key_codec!(Key, Error, KeyWire,
+    to_wire: |k| Ok::<_, Error>(KeyWire::from_key(k)),
+    from_wire: |w| w.into_key(),
+);
 
 #[derive(Serialize, Deserialize)]
 struct KeyWire {
@@ -233,6 +240,7 @@ mod tests {
         assert!(k.validate_basic().is_err());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip_preserves_key() {
         let k = single_party_key(9, Some([0x11; 32]));
@@ -246,8 +254,9 @@ mod tests {
         assert_eq!(k.chain_code, back.chain_code);
     }
 
+    #[cfg(feature = "json")]
     #[test]
-    fn json_shape_matches_go() {
+    fn json_shape_is_stable() {
         let k = single_party_key(9, None);
         let v: serde_json::Value = serde_json::from_str(&k.to_json().unwrap()).unwrap();
         let obj = v.as_object().unwrap();
@@ -268,6 +277,7 @@ mod tests {
         assert!(v["ChainCode"].is_null()); // nil chain code -> null
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn chaincode_serializes_as_base64_string() {
         let k = single_party_key(9, Some([0xab; 32]));
@@ -275,6 +285,7 @@ mod tests {
         assert!(v["ChainCode"].is_string());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn legacy_json_without_chaincode_parses() {
         // A Version-1 key JSON has no ChainCode field at all.
@@ -298,9 +309,35 @@ mod tests {
     fn key_version_is_two() {
         assert_eq!(KEY_VERSION, 2);
     }
+
+    #[test]
+    fn binary_roundtrip() {
+        for cc in [None, Some([7u8; 32])] {
+            let k = single_party_key(9, cc);
+            let bytes = k.to_bytes().unwrap();
+            let back = Key::from_bytes(&bytes).unwrap();
+            back.validate_basic().unwrap();
+            assert!(bool::from(k.xi.ct_eq(&back.xi)));
+            assert!(Ed25519::eq(&k.group_public_key, &back.group_public_key));
+            assert_eq!(back.chain_code, cc);
+            assert!(Key::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+            let mut wrong_version = bytes.clone();
+            wrong_version[0] = 2;
+            assert!(Key::from_bytes(&wrong_version).is_err());
+        }
+    }
+
+    /// JSON -> key -> binary -> key -> JSON reproduces the original document.
+    #[cfg(feature = "json")]
+    #[test]
+    fn binary_preserves_everything_json_does() {
+        let k = single_party_key(11, Some([3u8; 32]));
+        let back = Key::from_bytes(&k.to_bytes().unwrap()).unwrap();
+        assert_eq!(back.to_json().unwrap(), k.to_json().unwrap());
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod fixture_tests {
     use super::*;
     use crate::frost::binding::lagrange_coefficient;

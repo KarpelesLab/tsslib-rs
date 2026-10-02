@@ -93,12 +93,14 @@ pub struct Key {
 
 impl Key {
     /// Parses a saved key JSON document.
+    #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
         Ok(serde_json::from_str(s)?)
     }
 
     /// Serializes to JSON in the save format; existing saved keys and peers
     /// depend on this exact format.
+    #[cfg(feature = "json")]
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(self)?)
     }
@@ -361,11 +363,17 @@ fn hex_lower(b: &[u8]) -> String {
     s
 }
 
-#[cfg(test)]
+crate::wire::key_codec!(Key, Error, Key,
+    to_wire: |k| Ok::<_, Error>(k),
+    from_wire: |w| Ok(w),
+);
+
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::testvec::fixtures;
     use super::*;
 
+    #[cfg(feature = "json")]
     #[test]
     fn fixture_key_loads_and_round_trips() {
         let f = fixtures();
@@ -517,5 +525,24 @@ mod tests {
             Err(e) => assert!(format!("{e}").contains("interpolate")),
             Ok(_) => panic!("expected consistency failure on swapped BigXj"),
         }
+    }
+
+    /// The fixture key survives the binary encoding unchanged, and the binary
+    /// form is much smaller than the JSON one.
+    #[test]
+    fn fixture_key_binary_roundtrip() {
+        let f = fixtures();
+        let key: Key = serde_json::from_value(f["ecdsatss_key"].clone()).unwrap();
+        let bytes = key.to_bytes().unwrap();
+        let back = Key::from_bytes(&bytes).unwrap();
+        back.validate_basic().unwrap();
+        let json = key.to_json().unwrap();
+        assert_eq!(back.to_json().unwrap(), json);
+        assert!(
+            bytes.len() * 2 < json.len(),
+            "{} vs {}",
+            bytes.len(),
+            json.len()
+        );
     }
 }

@@ -21,7 +21,7 @@ use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
@@ -156,13 +156,13 @@ impl Shared {
         Ok(())
     }
 
-    fn round2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn round2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let mut rng = SystemRng;
         let i = self.params.party_index();
 
         // Record peer commitments.
         for (k, m) in msgs.iter().enumerate() {
-            let r1: R1Msg = match json_get(m) {
+            let r1: R1Msg = match decode(m) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -214,8 +214,8 @@ impl Shared {
         });
     }
 
-    fn on_r2_1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<R2Msg1>, _> = msgs.iter().map(json_get).collect();
+    fn on_r2_1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<R2Msg1>, _> = msgs.iter().map(decode).collect();
         let ready = {
             let mut st = self.state.lock();
             match decoded {
@@ -231,8 +231,8 @@ impl Shared {
         }
     }
 
-    fn on_r2_2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<R2Msg2>, _> = msgs.iter().map(json_get).collect();
+    fn on_r2_2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<R2Msg2>, _> = msgs.iter().map(decode).collect();
         let ready = {
             let mut st = self.state.lock();
             match decoded {
@@ -360,14 +360,15 @@ impl Shared {
 
     fn connect<F>(self: &Arc<Self>, typ: &str, others: &[PartyId], cb: F)
     where
-        F: FnOnce(Vec<JsonMessage>) + Send + 'static,
+        F: FnOnce(Vec<Message>) + Send + 'static,
     {
         let exp = JsonExpect::new(typ, others.to_vec(), Box::new(cb));
         self.params.broker().connect(typ, Arc::new(exp));
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),

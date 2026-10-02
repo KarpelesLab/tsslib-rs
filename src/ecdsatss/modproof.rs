@@ -203,7 +203,7 @@ pub(crate) fn verify<R: RngCore>(
     true
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::testvec::{dec, fixtures};
     use super::*;

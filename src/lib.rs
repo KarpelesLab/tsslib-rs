@@ -1,8 +1,27 @@
 //! # tsslib
 //!
 //! Easy-to-use threshold signature schemes in pure Rust. The broker-based
-//! protocols exchange JSON messages through a transport the caller supplies,
-//! and key shares persist as JSON; both formats are stable across releases.
+//! protocols exchange messages through a transport the caller supplies, and
+//! key shares persist to bytes; both formats are stable across releases.
+//!
+//! ## Encodings
+//!
+//! Keys and messages have two encodings:
+//!
+//! - **JSON** (`json` feature, on by default): the format earlier releases
+//!   used, unchanged. Keys: `to_json` / `from_json`; messages:
+//!   [`tss::Message::to_json`] / [`tss::Message::from_json`].
+//! - **Binary** (always available): the compact [`wire`] format, read and
+//!   written as a stream through [`wire::Read`] / [`wire::Write`], with no
+//!   serde_json. Keys: `write_to` / `read_from` (or `to_bytes` /
+//!   `from_bytes`); messages: [`tss::Message::write_to`] /
+//!   [`tss::Message::read_from`]. Typically 2–3.5× smaller than JSON.
+//!
+//! A session's message encoding is fixed in its [`tss::Parameters`] (or
+//! [`tss::ReSharingParameters`]) with `with_wire_format`; all parties of a
+//! session must use the same one. The default is JSON when the `json` feature
+//! is enabled and binary otherwise. For embedded targets, disable default
+//! features and leave out `json`.
 //!
 //! ## Protocols
 //!
@@ -22,8 +41,8 @@
 //! ## Core
 //!
 //! The [`tss`] module holds the transport-agnostic core shared by every
-//! protocol: [`tss::PartyId`], the rich [`tss::TssError`], and the JSON
-//! message/broker plumbing ([`tss::JsonMessage`], [`tss::MessageBroker`]).
+//! protocol: [`tss::PartyId`], the rich [`tss::TssError`], and the
+//! message/broker plumbing ([`tss::Message`], [`tss::MessageBroker`]).
 //!
 //! ## Cryptography
 //!
@@ -78,6 +97,7 @@ mod share_aead;
 mod sync;
 pub mod tss;
 mod vecmap;
+pub mod wire;
 
 /// Shared FROST core (RFC 9591), used by the Ed25519 and ristretto255 variants.
 #[cfg(any(feature = "frosttss", feature = "frostristretto255tss"))]

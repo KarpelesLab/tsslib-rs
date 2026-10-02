@@ -104,7 +104,7 @@ fn le32_to_biguint(le: &[u8; 32]) -> BigUintDec {
     BigUintDec::from_be_bytes(&be)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::*;
     use crate::frost::{Ciphersuite, Ed25519, Scalar};

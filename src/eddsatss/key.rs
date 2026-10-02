@@ -53,11 +53,13 @@ impl Drop for Key {
 
 impl Key {
     /// Parses a saved key JSON document.
+    #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
         Ok(serde_json::from_str(s)?)
     }
 
     /// Serializes to the JSON save format.
+    #[cfg(feature = "json")]
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(self)?)
     }
@@ -206,7 +208,12 @@ fn hex_lower(b: &[u8]) -> String {
     s
 }
 
-#[cfg(test)]
+crate::wire::key_codec!(Key, Error, Key,
+    to_wire: |k| Ok::<_, Error>(k),
+    from_wire: |w| Ok(w),
+);
+
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::super::testvec::fixtures;
     use super::*;
@@ -295,5 +302,12 @@ mod tests {
             Err(e) => assert!(format!("{e}").contains("not found")),
             Ok(_) => panic!("expected unknown-party error"),
         }
+    }
+
+    #[test]
+    fn fixture_key_binary_roundtrip() {
+        let key = load_key();
+        let back = Key::from_bytes(&key.to_bytes().unwrap()).unwrap();
+        assert_eq!(back.to_json().unwrap(), key.to_json().unwrap());
     }
 }

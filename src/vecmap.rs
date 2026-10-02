@@ -199,6 +199,7 @@ mod tests {
         assert!(m.is_empty());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn collect_keeps_last_duplicate_and_serde_round_trips() {
         let m: VecMap<u8, u8> = [(3, 30), (1, 10), (3, 31)].into_iter().collect();

@@ -27,7 +27,7 @@ use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
 use crate::tss::hashing::sha512_256i;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::bignum::BoxedUint;
 use serde::{Deserialize, Serialize};
@@ -294,8 +294,8 @@ impl Shared {
         Ok(())
     }
 
-    fn on_r1_1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let decoded: Result<Vec<R1Msg1>, _> = msgs.iter().map(json_get).collect();
+    fn on_r1_1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let decoded: Result<Vec<R1Msg1>, _> = msgs.iter().map(decode).collect();
         let ready = {
             let mut st = self.state.lock();
             match decoded {
@@ -311,11 +311,11 @@ impl Shared {
         }
     }
 
-    fn on_r1_2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn on_r1_2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
         let ready = {
             let mut st = self.state.lock();
             for (k, m) in msgs.iter().enumerate() {
-                let r1m2: R1Msg2 = match json_get(m) {
+                let r1m2: R1Msg2 = match decode(m) {
                     Ok(v) => v,
                     Err(e) => return self.deliver(Err(Error::from(e))),
                 };
@@ -392,7 +392,7 @@ impl Shared {
         });
     }
 
-    fn round3(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
+    fn round3(self: &Arc<Self>, msgs: Vec<Message>) {
         let i = self.params.party_index();
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
@@ -418,7 +418,7 @@ impl Shared {
         let mut sigma = modq.mul(&k, &w);
 
         for (k_idx, m) in msgs.iter().enumerate() {
-            let r2: R2Msg = match json_get(m) {
+            let r2: R2Msg = match decode(m) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -493,7 +493,7 @@ impl Shared {
         });
     }
 
-    fn round4(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
+    fn round4(self: &Arc<Self>, msgs: Vec<Message>) {
         let mut rng = SystemRng;
         let i = self.params.party_index();
         let q = bn::secp256k1_order();
@@ -510,7 +510,7 @@ impl Shared {
         };
         let mut theta_total = theta0;
         for m in &msgs {
-            let r3: R3Msg = match json_get(m) {
+            let r3: R3Msg = match decode(m) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -544,7 +544,7 @@ impl Shared {
         });
     }
 
-    fn round5(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
+    fn round5(self: &Arc<Self>, msgs: Vec<Message>) {
         let mut rng = SystemRng;
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
@@ -564,7 +564,7 @@ impl Shared {
 
         let mut r = point_gamma;
         for (k_idx, msg) in msgs.iter().enumerate() {
-            let r4: R4Msg = match json_get(msg) {
+            let r4: R4Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -645,14 +645,14 @@ impl Shared {
         });
     }
 
-    fn round6(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn round6(self: &Arc<Self>, from: &[PartyId], msgs: Vec<Message>) {
         let mut rng = SystemRng;
         let i = self.params.party_index();
 
         {
             let mut st = self.state.lock();
             for (k, msg) in msgs.iter().enumerate() {
-                let r5: R5Msg = match json_get(msg) {
+                let r5: R5Msg = match decode(msg) {
                     Ok(v) => v,
                     Err(e) => return self.deliver(Err(e.into())),
                 };
@@ -708,7 +708,7 @@ impl Shared {
         });
     }
 
-    fn round7(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn round7(self: &Arc<Self>, from: &[PartyId], msgs: Vec<Message>) {
         let mut rng = SystemRng;
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
@@ -739,7 +739,7 @@ impl Shared {
         let mut a = big_ai;
 
         for (k, msg) in msgs.iter().enumerate() {
-            let r6: R6Msg = match json_get(msg) {
+            let r6: R6Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -823,11 +823,11 @@ impl Shared {
         });
     }
 
-    fn round8(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn round8(self: &Arc<Self>, from: &[PartyId], msgs: Vec<Message>) {
         {
             let mut st = self.state.lock();
             for (k, msg) in msgs.iter().enumerate() {
-                let r7: R7Msg = match json_get(msg) {
+                let r7: R7Msg = match decode(msg) {
                     Ok(v) => v,
                     Err(e) => return self.deliver(Err(e.into())),
                 };
@@ -851,7 +851,7 @@ impl Shared {
         });
     }
 
-    fn round9(self: &Arc<Self>, from: &[PartyId], msgs: Vec<JsonMessage>) {
+    fn round9(self: &Arc<Self>, from: &[PartyId], msgs: Vec<Message>) {
         let (ui, ti, r7_commitments, si) = {
             let st = self.state.lock();
             (
@@ -864,7 +864,7 @@ impl Shared {
         let mut u = ui;
         let mut t = ti;
         for (k, msg) in msgs.iter().enumerate() {
-            let r8: R8Msg = match json_get(msg) {
+            let r8: R8Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -910,7 +910,7 @@ impl Shared {
         });
     }
 
-    fn finalize(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
+    fn finalize(self: &Arc<Self>, msgs: Vec<Message>) {
         let q = bn::secp256k1_order();
         let modq = bn::Modulus::new(&q);
         let (si, rx, ry) = {
@@ -919,7 +919,7 @@ impl Shared {
         };
         let mut sum_s = si;
         for msg in &msgs {
-            let r9: R9Msg = match json_get(msg) {
+            let r9: R9Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
@@ -1006,14 +1006,15 @@ impl Shared {
 
     fn connect<F>(self: &Arc<Self>, typ: &str, others: &[PartyId], cb: F)
     where
-        F: FnOnce(Vec<JsonMessage>) + Send + 'static,
+        F: FnOnce(Vec<Message>) + Send + 'static,
     {
         let exp = JsonExpect::new(typ, others.to_vec(), Box::new(cb));
         self.params.broker().connect(typ, Arc::new(exp));
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),
@@ -1214,7 +1215,7 @@ struct R9Msg {
     si: B64Bytes,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::*;
     use crate::ecdsatss::testvec::fixtures;
@@ -1238,6 +1239,40 @@ mod tests {
             0,
         );
         (keys, ids)
+    }
+
+    /// The fixture keys, reloaded from the binary key encoding, sign over a
+    /// binary-wire session.
+    #[test]
+    #[ignore = "2048-bit MtA signing is slow with the current bignum"]
+    fn fixture_keys_sign_over_binary_wire() {
+        let (keys, ids) = load_signing_keys();
+        let keys: Vec<Key> = keys
+            .iter()
+            .map(|k| Key::from_bytes(&k.to_bytes().unwrap()).unwrap())
+            .collect();
+        let mut digest = [0u8; 32];
+        digest[31] = 0x2b;
+        digest[0] = 0x12;
+        let shub = TestHub::new(&ids);
+        let sparties: Vec<SigningParty> = (0..ids.len())
+            .map(|i| {
+                let params = Parameters::new(ids.to_vec(), &ids[i], 1, shub.broker(i))
+                    .with_wire_format(crate::tss::WireFormat::Binary);
+                SigningParty::new(params, keys[i].clone(), &digest).unwrap()
+            })
+            .collect();
+        let sig = sparties[0].wait().expect("signing succeeds");
+        for p in &sparties[1..] {
+            p.wait().expect("signing succeeds");
+        }
+        let pk = keys[0].ecdsa_pub_point().unwrap();
+        assert!(ecdsa_verify(
+            &bn::from_be(&digest),
+            &bn::from_be(&sig.r),
+            &bn::from_be(&sig.s),
+            &pk
+        ));
     }
 
     #[test]

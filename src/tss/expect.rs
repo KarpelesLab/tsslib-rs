@@ -1,7 +1,7 @@
 //! A [`MessageReceiver`] that collects one message from each expected sender
 //! and fires a callback once all have arrived.
 
-use super::{JsonMessage, MessageReceiver, PartyId};
+use super::{Message, MessageReceiver, PartyId};
 use crate::prelude::*;
 use crate::sync::Mutex;
 
@@ -14,9 +14,9 @@ pub(crate) struct JsonExpect {
 }
 
 struct State {
-    packets: Vec<Option<JsonMessage>>,
+    packets: Vec<Option<Message>>,
     missing: usize,
-    cb: Option<Box<dyn FnOnce(Vec<JsonMessage>) + Send>>,
+    cb: Option<Box<dyn FnOnce(Vec<Message>) + Send>>,
 }
 
 impl JsonExpect {
@@ -25,7 +25,7 @@ impl JsonExpect {
     pub(crate) fn new(
         typ: impl Into<String>,
         from: Vec<PartyId>,
-        cb: Box<dyn FnOnce(Vec<JsonMessage>) + Send>,
+        cb: Box<dyn FnOnce(Vec<Message>) + Send>,
     ) -> Self {
         let n = from.len();
         JsonExpect {
@@ -41,7 +41,7 @@ impl JsonExpect {
 }
 
 impl MessageReceiver for JsonExpect {
-    fn receive(&self, msg: &JsonMessage) -> super::BrokerResult {
+    fn receive(&self, msg: &Message) -> super::BrokerResult {
         if msg.typ != self.typ {
             return Err(format!(
                 "unexpected message type {} while expecting {}",
@@ -74,8 +74,7 @@ impl MessageReceiver for JsonExpect {
         // Fire the callback outside the lock so it may re-enter the broker.
         if let Some(cb) = cb {
             let mut st = self.state.lock();
-            let packets: Vec<JsonMessage> =
-                st.packets.iter_mut().map(|p| p.take().unwrap()).collect();
+            let packets: Vec<Message> = st.packets.iter_mut().map(|p| p.take().unwrap()).collect();
             drop(st);
             cb(packets);
         }

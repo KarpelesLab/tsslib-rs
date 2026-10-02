@@ -36,7 +36,7 @@ use crate::rng::SystemRng;
 use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
-use crate::tss::{JsonMessage, Parameters, PartyId, json_get, json_wrap};
+use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::shake256;
@@ -205,8 +205,8 @@ impl Shared {
         Ok(())
     }
 
-    fn on_r1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let r1s: Vec<Dkg1> = match msgs.iter().map(|m| Ok(json_get(m)?)).collect() {
+    fn on_r1(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let r1s: Vec<Dkg1> = match msgs.iter().map(|m| Ok(decode(m)?)).collect() {
             Ok(v) => v,
             Err(e) => return self.deliver(Err::<Key44, Error>(e)),
         };
@@ -300,8 +300,8 @@ impl Shared {
         Ok(())
     }
 
-    fn on_r2commit(self: &Arc<Self>, others: &[PartyId], msgs: Vec<JsonMessage>) {
-        let cs: Vec<Dkg2Commit> = match msgs.iter().map(|m| Ok(json_get(m)?)).collect() {
+    fn on_r2commit(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        let cs: Vec<Dkg2Commit> = match msgs.iter().map(|m| Ok(decode(m)?)).collect() {
             Ok(v) => v,
             Err(e) => return self.deliver(Err::<Key44, Error>(e)),
         };
@@ -385,10 +385,10 @@ impl Shared {
         Ok(())
     }
 
-    fn on_r2bcast(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
+    fn on_r2bcast(self: &Arc<Self>, msgs: Vec<Message>) {
         let bcs: Vec<(PartyId, Dkg2Bcast)> = match msgs
             .iter()
-            .map(|m| Ok((m.from.clone().unwrap(), json_get(m)?)))
+            .map(|m| Ok((m.from.clone().unwrap(), decode(m)?)))
             .collect()
         {
             Ok(v) => v,
@@ -435,10 +435,10 @@ impl Shared {
         self.maybe_finalize();
     }
 
-    fn on_r2share(self: &Arc<Self>, msgs: Vec<JsonMessage>) {
+    fn on_r2share(self: &Arc<Self>, msgs: Vec<Message>) {
         let shares: Vec<(PartyId, Dkg2Share)> = match msgs
             .iter()
-            .map(|m| Ok((m.from.clone().unwrap(), json_get(m)?)))
+            .map(|m| Ok((m.from.clone().unwrap(), decode(m)?)))
             .collect()
         {
             Ok(v) => v,
@@ -633,7 +633,7 @@ impl Shared {
             others,
             Box::new(move |msgs| {
                 for (pid, m) in from.iter().zip(msgs.iter()) {
-                    match json_get::<Dkg3Confirm>(m) {
+                    match decode::<Dkg3Confirm>(m) {
                         Ok(c) if c.digest.0 == digest => {}
                         Ok(_) => {
                             return me.deliver(Err(Error::Validation(format!(
@@ -660,7 +660,13 @@ impl Shared {
     }
 
     fn broadcast<T: Serialize>(&self, typ: &str, body: &T) -> Result<(), Error> {
-        let msg = json_wrap(typ, body, Some(self.params.party_id().clone()), None)?;
+        let msg = encode(
+            self.params.wire_format(),
+            typ,
+            body,
+            Some(self.params.party_id().clone()),
+            None,
+        )?;
         self.params
             .broker()
             .receive(&msg)
@@ -668,7 +674,8 @@ impl Shared {
     }
 
     fn send_to<T: Serialize>(&self, typ: &str, body: &T, to: &PartyId) -> Result<(), Error> {
-        let msg = json_wrap(
+        let msg = encode(
+            self.params.wire_format(),
             typ,
             body,
             Some(self.params.party_id().clone()),
@@ -840,6 +847,7 @@ mod tests {
     use super::super::params::get_threshold_params44;
     use super::super::sign44;
     use super::*;
+    use crate::tss::WireFormat;
     use crate::tss::testhub::TestHub;
 
     fn party_ids(n: usize) -> Vec<PartyId> {
@@ -871,13 +879,13 @@ mod tests {
     #[derive(Default)]
     struct Tap {
         me: Vec<u8>,
-        out: Mutex<Vec<JsonMessage>>,
+        out: Mutex<Vec<Message>>,
         handlers: Mutex<VecMap<String, Arc<dyn crate::tss::MessageReceiver + Send + Sync>>>,
-        pending: Mutex<Vec<JsonMessage>>,
+        pending: Mutex<Vec<Message>>,
     }
 
     impl crate::tss::MessageReceiver for Tap {
-        fn receive(&self, m: &JsonMessage) -> crate::tss::BrokerResult {
+        fn receive(&self, m: &Message) -> crate::tss::BrokerResult {
             if m.from.as_ref().map(|p| &p.key) == Some(&self.me) {
                 self.out.lock().push(m.clone());
                 return Ok(());
@@ -896,7 +904,7 @@ mod tests {
     impl crate::tss::MessageBroker for Tap {
         fn connect(&self, typ: &str, dest: Arc<dyn crate::tss::MessageReceiver + Send + Sync>) {
             self.handlers.lock().insert(typ.into(), dest.clone());
-            let queued: Vec<JsonMessage> = {
+            let queued: Vec<Message> = {
                 let mut p = self.pending.lock();
                 let (mine, rest) = p.drain(..).partition(|m| m.typ == typ);
                 *p = rest;
@@ -924,13 +932,20 @@ mod tests {
         let party =
             DkgParty44::new(Parameters::new(ids.clone(), &honest, 2, tap.clone()), th).unwrap();
         let sent = |typ: &str| tap.out.lock().iter().any(|m| m.typ == typ);
-        let inject = |typ: &str, body: serde_json::Value| {
-            let m = json_wrap(typ, &body, Some(evil.clone()), None).unwrap();
-            crate::tss::MessageReceiver::receive(&*tap, &m).unwrap();
-        };
-        let b64 = |b: &[u8]| serde_json::to_value(B64Bytes(b.to_vec())).unwrap();
+        fn inject<T: Serialize>(tap: &Tap, evil: &PartyId, typ: &str, body: &T) {
+            let m = encode(WireFormat::default(), typ, body, Some(evil.clone()), None).unwrap();
+            crate::tss::MessageReceiver::receive(tap, &m).unwrap();
+        }
+        let b64 = |b: &[u8]| B64Bytes(b.to_vec());
 
-        inject(TYPE_R1, serde_json::json!({ "contrib": b64(&[0x42; 32]) }));
+        inject(
+            &tap,
+            &evil,
+            TYPE_R1,
+            &Dkg1 {
+                contrib: b64(&[0x42; 32]),
+            },
+        );
         // The honest party has committed, but revealed nothing to react to.
         assert!(sent(TYPE_R2C));
         assert!(
@@ -939,14 +954,29 @@ mod tests {
         );
 
         // The adversary must commit blind; the honest reveal follows.
-        inject(TYPE_R2C, serde_json::json!({ "commit": b64(&[0x13; 32]) }));
+        inject(
+            &tap,
+            &evil,
+            TYPE_R2C,
+            &Dkg2Commit {
+                commit: b64(&[0x13; 32]),
+            },
+        );
         assert!(sent(TYPE_R2BC));
 
         // Now it picks its t_M — which cannot match the blind commitment.
         let t_evil = pack_vec(&[Poly::zero(); K]);
         inject(
+            &tap,
+            &evil,
             TYPE_R2BC,
-            serde_json::json!({ "entries": [{ "mask": 2, "t": b64(&t_evil), "commit": b64(&[0; 32]) }] }),
+            &Dkg2Bcast {
+                entries: vec![MaskT {
+                    mask: 2,
+                    t: b64(&t_evil),
+                    commit: b64(&[0; 32]),
+                }],
+            },
         );
         let err = party
             .try_result()

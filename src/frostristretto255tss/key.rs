@@ -95,11 +95,13 @@ impl Key {
     }
 
     /// Serializes the key to JSON.
+    #[cfg(feature = "json")]
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(&KeyWire::from_key(self))?)
     }
 
     /// Parses a key from JSON (without validating).
+    #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
         KeyWire::deserialize_str(s)?.into_key()
     }
@@ -109,6 +111,11 @@ impl Key {
         self.xi = Scalar::ZERO;
     }
 }
+
+crate::wire::key_codec!(Key, Error, KeyWire,
+    to_wire: |k| Ok::<_, Error>(KeyWire::from_key(k)),
+    from_wire: |w| w.into_key(),
+);
 
 #[derive(Serialize, Deserialize)]
 struct KeyWire {
@@ -125,6 +132,7 @@ struct KeyWire {
 }
 
 impl KeyWire {
+    #[cfg(feature = "json")]
     fn deserialize_str(s: &str) -> Result<KeyWire, serde_json::Error> {
         serde_json::from_str(s)
     }
@@ -220,6 +228,7 @@ mod tests {
         assert!(k.validate_basic().is_err());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip() {
         let k = single_party_key(9);
@@ -235,5 +244,27 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert!(v["GroupPublicKey"].is_string());
         assert!(v["Xi"].is_number());
+    }
+
+    #[test]
+    fn binary_roundtrip() {
+        let k = single_party_key(9);
+        let bytes = k.to_bytes().unwrap();
+        let back = Key::from_bytes(&bytes).unwrap();
+        back.validate_basic().unwrap();
+        assert!(bool::from(k.xi.ct_eq(&back.xi)));
+        assert!(Ristretto255::eq(
+            &k.group_public_key,
+            &back.group_public_key
+        ));
+        assert!(Key::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn binary_preserves_everything_json_does() {
+        let k = single_party_key(11);
+        let back = Key::from_bytes(&k.to_bytes().unwrap()).unwrap();
+        assert_eq!(back.to_json().unwrap(), k.to_json().unwrap());
     }
 }

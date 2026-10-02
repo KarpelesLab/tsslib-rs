@@ -59,7 +59,27 @@ cargo feature, all enabled by default:
 
 ```toml
 [dependencies]
-tsslib = { version = "0.3", default-features = false, features = ["std", "frosttss"] }
+tsslib = { version = "0.3", default-features = false, features = ["std", "json", "frosttss"] }
+```
+
+### Encodings
+
+Keys and messages encode either as **JSON** (the `json` feature, on by default;
+the same format as earlier releases) or in the compact **binary** format of
+`tsslib::wire`, which is always available, streams through small
+`wire::Read`/`wire::Write` traits, and needs no serde_json. Binary is typically
+2–3.5× smaller (a DKLs23 key: 90 KB as JSON, 26 KB binary), and leaving out
+`json` trims roughly 20–30% of code size on bare-metal builds.
+
+- Keys: `to_json`/`from_json`, or `write_to`/`read_from` (`to_bytes`/`from_bytes`).
+- Messages: each session's encoding is fixed by
+  `Parameters::with_wire_format(WireFormat::Binary)` (all parties must agree);
+  the broker moves `tss::Message` envelopes with `to_json`/`from_json` or
+  `write_to`/`read_from`.
+
+```toml
+# Embedded: no std, no JSON.
+tsslib = { version = "0.3", default-features = false, features = ["frostsecp256k1tss"] }
 ```
 
 ### `no_std`
@@ -75,7 +95,8 @@ place of spin locks. On a bare-metal target, register a CSPRNG with
 
 ```
 src/
-  tss/        core: PartyId, TssError, JsonMessage, MessageBroker
+  tss/        core: PartyId, TssError, Message, MessageBroker
+  wire.rs     compact streaming binary encoding for keys and messages
   frost/      shared FROST core: ciphersuite, binding, VSS, AEAD, commitments
   frosttss/                FROST(Ed25519)            keygen · sign · reshare · HD
   frostristretto255tss/    FROST(ristretto255)       keygen · sign · reshare

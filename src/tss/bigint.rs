@@ -135,21 +135,38 @@ fn strip_leading_zeros(b: &[u8]) -> &[u8] {
     &b[start..]
 }
 
+/// A bare decimal number in JSON, the minimal big-endian bytes in the binary
+/// [`crate::wire`] format.
 impl Serialize for BigUintDec {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        // Build an arbitrary-precision JSON number from the decimal string; it
+        if !s.is_human_readable() {
+            return s.serialize_bytes(&self.0);
+        }
+        // An arbitrary-precision JSON number built from the decimal string; it
         // serializes verbatim as a bare number token under serde_json.
-        let num = serde_json::Number::from_string_unchecked(be_to_decimal(&self.0));
-        num.serialize(s)
+        #[cfg(feature = "json")]
+        {
+            serde_json::Number::from_string_unchecked(be_to_decimal(&self.0)).serialize(s)
+        }
+        #[cfg(not(feature = "json"))]
+        {
+            s.serialize_str(&be_to_decimal(&self.0))
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for BigUintDec {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
-        let num = serde_json::Number::deserialize(d)?;
-        let be = decimal_to_be(num.as_str()).map_err(D::Error::custom)?;
-        Ok(BigUintDec(be))
+        if !d.is_human_readable() {
+            let be = d.deserialize_byte_buf(crate::wire::ByteBufVisitor)?;
+            return Ok(BigUintDec::from_be_bytes(&be));
+        }
+        #[cfg(feature = "json")]
+        let be = decimal_to_be(serde_json::Number::deserialize(d)?.as_str());
+        #[cfg(not(feature = "json"))]
+        let be = decimal_to_be(&String::deserialize(d)?);
+        Ok(BigUintDec(be.map_err(D::Error::custom)?))
     }
 }
 
@@ -184,6 +201,7 @@ mod tests {
         assert_eq!(BigUintDec::from_be_bytes(&[0, 0, 5]).0, vec![5]);
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_is_a_bare_number() {
         let v = BigUintDec::from_be_bytes(&123456789u64.to_be_bytes());
@@ -193,6 +211,7 @@ mod tests {
         assert_eq!(back, v);
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_large_number_lossless() {
         let l = "7237005577332262213973186563042994240857116359379907606001950938285454250989";
@@ -218,6 +237,7 @@ mod tests {
         assert!(decimal_to_be("12a3").is_err());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn rejects_oversized_decimal_but_accepts_paillier_sized() {
         // Just over the cap: rejected as an error (no panic, no O(n²) work).
@@ -247,5 +267,18 @@ mod tests {
         // Exactly at the cap is still accepted.
         let at_cap = "1".repeat(MAX_DECIMAL_DIGITS);
         assert!(decimal_to_be(&at_cap).is_ok());
+    }
+
+    #[test]
+    fn binary_is_the_minimal_magnitude() {
+        let v = BigUintDec::from_be_bytes(&[0, 0, 1, 2]);
+        let bytes = crate::wire::to_vec(&v).unwrap();
+        assert_eq!(bytes, [2, 1, 2]);
+        assert_eq!(crate::wire::from_slice::<BigUintDec>(&bytes).unwrap(), v);
+        // Leading zeros on input are stripped back to canonical form.
+        assert_eq!(
+            crate::wire::from_slice::<BigUintDec>(&[3, 0, 1, 2]).unwrap(),
+            v
+        );
     }
 }
