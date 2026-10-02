@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.10...v0.2.11) - 2026-10-02
+
+### Added
+
+- *(frostsecp256k1tss)* FROST threshold signing for Bitcoin Taproot
+
+### Fixed
+
+- *(frost)* let an imported 1-of-1 key be the old committee in a reshare
+
+### Other
+
+- drop references to the Go tss-lib; tsslib is its own library
+
 ## [0.2.10](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.9...v0.2.10) - 2026-10-01
 
 ### Added
