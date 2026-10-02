@@ -1,10 +1,10 @@
-//! GG18-style threshold-EdDSA key save-data, JSON-compatible with Go
-//! `eddsatss.Key`, so legacy serialized keys load directly.
+//! GG18-style threshold-EdDSA key save-data. The JSON format is fixed so
+//! legacy serialized keys load directly.
 //!
 //! The shape is far simpler than `ecdsatss` (no Paillier / ring-Pedersen): a
 //! Shamir share `Xi`, the share ids `Ks`, the per-party public points `BigXj`,
-//! and the group public key `EDDSAPub`. `*big.Int` is a bare JSON number;
-//! `crypto.ECPoint` is `{"Curve":"ed25519","Coords":[X,Y]}`.
+//! and the group public key `EDDSAPub`. Integers are bare JSON numbers;
+//! points are `{"Curve":"ed25519","Coords":[X,Y]}`.
 
 #![allow(dead_code)]
 
@@ -17,7 +17,7 @@ use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-/// One party's threshold-EdDSA key share (save format). Mirrors Go `eddsatss.Key`.
+/// One party's threshold-EdDSA key share (save format).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Key {
     #[serde(rename = "Xi")]
@@ -52,12 +52,12 @@ impl Drop for Key {
 }
 
 impl Key {
-    /// Parses a Go-emitted `eddsatss.Key` JSON document.
+    /// Parses a saved key JSON document.
     pub fn from_json(s: &str) -> Result<Key, Error> {
         Ok(serde_json::from_str(s)?)
     }
 
-    /// Serializes to JSON compatible with Go `eddsatss.Key`.
+    /// Serializes to the JSON save format.
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(self)?)
     }
@@ -213,7 +213,7 @@ mod tests {
 
     fn load_key() -> Key {
         let f = fixtures();
-        serde_json::from_value(f["signing_keys"][0].clone()).expect("load Go eddsa key")
+        serde_json::from_value(f["signing_keys"][0].clone()).expect("load fixture key")
     }
 
     fn party_ids(key: &Key, order: &[usize]) -> Vec<PartyId> {

@@ -1,6 +1,6 @@
 //! DKLs23 pre-signing: an offline phase that does everything except touch the
 //! message, plus an online [`sign_with_presign`] that consumes a presign exactly
-//! once to finalize an ECDSA signature. Port of Go `dklstss/presign.go`.
+//! once to finalize an ECDSA signature.
 //!
 //! A [`PresignOutput`] binds to one `(public key, signing subset, group nonce
 //! R)` and MUST be consumed once: reusing it is ECDSA nonce reuse and leaks the

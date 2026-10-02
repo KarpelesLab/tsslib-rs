@@ -1,5 +1,5 @@
-//! Hash commitments and the `[][]big.Int` length-prefixed "secrets" framing, ports
-//! of Go `tss-lib/crypto/commitments`. A commitment is `C = SHA512_256i(r,
+//! Hash commitments and the length-prefixed "secrets" framing (a list of lists
+//! of big-endian integers). A commitment is `C = SHA512_256i(r,
 //! secrets...)` with decommitment `D = [r, secrets...]`; verification re-hashes.
 
 #![allow(dead_code)]
@@ -38,7 +38,7 @@ pub(crate) fn decommit(c: &BoxedUint, d: &[BoxedUint]) -> Option<Vec<BoxedUint>>
     }
 }
 
-/// Flattens parts into the length-prefixed secrets vector (Go `builder.Secrets`):
+/// Flattens parts into the length-prefixed secrets vector:
 /// for each part, `len(part)` followed by its elements.
 pub(crate) fn build_secrets(parts: &[Vec<BoxedUint>]) -> Vec<BoxedUint> {
     let mut out = Vec::new();
@@ -49,7 +49,7 @@ pub(crate) fn build_secrets(parts: &[Vec<BoxedUint>]) -> Vec<BoxedUint> {
     out
 }
 
-/// Inverse of [`build_secrets`] (Go `ParseSecrets`).
+/// Inverse of [`build_secrets`].
 pub(crate) fn parse_secrets(secrets: &[BoxedUint]) -> Option<Vec<Vec<BoxedUint>>> {
     if secrets.len() < 2 {
         return None;
@@ -85,7 +85,7 @@ pub(crate) fn parse_secrets(secrets: &[BoxedUint]) -> Option<Vec<Vec<BoxedUint>>
     Some(parts)
 }
 
-/// `SHA512_256i(ints...)` as a big integer (Go `common.SHA512_256i`).
+/// `SHA512_256i(ints...)` as a big integer.
 fn hash_ints(v: &[BoxedUint]) -> BoxedUint {
     let bytes: Vec<Vec<u8>> = v.iter().map(bn::to_be).collect();
     let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();

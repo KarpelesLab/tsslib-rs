@@ -4,8 +4,8 @@
 //! `Z_q`, so the FIPS 204 packers (10-bit `t1`, 18-bit `z`, 6-bit `w1`, …) don't
 //! apply. This is the 23-bit-per-coefficient packing the reference uses for the
 //! round-2 `w` reveal. It is pure bit-serialization — no field arithmetic — so
-//! it lives here rather than in `purecrypto`. Byte-identical to Go
-//! `mldsa.PackPolyQ` / `UnpackPolyQ`.
+//! it lives here rather than in `purecrypto`. The layout is part of the wire
+//! format, so it must stay byte-for-byte stable.
 //!
 //! Consumed by threshold signing (round-2 `w` reveal), which is blocked on the
 //! `purecrypto` hyperball sampler; until that lands these are exercised only by

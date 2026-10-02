@@ -3,7 +3,7 @@ name = "tsslib"
 version = "0.2.10"
 edition = "2024"
 rust-version = "1.89"
-description = "Easy-to-use threshold signature schemes (FROST, ML-DSA, DKLs23) — wire- and save-data-compatible with the Go tss-lib."
+description = "Easy-to-use threshold signature schemes in pure Rust: FROST (Ed25519, ristretto255, secp256k1/Taproot), DKLs23 ECDSA, threshold ML-DSA."
 repository = "https://github.com/KarpelesLab/tsslib-rs"
 license = "MIT"
 keywords = ["tss", "threshold", "frost", "ecdsa", "cryptography"]
@@ -30,8 +30,8 @@ frosttss = ["purecrypto/hazmat-edwards25519", "purecrypto/cipher", "purecrypto/k
 # FROST(ristretto255, SHA-512) — RFC 9591 §6.2.
 frostristretto255tss = ["purecrypto/ristretto255", "purecrypto/cipher", "purecrypto/kdf"]
 # FROST(secp256k1, SHA-256) producing BIP340 Schnorr signatures, with the
-# BIP341 Taproot tweak and BIP32 non-hardened derivation. Rust-only (no Go
-# counterpart). bip340 backs the tagged hashes and the final self-check.
+# BIP341 Taproot tweak and BIP32 non-hardened derivation. bip340 backs the
+# tagged hashes and the final self-check.
 frostsecp256k1tss = ["purecrypto/hazmat-secp256k1", "purecrypto/bip340", "purecrypto/cipher", "purecrypto/kdf"]
 # Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
 # hazmat-mldsa exposes the low-level Poly/NTT/sampler/packing API.
@@ -40,11 +40,11 @@ mldsatss = ["purecrypto/mldsa", "purecrypto/hazmat-mldsa"]
 # cipher backs the AES-CTR PRG in the OT-extension layer.
 dklstss = ["purecrypto/hazmat-secp256k1", "purecrypto/cipher"]
 # Legacy threshold ECDSA on secp256k1 — GG18/GG20 (Paillier + MtA), for
-# migrating keys from the Go tss-lib `ecdsatss`. bignum backs the Paillier /
+# migrating keys saved in the legacy GG18/GG20 format. bignum backs the Paillier /
 # ZK-proof big-integer arithmetic. EXPERIMENTAL — see the module docs.
 ecdsatss = ["purecrypto/hazmat-secp256k1", "purecrypto/bignum", "purecrypto/hash"]
 # Legacy threshold EdDSA on Ed25519 — GG18-style (Feldman VSS + threshold
-# Schnorr, no Paillier), for migrating keys from the Go tss-lib `eddsatss`.
+# Schnorr, no Paillier), for migrating keys saved in the legacy GG18 format.
 eddsatss = ["purecrypto/hazmat-edwards25519", "purecrypto/hash"]
 
 [dependencies]
@@ -54,8 +54,8 @@ eddsatss = ["purecrypto/hazmat-edwards25519", "purecrypto/hash"]
 # re-exports `purecrypto::hash::HashAlgorithm`, and `rng` backs `tsslib::rng`.
 purecrypto = { version = "0.9", default-features = false, features = ["alloc", "hash", "rng"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
-# arbitrary_precision: emit/parse big.Int-shaped JSON numbers (>2^53) losslessly,
-# matching Go's encoding/json for *big.Int save fields.
+# arbitrary_precision: emit/parse big-integer JSON numbers (>2^53) losslessly,
+# as the save formats store them.
 serde_json = { version = "1", default-features = false, features = ["alloc", "arbitrary_precision"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }

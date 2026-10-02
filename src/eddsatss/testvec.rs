@@ -1,4 +1,4 @@
-//! Test-vector loader for the Go-generated `eddsa.json` fixtures.
+//! Test-vector loader for the frozen `eddsa.json` fixtures.
 
 use serde_json::Value;
 
@@ -15,13 +15,13 @@ mod tests {
     use crate::prelude::*;
 
     #[test]
-    fn go_keys_load_and_round_trip() {
+    fn fixture_keys_load_and_round_trip() {
         let f = fixtures();
         let keys: Vec<Key> = f["signing_keys"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|v| serde_json::from_value(v.clone()).expect("load Go eddsatss key"))
+            .map(|v| serde_json::from_value(v.clone()).expect("load fixture key"))
             .collect();
         assert_eq!(keys.len(), 2);
 

@@ -1,6 +1,6 @@
 //! GG18 threshold ECDSA signing over a `MessageBroker` (9 rounds + finalize).
 //!
-//! Port of Go `ecdsatss/signing.go`. Produces a standard ECDSA signature
+//! Produces a standard ECDSA signature
 //! `(r, s)` verifiable against the group public key. The committee is the
 //! parties of `params`; the supplied [`Key`] may still carry the full keygen
 //! party set — [`SigningParty::new`] transparently narrows it to the committee
@@ -242,7 +242,7 @@ impl Shared {
         // Lagrange-weighted share w_i and the transformed public shares bigWs.
         let (w, big_ws) = self.prepare_for_signing()?;
 
-        // [1, q) like Go's GetRandomPositiveInt; rand_range is upper-inclusive
+        // Sampled from [1, q): rand_range is upper-inclusive
         // and would (with prob 2^-256) yield q ≡ 0 mod q.
         let k = bn::rand_positive_below(&q, &mut rng);
         let gamma = bn::rand_positive_below(&q, &mut rng);
@@ -445,8 +445,7 @@ impl Shared {
             };
             // The WC proof must be the full 12-part form (incl. U); a 10-part
             // proof would parse with u = None and downgrade alice_end_wc to a
-            // verification without the W_j point-binding check (Go's
-            // ProofBobWCFromBytes likewise requires all 12 parts).
+            // verification without the W_j point-binding check.
             let wc_parts = parts_bytes(&r2.proof_bob_wc);
             if wc_parts.len() != 12 {
                 return self.fail("signing: proof_bob_wc must have 12 parts");
@@ -609,7 +608,7 @@ impl Shared {
         let (rx, ry) = secp::coords(&r);
         let si = modq.add(&modq.mul(&m_hash, &k), &modq.mul(&rx, &sigma));
 
-        // [1, q) like Go's GetRandomPositiveInt (see round1).
+        // Sampled from [1, q) (see round1).
         let li = bn::rand_positive_below(&q, &mut rng);
         let roi = bn::rand_positive_below(&q, &mut rng);
         let big_ai = secp::mul_base(&roi);
@@ -1066,7 +1065,7 @@ fn vec_none<T>(n: usize) -> Vec<Option<T>> {
 
 fn compute_ssid(params: &Parameters, key: &Key) -> Vec<u8> {
     let (gx, gy) = secp::generator_coords();
-    // Go: P, N, B(=7), Gx, Gy, keys..., flatten(BigXj), NTildej..., H1j..., H2j..., 1, nonce.
+    // P, N, B(=7), Gx, Gy, keys..., flatten(BigXj), NTildej..., H1j..., H2j..., 1, nonce.
     let mut list: Vec<Vec<u8>> = vec![
         bn::to_be(&secp::field_prime()),
         bn::to_be(&q_order()),
@@ -1221,7 +1220,7 @@ mod tests {
     use crate::ecdsatss::testvec::fixtures;
     use crate::tss::testhub::TestHub;
 
-    /// Loads the real Go-generated 2-party (t=1) keys and builds the matching
+    /// Loads the fixture 2-party (t=1) keys and builds the matching
     /// committee party IDs (key = `Ks[i]` big-endian), sorted ascending.
     fn load_signing_keys() -> (Vec<Key>, Vec<PartyId>) {
         let f = fixtures();
@@ -1243,7 +1242,7 @@ mod tests {
 
     #[test]
     #[ignore = "2048-bit MtA signing is slow with the current bignum"]
-    fn go_keys_sign_and_verify() {
+    fn fixture_keys_sign_and_verify() {
         let (keys, ids) = load_signing_keys();
         let t = 1;
 
@@ -1278,7 +1277,7 @@ mod tests {
 
     #[test]
     #[ignore = "2048-bit MtA signing is slow with the current bignum"]
-    fn go_keys_sign_with_kdd_and_verify() {
+    fn fixture_keys_sign_with_kdd_and_verify() {
         let (keys, ids) = load_signing_keys();
         let t = 1;
 

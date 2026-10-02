@@ -1,12 +1,8 @@
 //! # tsslib
 //!
-//! Easy-to-use threshold signature schemes in pure Rust. This crate is a port
-//! of the broker-based protocols from the Go [`tss-lib`] and aims to be **wire-
-//! and save-data-compatible** with it: messages serialized by one
-//! implementation are consumed by the other, and persisted key shares
-//! round-trip across both.
-//!
-//! [`tss-lib`]: https://github.com/KarpelesLab/tss-lib
+//! Easy-to-use threshold signature schemes in pure Rust. The broker-based
+//! protocols exchange JSON messages through a transport the caller supplies,
+//! and key shares persist as JSON; both formats are stable across releases.
 //!
 //! ## Protocols
 //!

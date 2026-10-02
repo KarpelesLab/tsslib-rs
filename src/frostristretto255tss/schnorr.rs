@@ -1,6 +1,5 @@
 //! Schnorr proof of knowledge over Ristretto255, with a Fiat-Shamir challenge
-//! `SHA-512(ctx || "schnorr-pok" || session || X || R) mod L`. Port of the
-//! `schnorrProof` helpers in frostristretto255tss/internal.go.
+//! `SHA-512(ctx || "schnorr-pok" || session || X || R) mod L`.
 
 use super::Error;
 use crate::frost::{Ciphersuite, Ristretto255, Scalar, scalar_from_be_mod_l, scalar_to_be};

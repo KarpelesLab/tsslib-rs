@@ -1,5 +1,5 @@
 //! A [`MessageReceiver`] that collects one message from each expected sender
-//! and fires a callback once all have arrived (port of Go `NewJsonExpect`).
+//! and fires a callback once all have arrived.
 
 use super::{JsonMessage, MessageReceiver, PartyId};
 use crate::prelude::*;

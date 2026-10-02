@@ -1,6 +1,6 @@
 //! GG18 key resharing over a `MessageBroker` (5 rounds, old + new committees).
 //!
-//! Port of Go `ecdsatss/resharing.go`. The old committee re-splits its secret to
+//! The old committee re-splits its secret to
 //! a fresh `new_threshold`-of-`new_party_count` committee while preserving
 //! `ECDSAPub`; the new committee generates fresh pre-parameters. A party may be
 //! in both committees.
@@ -108,7 +108,7 @@ impl ResharingParty {
         let nc = params.new_party_count();
         // Old-committee members reindex their input to the old committee so the
         // per-party lookups in SSID/w_i use old-committee indices rather than
-        // keygen-party indices (mirrors Go round1Old's SubsetForParties). The
+        // keygen-party indices. The
         // full keygen key may thus be passed as-is. New-only members never index
         // the input's per-party slices (they take ECDSAPub from round-1
         // messages), so their input is left untouched.
@@ -494,8 +494,8 @@ impl Shared {
             )
         };
 
-        // Every party's ring-Pedersen generators must be its own: Go rejects
-        // an h1/h2 already used by another party (`h1H2Map`, seeded with ours).
+        // Every party's ring-Pedersen generators must be its own: reject an
+        // h1/h2 already used by another party (the list is seeded with ours).
         // The DLN proofs are not session-bound, so a replayed (Ñ, h1, h2,
         // proofs) tuple would otherwise be accepted.
         let mut seen_h: Vec<Vec<u8>> = match &self.pre {
@@ -510,8 +510,8 @@ impl Shared {
             let h1 = bn::from_be(&msg.h1.0);
             let h2 = bn::from_be(&msg.h2.0);
             let pn = bn::from_be(&msg.paillier_n.0);
-            // Mirror Go resharing (paillierModulusLen = 2048): reject short
-            // peer moduli before storing/using them. A short Paillier N or
+            // Reject short peer moduli (< 2048 bits in production) before
+            // storing/using them. A short Paillier N or
             // ring-Pedersen Ñ weakens the proofs and the encryption itself.
             for (what, n) in [("Paillier modulus", &pn), ("NTilde", &ntj)] {
                 if let Err(e) = super::prepare::check_peer_modulus(what, n) {

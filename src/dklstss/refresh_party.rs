@@ -7,7 +7,7 @@
 //! Same round shape as [`KeygenParty`](super::KeygenParty) — broadcast
 //! commitments + unicast share & base-OT-Sender message, echo cross-check, then
 //! base-OT-Receiver response — differing only in the zero-constant polynomial
-//! and the additive share/commitment update. Wire-compatible with Go `dklstss`.
+//! and the additive share/commitment update.
 
 use super::Error;
 use super::baseot;

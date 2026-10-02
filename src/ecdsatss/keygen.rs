@@ -1,6 +1,6 @@
 //! GG18 distributed key generation over a `MessageBroker` (4 rounds).
 //!
-//! Port of Go `ecdsatss/keygen.go`. Round 1 broadcasts a hash commitment to the
+//! Round 1 broadcasts a hash commitment to the
 //! dealer's Feldman-VSS polynomial commitments plus this party's Paillier modulus
 //! and ring-Pedersen parameters with two DLN proofs. Round 2 unicasts each peer
 //! its Shamir share with a no-small-factor proof and broadcasts the commitment
@@ -236,8 +236,7 @@ impl Shared {
             let ntildej = bn::from_be(&r1.ntilde.0);
             let h1jv = bn::from_be(&r1.h1.0);
             let h2jv = bn::from_be(&r1.h2.0);
-            // Mirror Go keygen round 2: reject short peer moduli (BitLen() <
-            // 2048 in production). A short Paillier N or ring-Pedersen Ñ
+            // Reject short peer moduli (< 2048 bits in production). A short Paillier N or ring-Pedersen Ñ
             // weakens the MtA range proofs and the Paillier encryption itself.
             for (what, n) in [("Paillier modulus", &paillier_n), ("NTilde", &ntildej)] {
                 if let Err(e) = super::prepare::check_peer_modulus(what, n) {

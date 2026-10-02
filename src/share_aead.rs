@@ -1,5 +1,5 @@
 //! X25519 + HKDF-SHA256 + ChaCha20-Poly1305 envelope for DKG/resharing P2P
-//! shares. Port of tss-lib `crypto/frostenc`.
+//! shares.
 //!
 //! Each participant samples a fresh ephemeral X25519 keypair per run and
 //! broadcasts the public part. For round 2, sender and recipient derive a

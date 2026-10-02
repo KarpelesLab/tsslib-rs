@@ -1,4 +1,4 @@
-//! A participant's FROST(Ed25519) key share, with Go-compatible persistence.
+//! A participant's FROST(Ed25519) key share and its persisted JSON form.
 
 use super::Error;
 use super::point::{EcPointJson, point_from_json, point_to_json};
@@ -9,7 +9,7 @@ use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use serde::{Deserialize, Serialize};
 
-/// Schema version of a [`Key`], matching Go `frosttss.KeyVersion`.
+/// Schema version of a [`Key`].
 ///
 /// - 1: `Xi`, `ShareID`, `Ks`, `BigXj`, `GroupPublicKey`.
 /// - 2: + `ChainCode` (optional BIP32 chain code for HD derivation).
@@ -23,8 +23,8 @@ pub const KEY_VERSION: u32 = 2;
 /// verification shares `Y_j = s_j·G`. `group_public_key` is the Ed25519 public
 /// key `Y` an external verifier uses.
 ///
-/// Field naming and JSON shape mirror the Go `frosttss.Key` so persisted keys
-/// interoperate across both libraries.
+/// The field names and JSON shape are a fixed save format: changing them would
+/// break loading keys saved by earlier versions.
 #[derive(Clone)]
 pub struct Key {
     /// Secret scalar share `s_i`.
@@ -42,7 +42,7 @@ pub struct Key {
 }
 
 impl Key {
-    /// Validates internal consistency (mirrors Go `Key.ValidateBasic`):
+    /// Validates internal consistency:
     /// non-empty `ks` equal in length to `big_xj`, a non-identity group public
     /// key, and the local share/commitment binding `xi·G == big_xj[i]` for the
     /// slot where `ks[i] == share_id`.
@@ -109,12 +109,12 @@ impl Key {
         })
     }
 
-    /// Serializes the key to its Go-compatible JSON form.
+    /// Serializes the key to its JSON save form.
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(&KeyWire::from_key(self))?)
     }
 
-    /// Parses a key from its Go-compatible JSON form (without validating).
+    /// Parses a key from its JSON save form (without validating).
     pub fn from_json(s: &str) -> Result<Key, Error> {
         let wire: KeyWire = serde_json::from_str(s)?;
         wire.into_key()
@@ -129,7 +129,7 @@ impl Key {
     }
 }
 
-// --- serde wire form (capitalized Go field names) ---
+// --- serde wire form (capitalized field names) ---
 
 #[derive(Serialize, Deserialize)]
 struct KeyWire {
@@ -251,7 +251,7 @@ mod tests {
         let k = single_party_key(9, None);
         let v: serde_json::Value = serde_json::from_str(&k.to_json().unwrap()).unwrap();
         let obj = v.as_object().unwrap();
-        // Capitalized Go field names.
+        // Capitalized field names.
         for key in [
             "Xi",
             "ShareID",
@@ -301,21 +301,21 @@ mod tests {
 }
 
 #[cfg(test)]
-mod go_interop_tests {
+mod fixture_tests {
     use super::*;
     use crate::frost::binding::lagrange_coefficient;
 
-    /// Loads the real Go-generated FROST(Ed25519) keys, round-trips them, and
+    /// Loads the fixture FROST(Ed25519) keys, round-trips them, and
     /// confirms the shares reconstruct to the group public key.
     #[test]
-    fn go_keys_load_round_trip_and_reconstruct() {
+    fn fixture_keys_load_round_trip_and_reconstruct() {
         let raw = include_str!("testdata/frost.json");
         let doc: serde_json::Value = serde_json::from_str(raw).unwrap();
         let keys: Vec<Key> = doc["keys"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|v| Key::from_json(&serde_json::to_string(v).unwrap()).expect("load Go FROST key"))
+            .map(|v| Key::from_json(&serde_json::to_string(v).unwrap()).expect("load fixture key"))
             .collect();
         assert_eq!(keys.len(), 3);
 

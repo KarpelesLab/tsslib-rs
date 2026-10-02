@@ -1,4 +1,4 @@
-//! Schnorr ZK proofs used in GG18 signing (port of Go `tss-lib/crypto/schnorr`):
+//! Schnorr ZK proofs used in GG18 signing:
 //! a proof of knowledge of a discrete log (`X = x·G`) and a "V proof" of
 //! knowledge of `(s, l)` with `V = s·R + l·G`.
 //!

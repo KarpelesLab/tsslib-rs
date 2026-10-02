@@ -11,7 +11,7 @@
 //! a binding-factor mechanism that prevents nonce-reuse attacks.
 //!
 //! Keys produced here are **not** interchangeable with the GG18-style
-//! `eddsatss` keys of the Go library: the DKG procedure differs and signatures
+//! `eddsatss` keys: the DKG procedure differs and signatures
 //! use FROST's binding-factor aggregation.
 //!
 //! # Broker contract
@@ -30,12 +30,10 @@
 //! broker's per-recipient confidentiality guarantee above — there is no
 //! application-layer AEAD on the resharing path. An observer able to collect
 //! `new_threshold + 1` sub-shares for a single old dealer recovers that dealer's
-//! Lagrange-weighted share. This matches the Go `frosttss` resharing on the wire
-//! (`frosttss/resharing.go`, `round3Old`), so it is a *symmetric* gap, not a Rust
-//! divergence; the Go/Rust `frostristretto255tss` resharing is the outlier that
-//! does wrap shares in the same AEAD envelope. Adding the envelope here would
-//! change the round-3 wire format and break interop with the Go `frosttss`, so it
-//! is deferred to a coordinated Go+Rust protocol-version bump. Until then, deploy
+//! Lagrange-weighted share. (`frostristretto255tss` resharing does wrap shares
+//! in the same AEAD envelope.) Adding the envelope here would change the round-3
+//! wire format and break resharing with peers running earlier versions, so it is
+//! deferred to a protocol-version bump. Until then, deploy
 //! `frosttss` resharing only over a transport that actually enforces the
 //! per-recipient confidentiality the broker contract requires.
 //!

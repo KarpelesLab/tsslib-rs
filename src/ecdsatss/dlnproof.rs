@@ -1,6 +1,6 @@
 //! Zero-knowledge proof of knowledge of a discrete log over a safe-prime product
 //! (`h2 = h1^x mod Ñ`). Two run in parallel in GG18 keygen to show `h1, h2`
-//! generate the same group mod `Ñ`. Port of Go `tss-lib/crypto/dlnproof`.
+//! generate the same group mod `Ñ`.
 
 #![allow(dead_code)]
 
@@ -10,7 +10,7 @@ use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
 
-/// Soundness iterations (must match Go).
+/// Soundness iterations (fixed by the wire format).
 pub(crate) const ITERATIONS: usize = 128;
 
 /// A DLN proof: per-iteration commitments `alpha` and responses `t`.
@@ -145,12 +145,15 @@ mod tests {
     }
 
     #[test]
-    fn go_dlnproof_verifies() {
+    fn fixture_dlnproof_verifies() {
         let f = fixtures();
         let d = &f["dlnproof"];
         let (h1, h2, nt) = (dec(&d["h1"]), dec(&d["h2"]), dec(&d["ntilde"]));
         let proof = load(d);
-        assert!(verify(&proof, &h1, &h2, &nt), "Go DLN proof must verify");
+        assert!(
+            verify(&proof, &h1, &h2, &nt),
+            "fixture DLN proof must verify"
+        );
 
         // Tamper: flip one response.
         let mut bad = load(d);

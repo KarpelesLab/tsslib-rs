@@ -1,10 +1,9 @@
-//! Go `big.Int`-compatible JSON encoding.
+//! Arbitrary-precision integers as bare decimal JSON numbers.
 //!
-//! Go's `encoding/json` renders a `*big.Int` as a bare decimal JSON *number*
+//! The save formats store big integers (Shamir shares, participant
+//! identifiers, affine point coordinates) as bare decimal JSON *numbers*
 //! (e.g. `7237005577332262213973186563042994240857116359379907606001950938285454250989`),
-//! not a string. The save formats this crate must interoperate with embed such
-//! values (Shamir shares, participant identifiers, affine point coordinates), so
-//! we reproduce that encoding exactly.
+//! not strings, and existing saved keys depend on that encoding.
 //!
 //! [`BigUintDec`] holds a non-negative integer as its big-endian magnitude and
 //! (de)serializes as a bare decimal number. It relies on serde_json's
@@ -16,11 +15,10 @@
 use crate::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// A non-negative big integer that (de)serializes as a bare decimal JSON number,
-/// matching Go's `encoding/json` treatment of `*big.Int`.
+/// A non-negative big integer that (de)serializes as a bare decimal JSON number.
 ///
-/// The stored bytes are the big-endian magnitude with leading zeros stripped
-/// (an empty vector denotes zero), mirroring Go's `big.Int.Bytes()`.
+/// The stored bytes are the minimal big-endian magnitude (leading zeros
+/// stripped; an empty vector denotes zero).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct BigUintDec(pub Vec<u8>);
 

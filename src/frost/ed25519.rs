@@ -60,7 +60,7 @@ impl Ciphersuite for Ed25519 {
     }
 
     fn decode_point(b: &[u8; 32]) -> Option<EdwardsPoint> {
-        // Match Go group/ed25519 DecodeElement: decode then cofactor-clear
+        // Decode then cofactor-clear
         // (EightInvEight) to project any on-curve point into the prime-order
         // subgroup. A no-op for the prime-order points honest senders produce.
         let p = EdwardsPoint::decompress(b)?;

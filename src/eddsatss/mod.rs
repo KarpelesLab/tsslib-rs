@@ -1,11 +1,11 @@
 //! Legacy threshold EdDSA (GG18-style) on Ed25519 — Feldman VSS + threshold
-//! Schnorr — for migrating keys from the Go `tss-lib/eddsatss`.
+//! Schnorr — for migrating existing keys in the legacy GG18-style format.
 //!
 //! Unlike [`ecdsatss`](crate::ecdsatss) this scheme needs no Paillier or MtA:
 //! keygen is a Feldman-VSS DKG with Schnorr proofs of knowledge, and signing is a
 //! commit/reveal threshold Schnorr producing a standard Ed25519 signature
-//! (verifiable by any stock Ed25519 verifier). Wire and save-data formats match
-//! the Go implementation so existing serialized keys load directly.
+//! (verifiable by any stock Ed25519 verifier). The wire and save-data formats
+//! are fixed so existing serialized keys load directly.
 //!
 //! # Warning
 //!

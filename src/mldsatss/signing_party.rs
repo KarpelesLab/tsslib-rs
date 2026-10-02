@@ -7,11 +7,10 @@
 //! its commitment); round 3 broadcasts the packed responses; combine aggregates
 //! and emits a FIPS-204-verifiable signature. The per-phase lattice work is the
 //! shared [`sample_w`]/[`compute_response`]/[`combine_try`] from
-//! [`signing`](super::signing). Wire-compatible with Go `mldsatss`: round
-//! message types are `mldsa44:sign:round{1,2,3}#<attempt_id>`, where
-//! `attempt_id` (a u32, 0 by default; see [`SigningParty44::new_with_attempt_id`])
-//! mirrors Go's `Parameters.SetAttemptID` and is also bound into the round-1
-//! commitment.
+//! [`signing`](super::signing). Round message types are
+//! `mldsa44:sign:round{1,2,3}#<attempt_id>`, where `attempt_id` (a u32, 0 by
+//! default; see [`SigningParty44::new_with_attempt_id`]) is also bound into the
+//! round-1 commitment.
 //!
 //! Each session is a single attempt: if every one of the `k` tries is rejected,
 //! [`SigningParty44::wait`] returns an error and the caller retries with fresh
@@ -56,8 +55,7 @@ struct Shared {
     key: Key44,
     key_ids: Vec<u8>, // Key44.id of params.parties()[slot]
     attempt_id: u32,
-    // Per-session message types: `TYPE_R{1,2,3}#<attempt_id>`, matching Go's
-    // `Parameters.msgType` (`fmt.Sprintf("%s#%d", base, attemptID)`).
+    // Per-session message types: `TYPE_R{1,2,3}#<attempt_id>`.
     type_r1: String,
     type_r2: String,
     type_r3: String,
@@ -105,12 +103,10 @@ impl SigningParty44 {
         Self::new_with_attempt_id(params, th, key, key_ids, msg, ctx, 0)
     }
 
-    /// Like [`SigningParty44::new`] but with an explicit `attempt_id`, matching
-    /// Go's `Parameters.SetAttemptID`. The id is appended to every round's
+    /// Like [`SigningParty44::new`] but with an explicit `attempt_id`. The id is appended to every round's
     /// message type (`mldsa44:sign:roundN#<attempt_id>`) and bound into the
     /// round-1 commitment, so several signing sessions can share one broker
-    /// without message-type collisions. `new` (attempt_id 0) is wire-identical
-    /// to a Go session that never calls `SetAttemptID`.
+    /// without message-type collisions. `new` uses attempt_id 0.
     pub fn new_with_attempt_id(
         params: Parameters,
         th: ThresholdParams44,
@@ -133,7 +129,7 @@ impl SigningParty44 {
         if key_ids.len() != params.parties().len() {
             return Err(Error::Validation("key_ids length mismatch".into()));
         }
-        // Go `NewParameters` requires key_ids strictly increasing, so they align
+        // key_ids must be strictly increasing, so they align
         // with the ascending-sorted committee (parties().IDs()). Reject otherwise.
         if key_ids.windows(2).any(|w| w[1] <= w[0]) {
             return Err(Error::Validation(
@@ -229,7 +225,7 @@ impl Shared {
             stws.push(fv);
         }
         // The hyperball seed derives the secret masks; wipe it now that every
-        // try has been sampled (best-effort, Go `defer ZeroizeBytes(rhop)`).
+        // try has been sampled (best-effort).
         rhop.zeroize();
 
         let commit = self.compute_commitment(self.key.id, &wbuf);
@@ -363,12 +359,12 @@ impl Shared {
                 }
             }
             // The per-try hyperball masks (secret nonces y) are never needed
-            // again — wipe them now (best-effort, Go zeroizes per-attempt).
+            // again — wipe them now (best-effort).
             for fv in st.stws.iter_mut() {
                 fv.zeroize();
             }
         }
-        // Wipe the recovered secret-key material (Go zeroizeNttVec{L,K}44).
+        // Wipe the recovered secret-key material.
         for p in s1h.iter_mut() {
             p.c.zeroize();
         }
@@ -418,8 +414,7 @@ impl Shared {
 
         let (wfinal, zfinal) = {
             let st = self.state.lock();
-            // Per-party response validity (Go `validatePartyResponses`, FIX 2 —
-            // identifiable abort). Before summing every party's z_i
+            // Per-party response validity (identifiable abort). Before summing every party's z_i
             // unconditionally, range/bound-check each party's block. A
             // malicious party that submits garbage z_i (large coefficients)
             // would otherwise corrupt the aggregate and force "all tries
@@ -452,7 +447,7 @@ impl Shared {
     }
 
     /// SHAKE256(tr ‖ act ‖ attempt_id ‖ μ ‖ keyId ‖ wbuf) → 32 bytes.
-    /// `attempt_id` is a big-endian u32 (Go `computeCommitment`), 0 by default.
+    /// `attempt_id` is a big-endian u32, 0 by default.
     fn compute_commitment(&self, key_id: u8, wbuf: &[u8]) -> Vec<u8> {
         let mut input = Vec::with_capacity(64 + 1 + 4 + 64 + 1 + wbuf.len());
         input.extend_from_slice(&self.key.tr);
@@ -546,7 +541,7 @@ fn aggregate_zfinal(r3resps: &[Option<Vec<u8>>], kk: usize) -> Vec<[Poly; L]> {
 /// Checks every party's round-3 response block for per-party validity
 /// *before* combine sums them, so a single malformed/malicious `z_i` is
 /// attributed to its sender instead of silently corrupting the aggregate
-/// (Go `validatePartyResponses`, "FIX 2 — identifiable abort").
+/// (identifiable abort).
 ///
 /// Derivable check (strongest available from public values at combine time):
 /// an honest party either rejects a try (sends an all-zero `z_i` block, which
@@ -707,19 +702,18 @@ mod tests {
         assert!(pk.verify(&sig, msg, ctx), "broker signature must verify");
     }
 
-    /// Round message types must carry Go's `#<attempt_id>` suffix
-    /// (`Parameters.msgType` = `fmt.Sprintf("%s#%d", base, attemptID)`). Without
-    /// it a mixed Go↔Rust session mis-routes even at the default attempt 0. Pins
-    /// the exact Go wire strings so the suffix can't be dropped again.
+    /// Round message types must carry the `#<attempt_id>` suffix, even at the
+    /// default attempt 0 (existing peers route on it). Pins the exact wire
+    /// strings so the suffix can't be dropped again.
     #[test]
-    fn message_types_carry_go_attempt_suffix() {
+    fn message_types_carry_attempt_suffix() {
         assert_eq!(format!("{TYPE_R1}#{}", 0u32), "mldsa44:sign:round1#0");
         assert_eq!(format!("{TYPE_R2}#{}", 0u32), "mldsa44:sign:round2#0");
         assert_eq!(format!("{TYPE_R3}#{}", 0u32), "mldsa44:sign:round3#0");
         assert_eq!(format!("{TYPE_R1}#{}", 5u32), "mldsa44:sign:round1#5");
     }
 
-    /// Go `NewParameters` rejects non-strictly-increasing key_ids; so must we.
+    /// Non-strictly-increasing key_ids are rejected.
     #[test]
     fn rejects_non_increasing_key_ids() {
         let params = get_threshold_params44(2, 3).unwrap();
@@ -755,8 +749,7 @@ mod tests {
         let honest = packed_resp_block(&Poly::zero(), kk);
 
         // Slot 1: fully-saturated garbage — every coefficient = γ1, which
-        // packs/unpacks cleanly but blows the ν-scaled L2 bound (matches the
-        // Go TestSigning44_InvalidResponseIsAttributed payload).
+        // packs/unpacks cleanly but blows the ν-scaled L2 bound.
         let gamma1 = ML_DSA_44.params.gamma1;
         let mut max_poly = Poly::zero();
         for c in max_poly.c.iter_mut() {

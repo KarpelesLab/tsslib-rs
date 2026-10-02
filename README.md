@@ -6,11 +6,9 @@
 
 Easy-to-use threshold signature schemes (TSS) in pure Rust.
 
-`tsslib` is a Rust port of the broker-based protocols in the Go
-[`tss-lib`](https://github.com/KarpelesLab/tss-lib). The goal is to be **wire-
-and save-data-compatible** with the Go implementation: messages serialized by
-one side are consumed by the other, and persisted key shares round-trip across
-both languages. All low-level cryptography is provided by
+The broker-based protocols exchange JSON messages through a transport you
+supply, and key shares persist as JSON; both formats are stable across
+releases. All low-level cryptography is provided by
 [`purecrypto`](https://github.com/KarpelesLab/purecrypto) — this crate adds no
 hand-rolled field arithmetic.
 
@@ -46,16 +44,16 @@ checked-in test vectors covering every accepted algorithm. `mldsatss`
 signing, and an **experimental** dealerless DKG (`DkgParty44` — no trusted
 dealer; not independently reviewed). `ecdsatss` is a broker-driven port of the
 legacy GG18/GG20 Paillier+MtA protocol (keygen, 9-round signing, resharing, and
-1-of-1 `import_key`) provided for **migrating existing Go `tss-lib/ecdsatss` keys**
-— it loads those save files byte-for-byte and signs with them; new deployments
+1-of-1 `import_key`) provided for **migrating existing GG18/GG20 keys** — it
+loads those save files byte-for-byte and signs with them; new deployments
 should prefer `dklstss`. `frostsecp256k1tss` is FROST for Bitcoin Taproot: it
 outputs standard 64-byte BIP340 signatures, optionally under a BIP341 output key
 (key-path only or committing to a script tree) and/or a non-hardened BIP32
 child, and `import_key` brings in an existing secp256k1 key (with its chain
-code) to reshare. It is Rust-only, with no Go counterpart. `eddsatss` is the EdDSA counterpart — a broker-driven
+code) to reshare. `eddsatss` is the EdDSA counterpart — a broker-driven
 port of the legacy GG18-style threshold Ed25519 (Feldman VSS + threshold Schnorr,
 no Paillier): keygen, 3-round signing, resharing, and 1-of-1 `import_key`, for
-migrating existing Go `tss-lib/eddsatss` keys (it loads them and emits standard
+migrating existing GG18-style EdDSA keys (it loads them and emits standard
 Ed25519 signatures). Each module is gated behind a like-named
 cargo feature, all enabled by default:
 
@@ -84,7 +82,7 @@ src/
   frostsecp256k1tss/       FROST(secp256k1) Taproot  keygen · BIP340/341 sign · reshare · BIP32 · import
   mldsatss/                Threshold ML-DSA-44       dealer + DKG keygen · sync/broker sign (+ hyperball)
   dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh · presign
-  ecdsatss/                Threshold ECDSA (GG18)    broker keygen/sign/reshare · import · Go save-data compat
+  ecdsatss/                Threshold ECDSA (GG18)    broker keygen/sign/reshare · import · legacy save format
   eddsatss/                Threshold EdDSA (GG18)    broker keygen/sign/reshare · import · standard Ed25519 out
 ```
 

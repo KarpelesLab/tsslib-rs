@@ -1,5 +1,4 @@
-//! Synchronous in-process DKLs threshold-ECDSA signing. Mirrors tss-lib
-//! `dklstss.Sign`. Produces a standard ECDSA signature verifiable under the
+//! Synchronous in-process DKLs threshold-ECDSA signing. Produces a standard ECDSA signature verifiable under the
 //! joint public key.
 
 use super::Error;
@@ -35,7 +34,7 @@ pub fn sign_with_tweak(
 /// Mul-then-check pattern of the `ole_check` module (DKLs23 §5). If a peer uses
 /// inconsistent `β` across the two parallel multiplications the call aborts
 /// with a `MUL_CHECK_FAILED` validation error instead of producing a
-/// possibly-leaky abort. Mirrors Go `dklstss.SignChecked`.
+/// possibly-leaky abort.
 ///
 /// Cost is roughly 2× the CPU of [`sign`] (each ΠMul runs twice). See the
 /// module docs of [`super`] for the inherited simplified-check limitation.
@@ -54,7 +53,6 @@ pub fn sign_checked(
 }
 
 /// [`sign_checked`] with an optional HD tweak, analogous to [`sign_with_tweak`].
-/// Mirrors Go `dklstss.SignCheckedWithTweak`.
 pub fn sign_checked_with_tweak(
     keys: &[Key],
     signer_idx: &[usize],

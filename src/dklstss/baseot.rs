@@ -1,5 +1,4 @@
-//! Chou-Orlandi 1-of-2 base oblivious transfer over secp256k1. Port of
-//! tss-lib `crypto/ot/baseot`.
+//! Chou-Orlandi 1-of-2 base oblivious transfer over secp256k1.
 //!
 //! A batch of `n` OT instances. The sender learns two keys `(k_{i,0}, k_{i,1})`
 //! per instance; the receiver, holding a choice bit `c_i`, learns only
@@ -171,7 +170,7 @@ fn derive_key(sid: &[u8], instance: usize, bit: usize, p: &ProjectivePoint) -> [
     )
 }
 
-/// Minimal big-endian magnitude of `n` (empty for 0), matching `big.Int.Bytes()`.
+/// Minimal big-endian magnitude of `n` (empty for 0).
 fn int_be_min(n: u64) -> Vec<u8> {
     let be = n.to_be_bytes();
     let start = be.iter().position(|&x| x != 0).unwrap_or(be.len());

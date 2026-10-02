@@ -1,5 +1,5 @@
-//! Schnorr proof of knowledge of a discrete log (`X = x·G`) over edwards25519,
-//! port of Go `tss-lib/crypto/schnorr` `ZKProof`. Used in both keygen (binding
+//! Schnorr proof of knowledge of a discrete log (`X = x·G`) over edwards25519.
+//! Used in both keygen (binding
 //! `vs[0] = u_i·G`) and signing (binding `R_i = r_i·G`).
 //!
 //! Fiat-Shamir challenge `c = RejectionSample(L, SHA512_256i_TAGGED(session, X,

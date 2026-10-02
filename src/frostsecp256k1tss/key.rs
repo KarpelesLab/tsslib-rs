@@ -1,7 +1,7 @@
 //! A participant's FROST(secp256k1) key share and its JSON form.
 //!
-//! JSON shape: `Xi`, `ShareID` and `Ks` as decimal numbers (like the other
-//! modules' `big.Int` fields), group elements as base64 33-byte SEC1
+//! JSON shape: `Xi`, `ShareID` and `Ks` as bare JSON decimal numbers
+//! (`tss::bigint`), group elements as base64 33-byte SEC1
 //! compressed, and `ChainCode` as base64.
 
 use super::Error;

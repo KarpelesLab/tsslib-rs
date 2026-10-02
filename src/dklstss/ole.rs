@@ -1,5 +1,4 @@
-//! Gilboa multiplication-to-additive (ΠMul) over OT extension. Port of
-//! tss-lib `crypto/ot/ole` (mul). Two parties holding `α` (Alice) and `β`
+//! Gilboa multiplication-to-additive (ΠMul) over OT extension. Two parties holding `α` (Alice) and `β`
 //! (Bob) end with additive shares `u_A + u_B ≡ α·β (mod n)`.
 //!
 //! # SECURITY (known gap in the *default* path)
@@ -17,8 +16,8 @@
 //! inputs here.
 //!
 //! The default [`super::sign`] / [`super::signing_party`] path uses these
-//! primitives directly and is kept **byte-compatible with Go tss-lib's default
-//! (unchecked) signing** on purpose, so it is not changed.
+//! primitives directly; its wire format is fixed (existing peers depend on it),
+//! so it is not changed.
 //!
 //! ## Opt-in fix: Mul-then-check
 //!
@@ -29,11 +28,11 @@
 //! is wired into [`super::sign_checked`] and
 //! [`super::CheckedSigningParty`]. That wrapper requires no change to the
 //! OT-extension message sizes — it simply runs the unchecked multiplication
-//! twice — so the default wire format is untouched. It inherits Go's
-//! simplified-check limitation: a deviation applied identically to both runs
+//! twice — so the default wire format is untouched. It is a simplified check,
+//! with a limitation: a deviation applied identically to both runs
 //! (including a per-bit offset, which is still a selective-failure lever) is
-//! caught only by the final ECDSA verification gate; the full check is Go's
-//! task #17. See [`super`] (dklstss) module docs for operational guidance on the
+//! caught only by the final ECDSA verification gate; the full DKLs23 check
+//! changes the wire format and needs a versioned protocol change. See [`super`] (dklstss) module docs for operational guidance on the
 //! signing paths: bound retries and rotate/reshare the key on repeated
 //! unexplained signing aborts with the same participant set.
 

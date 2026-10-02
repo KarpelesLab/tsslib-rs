@@ -1,5 +1,4 @@
-//! SoftSpoken/KOS OT extension over the base OT. Port of tss-lib
-//! `crypto/ot/otext`.
+//! SoftSpoken/KOS OT extension over the base OT.
 //!
 //! One base-OT setup (κ instances) is reused across many `extend` calls. The
 //! receiver supplies L choice bits and learns `m_{c_i}` per row; the sender
@@ -337,7 +336,7 @@ fn prg_expand(seed: &[u8; SEED_LEN], sid: &[u8], n: usize) -> Vec<u8> {
 }
 
 /// Random-oracle output for a κ-bit column vector `v`, byte-exact (unlike the
-/// big.Int-framed `SHA512_256i_TAGGED`, leading zeros matter here).
+/// integer-framed `SHA512_256i_TAGGED`, leading zeros matter here).
 fn hash_row(sid: &[u8], i: usize, v: &[u8]) -> [u8; KEY_LEN] {
     let tag = sha512_256(b"DKLS23-otext-row-v1");
     let mut buf = Vec::new();

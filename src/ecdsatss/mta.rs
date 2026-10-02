@@ -1,6 +1,6 @@
 //! MtA (multiplicative-to-additive) share conversion with range proofs. Alice
 //! holds `a`, Bob holds `b`; afterwards Alice has `α` and Bob has `β` with
-//! `α + β ≡ a·b (mod q)`. Port of Go `tss-lib/crypto/mta`.
+//! `α + β ≡ a·b (mod q)`.
 //!
 //! The "with check" (WC) variant additionally proves Bob's input matches a public
 //! point `B = b·G` (used in GG18 signing round 2).
@@ -39,7 +39,7 @@ pub(crate) struct RangeProofAlice {
 }
 
 impl RangeProofAlice {
-    /// Big-endian parts `Z, U, W, S, S1, S2` (Go `RangeProofAlice.Bytes`).
+    /// Big-endian parts `Z, U, W, S, S1, S2`.
     pub(crate) fn to_parts(&self) -> Vec<Vec<u8>> {
         [&self.z, &self.u, &self.w, &self.s, &self.s1, &self.s2]
             .iter()
@@ -344,8 +344,8 @@ pub(crate) fn verify_bob(
     // point-binding equation (4) below would be silently skipped, letting a
     // malicious Bob present a basic (10-part) proof for the WC slot and avoid
     // proving his MtA input matches the public point X (e.g. W_j in GG18
-    // signing round 2). Go's ProofBobWCFromBytes always requires the full
-    // field set, so honest WC proofs always carry U; reject its absence.
+    // signing round 2). Honest WC proofs always carry the full field set,
+    // including U; reject its absence.
     if x_point.is_some() && pf.u.is_none() {
         return false;
     }

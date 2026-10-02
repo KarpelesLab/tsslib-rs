@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// encoding of the group commitment, `S` the 32-byte little-endian scalar. This
 /// format is **not** Ed25519-compatible; verifiers must re-derive the challenge
 /// as `H2(R || pubkey || msg)` under the `FROST-RISTRETTO255-SHA512-v1`
-/// ciphersuite. Field names mirror the Go `SignatureData`.
+/// ciphersuite.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignatureData {
     /// 32-byte canonical Ristretto255 encoding of the group commitment `R`.

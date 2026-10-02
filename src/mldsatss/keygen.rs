@@ -89,8 +89,7 @@ pub fn trusted_dealer_keygen44(
         }
         // Wipe the dealer-side local copies of this share's polynomials; the
         // distributed shares are independent copies (and `Share44`'s `Drop`
-        // wipes `share` itself at the end of this iteration). Best-effort,
-        // mirrors Go `zeroizeRing(s1)/zeroizeRing(s2)`.
+        // wipes `share` itself at the end of this iteration). Best-effort.
         for p in s1.iter_mut().chain(s1h.iter_mut()) {
             zeroize::Zeroize::zeroize(&mut p.c);
         }
@@ -99,7 +98,7 @@ pub fn trusted_dealer_keygen44(
         }
     }
     // The tail of `stream` holds every share's sSeed; wipe it now that all
-    // shares are derived (best-effort, mirrors Go `ZeroizeBytes(sSeed)`).
+    // shares are derived (best-effort).
     zeroize::Zeroize::zeroize(&mut stream);
 
     // t = A·s1 + s2 ; t1 = high bits of t (Power2Round).
@@ -116,8 +115,7 @@ pub fn trusted_dealer_keygen44(
             t1i.c[jj] = hi;
         }
     }
-    // Wipe the dealer's aggregate secret accumulators (best-effort, mirrors
-    // Go `zeroizeNtt(s1hTotal)/zeroizeRing(s2Total)`).
+    // Wipe the dealer's aggregate secret accumulators (best-effort).
     for p in s1h_total.iter_mut() {
         zeroize::Zeroize::zeroize(&mut p.c);
     }

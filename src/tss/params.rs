@@ -7,10 +7,10 @@ use alloc::sync::Arc;
 
 /// Shared configuration for a single run of a threshold protocol.
 ///
-/// Mirrors the role of Go `tss.Parameters` for the broker-based protocols: it
-/// names the (sorted) participant set, identifies this party within it, carries
-/// the reconstruction threshold `t` (a `t`-of-`n` key needs `t+1` signers), and
-/// holds the [`MessageBroker`] the protocol routes its rounds through.
+/// Names the (sorted) participant set, identifies this party within it,
+/// carries the reconstruction threshold `t` (a `t`-of-`n` key needs `t+1`
+/// signers), and holds the [`MessageBroker`] the protocol routes its rounds
+/// through.
 #[derive(Clone)]
 pub struct Parameters {
     parties: Vec<PartyId>,
@@ -102,7 +102,7 @@ impl Parameters {
 /// a new committee (threshold `t'`) while preserving the group public key.
 ///
 /// `self_id` may belong to the old committee, the new committee, or both
-/// (dual membership). Mirrors Go `tss.ReSharingParameters`.
+/// (dual membership).
 #[derive(Clone)]
 pub struct ReSharingParameters {
     old_parties: Vec<PartyId>,
@@ -184,8 +184,7 @@ impl ReSharingParameters {
             .position(|p| p.cmp_key(&self.self_id) == core::cmp::Ordering::Equal)
     }
     /// The old committee followed by the new-only parties: every participant
-    /// once. (Go concatenates the two lists; a member of both would then be
-    /// messaged twice.)
+    /// once, so a member of both committees is not messaged twice.
     pub fn old_and_new_parties(&self) -> Vec<PartyId> {
         let mut v = self.old_parties.clone();
         for p in &self.new_parties {

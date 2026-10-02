@@ -1,6 +1,6 @@
 //! Feldman verifiable secret sharing over a `Ciphersuite` group.
 //!
-//! Port of tss-lib `crypto/vss`: a degree-`t` polynomial with the secret as its
+//! A degree-`t` polynomial with the secret as its
 //! constant term, Feldman commitments `v_i = a_i·G`, and shares `f(id)`. A share
 //! verifies against the commitments via `share·G == Σ_j id^j · v_j`.
 
@@ -31,8 +31,7 @@ impl core::fmt::Display for VssError {
 
 impl core::error::Error for VssError {}
 
-/// Port of tss-lib `vss.CheckIndexes` plus the `Create` threshold checks:
-/// rejects `threshold < 1`, fewer than `threshold + 1` identifiers, and any
+/// Rejects `threshold < 1`, fewer than `threshold + 1` identifiers, and any
 /// identifier that is zero or a duplicate mod `L`.
 ///
 /// An identifier of `0 mod L` would be handed `f(0)` — the shared secret

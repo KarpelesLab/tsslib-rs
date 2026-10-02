@@ -7,7 +7,7 @@
 //! when the disagreement is over the recipient's own commitments). This catches
 //! a peer-code equivocation that the broker contract alone cannot detect (a
 //! malicious dealer handing the broker different bytes per recipient under a
-//! `To == nil` broadcast). Port of Go `dklstss/echo.go`.
+//! `To == nil` broadcast).
 
 use super::Error;
 use super::secp::{self, ProjectivePoint};
@@ -26,7 +26,7 @@ pub(crate) fn peer_key_str(p: &PartyId) -> String {
     be_to_decimal(strip(&p.key))
 }
 
-/// Big-endian magnitude with leading zeros stripped (Go `big.Int.Bytes()`).
+/// Big-endian magnitude with leading zeros stripped.
 pub(crate) fn strip(b: &[u8]) -> &[u8] {
     let start = b.iter().position(|&x| x != 0).unwrap_or(b.len());
     &b[start..]
@@ -179,8 +179,8 @@ pub(crate) fn verify_echoes(
 
 // --- shared point / party helpers (used by every *_party state machine) ----
 
-/// Flattens points to alternating `x`, `y` big-endian-minimal magnitudes
-/// (Go `flattenPointXY`). A nil/identity point contributes two empty entries.
+/// Flattens points to alternating `x`, `y` big-endian-minimal magnitudes.
+/// A nil/identity point contributes two empty entries.
 pub(crate) fn flatten_point_xy(pts: &[ProjectivePoint]) -> Vec<B64Bytes> {
     let mut out = Vec::with_capacity(2 * pts.len());
     for p in pts {
@@ -234,7 +234,7 @@ pub(crate) fn other_parties(parties: &[PartyId], self_id: &PartyId) -> Vec<Party
 }
 
 /// Per-pair base-OT session id: `SHA256(ssid || '|' || min || '|' || max ||
-/// '|' || extSenderKey)` over big-endian-minimal party keys (Go `pairBaseSid`).
+/// '|' || extSenderKey)` over big-endian-minimal party keys.
 pub(crate) fn pair_base_sid(ssid: &[u8], a: &[u8], b: &[u8], ext_sender: &[u8]) -> Vec<u8> {
     let (a, b, ext) = (strip(a), strip(b), strip(ext_sender));
     let mut data = Vec::new();

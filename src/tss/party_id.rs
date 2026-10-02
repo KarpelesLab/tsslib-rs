@@ -19,11 +19,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// # Wire compatibility
 ///
-/// The JSON shape matches the Go `tss.PartyID`: the embedded protobuf
-/// `MessageWrapper_PartyID` fields are promoted to the top level, `key` is
-/// standard-base64 encoded (Go marshals `[]byte` that way), and `id` /
-/// `moniker` / `key` are omitted when empty (`omitempty`). `index` is always
-/// present.
+/// JSON shape: the protobuf `MessageWrapper_PartyID` fields at the top level,
+/// `key` standard-base64 encoded, and `id` / `moniker` / `key` omitted when
+/// empty. `index` is always present.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyId {
     /// Unique string representation of `key`.
@@ -61,7 +59,7 @@ impl PartyId {
     }
 
     /// Sorts `ids` by `key` ascending and assigns each party its `index`
-    /// (`start_at + position`). Mirrors Go's `SortPartyIDs`.
+    /// (`start_at + position`).
     pub fn sort(mut ids: Vec<PartyId>, start_at: i32) -> Vec<PartyId> {
         ids.sort_by(|a, b| cmp_be_unsigned(&a.key, &b.key));
         for (i, id) in ids.iter_mut().enumerate() {
@@ -117,7 +115,7 @@ fn strip_leading_zeros(b: &[u8]) -> &[u8] {
     &b[start..]
 }
 
-// --- Serde: match the Go JSON shape exactly. ---
+// --- Serde: the exact JSON shape existing keys and peers use. ---
 
 #[derive(Serialize, Deserialize)]
 struct PartyIdWire {

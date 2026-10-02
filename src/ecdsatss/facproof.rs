@@ -1,10 +1,10 @@
 //! No-small-factor proof: a Paillier modulus `N0` is a product of two primes,
-//! relative to a verifier's ring-Pedersen parameters `(NCap, s, t)`. Port of Go
-//! `tss-lib/crypto/facproof` (GG18 keygen round 2).
+//! relative to a verifier's ring-Pedersen parameters `(NCap, s, t)` (GG18 keygen
+//! round 2).
 //!
-//! Note on `V`: Go computes `V = r + e·(σ − ν·N0p)` (signed) but serializes its
-//! magnitude (`big.Int.Bytes()`), so a negative `V` is unrecoverable on the wire
-//! in Go too. We therefore match the working `V ≥ 0` case and emit `|V|`.
+//! Note on `V`: the protocol defines `V = r + e·(σ − ν·N0p)` (signed), but the
+//! wire format carries only its magnitude, so a negative `V` is unrecoverable
+//! on the wire. We therefore match the working `V ≥ 0` case and emit `|V|`.
 
 #![allow(dead_code)]
 
@@ -146,7 +146,7 @@ pub(crate) fn prove<R: RngCore>(
     pf.z2 = bn::add(&bn::mul(&e, n0q), &beta);
     pf.w1 = bn::add(&bn::mul(&e, &mu), &x);
     pf.w2 = bn::add(&bn::mul(&e, &nu), &y);
-    // v = |(r + e·σ) − (e·ν·N0p)|  (Go serializes the magnitude).
+    // v = |(r + e·σ) − (e·ν·N0p)|  (the wire carries the magnitude).
     let a_val = bn::add(&r, &bn::mul(&e, &sigma));
     let b_val = bn::mul(&bn::mul(&e, &nu), n0p);
     pf.v = if bn::ge(&a_val, &b_val) {
@@ -205,7 +205,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn go_facproof_verifies() {
+    fn fixture_facproof_verifies() {
         let f = fixtures();
         let fp = &f["facproof"];
         let session = fp["session"].as_str().unwrap().as_bytes();
@@ -230,7 +230,7 @@ mod tests {
         };
         assert!(
             verify(session, &n0, &ncap, &s, &t, &pf),
-            "Go facproof must verify"
+            "fixture facproof must verify"
         );
 
         // Tamper.

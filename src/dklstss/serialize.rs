@@ -1,11 +1,11 @@
-//! JSON save/load for a dklstss [`Key`], **byte-compatible with the Go
-//! `dklstss` `Save`/`Load` format** (wire version 4).
+//! JSON save/load for a dklstss [`Key`] (save-format version 4). The format is
+//! fixed: existing saved keys depend on it byte for byte.
 //!
 //! Layout (`{"format":"dklstss-key","version":4,...}`): scalars are bare decimal
-//! numbers (`*big.Int`), curve points are `crypto.ECPoint`
+//! numbers (arbitrary precision), curve points are
 //! (`{"Curve":"secp256k1","Coords":[X,Y]}`), `chain_code` is base64, and each
-//! peer's OT-extension state serializes its raw seeds the way Go marshals fixed
-//! `[N]byte` arrays — as JSON arrays of byte-valued numbers:
+//! peer's OT-extension state serializes its raw seeds as fixed-size byte arrays
+//! — JSON arrays of byte-valued numbers:
 //! `as_bob:{delta:[…],seeds:[[…]×κ]}`, `as_alice:{seeds0:[[…]×κ],seeds1:[[…]×κ]}`.
 
 use super::Error;
@@ -17,13 +17,13 @@ use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use serde::{Deserialize, Serialize};
 
-/// Save-format version (matches Go `dklstss.KeyWireVersion`).
+/// Save-format version.
 pub const KEY_VERSION: u32 = 4;
 const KEY_FORMAT_MAGIC: &str = "dklstss-key";
 const CURVE_NAME: &str = "secp256k1";
 
 impl Key {
-    /// Serializes the key to JSON, byte-compatible with Go `dklstss.Save`
+    /// Serializes the key to JSON in the version-4 save format
     /// (unencrypted — the secret share and OT state are in cleartext; the caller
     /// is responsible for confidentiality).
     pub fn to_json(&self) -> Result<String, Error> {
@@ -54,7 +54,7 @@ impl Key {
         Ok(serde_json::to_string(&wire)?)
     }
 
-    /// Parses a key in the Go `dklstss.Save` JSON format (versions 1–4).
+    /// Parses a key in the JSON save format (versions 1–4).
     pub fn from_json(s: &str) -> Result<Key, Error> {
         let wire: KeyWire = serde_json::from_str(s)?;
         if !matches!(wire.version, 1..=KEY_VERSION) {
@@ -145,7 +145,7 @@ struct PairWire {
     as_bob: ExtSenderWire,
 }
 
-/// Go marshals `[Kappa][KeyLen]byte` / `[DeltaBytes]byte` as arrays of numbers.
+/// `[Kappa][KeyLen]` / `[DeltaBytes]` byte arrays, serialized as arrays of numbers.
 #[derive(Serialize, Deserialize)]
 struct ExtSenderWire {
     delta: Vec<u8>,
@@ -322,7 +322,7 @@ mod tests {
         assert!(v["ecdsa_pub"]["Coords"][0].is_number());
         assert!(v["xi"].is_number());
         assert!(v["chain_code"].is_string()); // base64
-        // OT seeds are arrays of byte-numbers (Go [N]byte shape).
+        // OT seeds are arrays of byte-numbers (fixed-size byte arrays).
         let ot = &v["ot"].as_array().unwrap();
         let bob = ot.iter().find(|o| !o.is_null()).unwrap();
         assert!(bob["as_bob"]["delta"].is_array());
@@ -333,22 +333,22 @@ mod tests {
 }
 
 #[cfg(test)]
-mod go_interop_tests {
+mod fixture_tests {
     use super::super::signing::{self, sign};
     use super::*;
     use crate::rng::SystemRng;
     use purecrypto::hash::sha256;
 
-    /// Loads the real Go-generated DKLs23 keys (3-party, t=1) and signs.
+    /// Loads the frozen DKLs23 fixture keys (3-party, t=1) and signs.
     #[test]
-    fn go_keys_load_and_sign() {
+    fn fixture_keys_load_and_sign() {
         let raw = include_str!("testdata/dkls.json");
         let doc: serde_json::Value = serde_json::from_str(raw).unwrap();
         let keys: Vec<Key> = doc["keys"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|v| Key::from_json(&serde_json::to_string(v).unwrap()).expect("load Go dkls key"))
+            .map(|v| Key::from_json(&serde_json::to_string(v).unwrap()).expect("load fixture key"))
             .collect();
         assert_eq!(keys.len(), 3);
         for k in &keys {
@@ -356,8 +356,9 @@ mod go_interop_tests {
             assert!(secp::point_eq(&k.ecdsa_pub, &keys[0].ecdsa_pub));
         }
 
-        // Rust re-saves the Go key and re-loads it losslessly (so Rust writes the
-        // same v4 format Go reads): OT state, points, and chain code survive.
+        // Re-saving a fixture key and re-loading it is lossless (the writer
+        // emits the same v4 format it reads): OT state, points, and chain code
+        // survive.
         for k in &keys {
             let re = Key::from_json(&k.to_json().unwrap()).unwrap();
             assert!(secp::point_eq(&re.ecdsa_pub, &k.ecdsa_pub));
@@ -374,9 +375,9 @@ mod go_interop_tests {
             }
         }
 
-        // Sign with parties 0 and 1 using the loaded Go keys + restored OT state.
-        let msg = sha256(b"go dkls key signs in rust");
-        let sig = sign(&keys, &[0, 1], &msg, &mut SystemRng).expect("sign with Go keys");
+        // Sign with parties 0 and 1 using the loaded fixture keys + restored OT state.
+        let msg = sha256(b"fixture dkls key signs");
+        let sig = sign(&keys, &[0, 1], &msg, &mut SystemRng).expect("sign with fixture keys");
         let e = signing::hash_to_scalar(&msg);
         let r = secp::scalar_from_be_reduce(&sig.r);
         let s = secp::scalar_from_be_reduce(&sig.s);

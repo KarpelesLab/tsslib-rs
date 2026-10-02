@@ -5,9 +5,8 @@ use crate::prelude::*;
 
 /// An error raised during a protocol round.
 ///
-/// Mirrors the Go `tss.Error`: it carries the failing `task`, the `round`
-/// number, the `victim` (the party that observed the failure), and any
-/// `culprits` — the parties cryptographically identified as responsible
+/// It carries the failing `task`, the `round` number, the `victim` (the party
+/// that observed the failure), and any `culprits` — the parties cryptographically identified as responsible
 /// (identifiable abort). The underlying `cause` is kept as a message string.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TssError {

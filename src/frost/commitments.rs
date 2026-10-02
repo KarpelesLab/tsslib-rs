@@ -1,4 +1,4 @@
-//! Hash-based commitments. Port of tss-lib `crypto/commitments`.
+//! Hash-based commitments.
 //!
 //! `commit` hashes a random 256-bit nonce together with the secret integers
 //! (their big-endian magnitudes) via the untagged [`sha512_256i`]. The
@@ -12,8 +12,8 @@ use purecrypto::rng::RngCore;
 
 /// Produces a commitment `C` and decommitment `D = [r, secrets...]` over the
 /// given secret big-endian magnitudes. `r` is a fresh 256-bit nonce. Both `C`
-/// and the `D` entries are returned as big-endian minimal magnitudes (Go
-/// `big.Int.Bytes()` form), ready for the wire.
+/// and the `D` entries are returned as minimal big-endian magnitudes, ready
+/// for the wire.
 pub fn commit(rng: &mut impl RngCore, secrets: &[Vec<u8>]) -> (Vec<u8>, Vec<Vec<u8>>) {
     let mut r = [0u8; 32];
     rng.fill_bytes(&mut r);

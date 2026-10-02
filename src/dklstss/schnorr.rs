@@ -1,5 +1,4 @@
 //! Schnorr proof of knowledge of a discrete log over secp256k1 (GG18 Fig. 16).
-//! Port of tss-lib `crypto/schnorr.ZKProof` on secp256k1.
 //!
 //! Challenge `c = SHA512_256i_TAGGED(session, X.x, X.y, G.x, G.y, α.x, α.y) mod n`.
 

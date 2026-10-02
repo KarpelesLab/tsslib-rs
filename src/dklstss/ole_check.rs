@@ -1,6 +1,5 @@
 //! Mul-then-check (DKLs23 §5) — opt-in malicious-security wrapper around the
-//! plain Gilboa multiplier in [`super::ole`]. Port of tss-lib
-//! `crypto/ot/ole/mulcheck.go`.
+//! plain Gilboa multiplier in [`super::ole`].
 //!
 //! Two parties holding `α` (Alice) and `β` (Bob) end with additive shares
 //! `u_A + u_B ≡ α·β (mod n)` exactly as in the unchecked ΠMul — but the
@@ -27,15 +26,16 @@
 //! oracle as the unchecked path, with no culprit named (see the
 //! `checked_does_not_detect_same_offset_in_both_runs` test). A *consistently
 //! wrong* `β` (one wrong value used for every bit) is likewise only caught by
-//! that gate, but leaks nothing. This mirrors Go's simplified check: the real
+//! that gate, but leaks nothing. This is a simplified check: the real
 //! DKLs23 check (randomised encoding of `α` plus Bob's commitment and
-//! check-vector equation, Go's task #17) is **not** ported here, so the
+//! check-vector equation) is **not** implemented — it changes the wire
+//! format, so it needs a versioned protocol change — and the
 //! checked path narrows the attack surface but is **not** a substitute for
 //! bounding retries and rotating keys after unexplained aborts.
 //!
 //! This module is **opt-in** and additive: the default unchecked
 //! [`super::ole`] primitives and the default sign / `SigningParty` wire format
-//! are left untouched and byte-identical to Go's default path.
+//! are left untouched and byte-identical, as existing peers depend on them.
 
 use super::Error;
 use super::ole::{self, AliceState, BobMsg};
@@ -45,29 +45,27 @@ use crate::prelude::*;
 
 /// Error message returned when the cross-run consistency check rejects: Bob
 /// used different `β` values in the two parallel ΠMul runs (or tampered with
-/// the consistency value `Z`). Mirrors Go's `ole.ErrMulCheckFailed`.
+/// the consistency value `Z`).
 pub const MUL_CHECK_FAILED: &str =
     "ole: Mul-then-check failed — Bob's β differs across parallel runs";
 
 /// Bob's reply for a Mul-then-check session: the two parallel ΠMul corrections
 /// (`msg1`, `msg2`) together with Bob's cross-run consistency value
-/// `z = u_B1 − u_B2 (mod n)`. Mirrors Go `ole.CheckedBobMsg`.
+/// `z = u_B1 − u_B2 (mod n)`.
 pub struct CheckedBobMsg {
     pub msg1: BobMsg,
     pub msg2: BobMsg,
     pub z: Scalar,
 }
 
-/// Alice's state across the two parallel ΠMul flows. Mirrors Go
-/// `ole.CheckedAliceState`.
+/// Alice's state across the two parallel ΠMul flows.
 pub struct CheckedAliceState {
     state1: AliceState,
     state2: AliceState,
 }
 
-/// `sid || '|' || tag` — the sub-session-id derivation. Byte-for-byte identical
-/// to Go's `ole.subSid` (mulcheck.go) so a future Go↔Rust checked interop is
-/// possible. `tag` is `b'1'` or `b'2'`.
+/// `sid || '|' || tag` — the sub-session-id derivation; part of the checked
+/// wire format, so it must not change. `tag` is `b'1'` or `b'2'`.
 fn sub_sid(sid: &[u8], tag: u8) -> Vec<u8> {
     let mut out = Vec::with_capacity(sid.len() + 2);
     out.extend_from_slice(sid);
@@ -78,8 +76,7 @@ fn sub_sid(sid: &[u8], tag: u8) -> Vec<u8> {
 
 /// Alice's first step of Mul-then-check: launches TWO parallel ΠMul instances
 /// with the same `alpha`, under sub-sids `sid|1` and `sid|2`. Returns both OT
-/// extension envelopes (to be sent to Bob) and Alice's combined state. Mirrors
-/// Go `ole.CheckedAliceStep1`.
+/// extension envelopes (to be sent to Bob) and Alice's combined state.
 pub fn checked_alice_step1(
     sid: &[u8],
     ext_receiver: &ExtReceiver,
@@ -95,7 +92,7 @@ pub fn checked_alice_step1(
 /// Bob's step of Mul-then-check: evaluates both ΠMul instances with the SAME
 /// `beta` and computes the cross-run consistency value `z = u_B1 − u_B2`.
 /// Returns the combined message and Bob's canonical share `u_B1` (the first
-/// multiplication's share). Mirrors Go `ole.CheckedBobStep1`.
+/// multiplication's share).
 pub fn checked_bob_step1(
     sid: &[u8],
     ext_sender: &ExtSender,
@@ -113,8 +110,7 @@ pub fn checked_bob_step1(
 
 /// Alice's final step: verifies Bob's consistency value and returns Alice's
 /// share `u_A1` with `u_A1 + u_B1 ≡ α·β (mod n)`. On check failure returns
-/// `Error::Validation(MUL_CHECK_FAILED)` and no share. Mirrors Go
-/// `ole.CheckedAliceStep2`.
+/// `Error::Validation(MUL_CHECK_FAILED)` and no share.
 pub fn checked_alice_step2(
     state: &CheckedAliceState,
     bob_msg: &CheckedBobMsg,

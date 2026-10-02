@@ -1,6 +1,6 @@
-//! Edwards25519 helpers bridging Go `tss-lib` big-endian `big.Int` scalars/points
-//! to `purecrypto`'s little-endian Ed25519 primitives, plus the Go
-//! `crypto.ECPoint` JSON shape (`{"Curve":"ed25519","Coords":[X,Y]}`).
+//! Edwards25519 helpers bridging the big-endian integer scalars/points of the
+//! save format to `purecrypto`'s little-endian Ed25519 primitives, plus the
+//! point JSON shape (`{"Curve":"ed25519","Coords":[X,Y]}`).
 
 #![allow(dead_code)]
 
@@ -9,10 +9,10 @@ use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
 
-/// Go's `tss` registry name for Edwards25519.
+/// The curve name stored for Edwards25519 points.
 pub(crate) const CURVE_NAME: &str = "ed25519";
 
-/// JSON shape of a `crypto.ECPoint` (affine `X`,`Y` as bare decimal numbers).
+/// JSON shape of a curve point (affine `X`,`Y` as bare decimal numbers).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EcPointJson {
     #[serde(rename = "Curve")]
@@ -21,10 +21,10 @@ pub struct EcPointJson {
     pub coords: [BigUintDec; 2],
 }
 
-/// A big-endian integer (Go `big.Int.Bytes()`) reduced into the scalar field `L`.
+/// A big-endian integer reduced into the scalar field `L`.
 pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
     // 2^512 mod L: folds inputs longer than one wide reduction 64 bytes at a
-    // time, so any length reduces as Go's `new(big.Int).Mod(key, L)` does.
+    // time, so an input of any length reduces fully mod `L`.
     let mut two256 = [0u8; 64];
     two256[32] = 1;
     let two256 = Scalar::from_bytes_mod_order(&two256);
@@ -44,7 +44,7 @@ pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
     acc
 }
 
-/// A scalar as its minimal big-endian bytes (Go `big.Int.Bytes()`).
+/// A scalar as its minimal big-endian bytes.
 pub(crate) fn scalar_to_be(s: &Scalar) -> Vec<u8> {
     let le = s.to_bytes();
     let mut be: Vec<u8> = le.iter().rev().copied().collect();
@@ -69,7 +69,7 @@ pub(crate) fn generator_coords_be() -> (Vec<u8>, Vec<u8>) {
 }
 
 /// `p · 8 · (8⁻¹ mod L)` — clears any torsion component, leaving the prime-order
-/// part (Go `crypto.ECPoint.EightInvEight`). A no-op on honest prime-order points.
+/// part. A no-op on honest prime-order points.
 pub(crate) fn eight_inv_eight(p: &EdwardsPoint) -> EdwardsPoint {
     let mut eight_bytes = [0u8; 32];
     eight_bytes[0] = 8;
@@ -115,8 +115,8 @@ pub(crate) fn decode_point(b: &[u8; 32]) -> Option<EdwardsPoint> {
     EdwardsPoint::decompress(b)
 }
 
-/// A point's affine `(x, y)` as minimal big-endian magnitudes (Go
-/// `big.Int.Bytes()` form), for hashing and JSON.
+/// A point's affine `(x, y)` as minimal big-endian magnitudes, for hashing and
+/// JSON.
 pub(crate) fn coords_be(p: &EdwardsPoint) -> (Vec<u8>, Vec<u8>) {
     let (x_le, y_le) = p.to_affine();
     (le32_to_be_min(&x_le), le32_to_be_min(&y_le))

@@ -21,7 +21,7 @@ pub fn random_scalar(rng: &mut impl RngCore) -> Scalar {
 }
 
 /// Reduces a big-endian integer of any length (e.g. a `PartyId` key) mod `n`,
-/// as Go's `new(big.Int).Mod(key, n)` does.
+/// as an arbitrary-precision integer, not truncated to 32 bytes.
 pub fn scalar_from_be_reduce(be: &[u8]) -> Scalar {
     let b = strip(be);
     // 2^256 mod n, as (2^128)²: folds the input 32 bytes at a time.
@@ -41,7 +41,7 @@ pub fn scalar_from_be_reduce(be: &[u8]) -> Scalar {
     acc
 }
 
-/// A scalar as its big-endian minimal magnitude (Go `big.Int.Bytes()`).
+/// A scalar as its big-endian minimal magnitude (leading zeros stripped).
 pub fn scalar_to_be_min(s: &Scalar) -> Vec<u8> {
     strip(&s.to_bytes_be()).to_vec()
 }

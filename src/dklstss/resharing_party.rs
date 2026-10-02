@@ -6,8 +6,7 @@
 //! cross-check the OLD commitments with an echo phase, then set up fresh
 //! pairwise OT among themselves (the keygen round-1/2 dance). The reconstructed
 //! public key is checked against the advertised `old_ecdsa_pub` — the security
-//! hinge that stops a malicious OLD party rotating the key. Wire-compatible with
-//! Go `dklstss` resharing.
+//! hinge that stops a malicious OLD party rotating the key.
 //!
 //! Disjoint and overlapping committees are supported; a hybrid OLD+NEW party
 //! excludes its own commitments from the echo cross-check (it trusts its own
@@ -115,7 +114,7 @@ impl ResharingParty {
                 ));
             }
         }
-        // Every role checks both committees (Go `vss.CheckIndexes`): a new id of
+        // Every role checks both committees (zero/duplicate ids): a new id of
         // 0 mod n would be dealt f(0) by each dealer, i.e. the whole key.
         for committee in [params.old_parties(), params.new_parties()] {
             let ids: Vec<Scalar> = committee

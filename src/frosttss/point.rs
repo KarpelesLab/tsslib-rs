@@ -1,15 +1,15 @@
-//! Go-compatible JSON encoding of an Ed25519 curve point.
+//! JSON encoding of an Ed25519 curve point in the key save format.
 //!
-//! The Go `crypto.ECPoint.MarshalJSON` emits `{"Curve":"ed25519","Coords":[X,Y]}`
-//! where `X`/`Y` are the affine coordinates as bare decimal `big.Int` numbers.
-//! We reproduce that exactly so persisted keys round-trip across both libraries.
+//! A point is `{"Curve":"ed25519","Coords":[X,Y]}` where `X`/`Y` are the affine
+//! coordinates as bare decimal numbers. The shape is fixed so keys saved by
+//! earlier versions keep loading.
 
 use crate::prelude::*;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use serde::{Deserialize, Serialize};
 
-/// The curve name used by Go's `tss` registry for Edwards25519.
+/// The curve name stored for Edwards25519 points.
 const CURVE_NAME: &str = "ed25519";
 
 /// JSON shape of a `crypto.ECPoint`.
@@ -33,7 +33,7 @@ impl core::fmt::Display for PointError {
 
 impl core::error::Error for PointError {}
 
-/// Encodes an Edwards25519 point as its Go `ECPoint` JSON form (affine `X`,`Y`).
+/// Encodes an Edwards25519 point as its JSON form (affine `X`,`Y`).
 pub(crate) fn point_to_json(p: &EdwardsPoint) -> EcPointJson {
     let (x_le, y_le) = p.to_affine();
     EcPointJson {
@@ -42,7 +42,7 @@ pub(crate) fn point_to_json(p: &EdwardsPoint) -> EcPointJson {
     }
 }
 
-/// Reconstructs an Edwards25519 point from its Go `ECPoint` JSON form.
+/// Reconstructs an Edwards25519 point from its JSON form.
 ///
 /// We rebuild the RFC 8032 compressed encoding from the affine coordinates
 /// (32-byte little-endian `Y` with the sign bit set to the parity of `X`) and
@@ -56,7 +56,7 @@ pub(crate) fn point_from_json(j: &EcPointJson) -> Result<EdwardsPoint, PointErro
 }
 
 /// Returns a point's affine `(x, y)` coordinates as big-endian magnitudes
-/// (Go `big.Int.Bytes()` form), for hashing into the Schnorr challenge.
+/// (minimal big-endian), for hashing into the Schnorr challenge.
 pub(crate) fn point_to_affine_be(p: &EdwardsPoint) -> (Vec<u8>, Vec<u8>) {
     let (x_le, y_le) = p.to_affine();
     (le32_to_biguint(&x_le).0, le32_to_biguint(&y_le).0)

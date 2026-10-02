@@ -1,9 +1,8 @@
-//! Legacy threshold ECDSA (GG18/GG20) — Paillier + MtA — for migrating keys from
-//! the Go `tss-lib/ecdsatss`.
+//! Legacy threshold ECDSA (GG18/GG20) — Paillier + MtA — for migrating keys
+//! saved in the legacy GG18/GG20 save format.
 //!
-//! This port aims for **byte-for-byte save-data and wire compatibility** with the
-//! Go implementation so existing serialized keys load here and signatures
-//! interoperate. The cryptographic core (Paillier homomorphic encryption, MtA
+//! The save data and wire messages follow that format **byte for byte**, so
+//! existing serialized keys load here and keep signing. The cryptographic core (Paillier homomorphic encryption, MtA
 //! multiplicative-to-additive share conversion with range proofs, and the
 //! dlog-N / no-small-factor / Paillier-Blum ZK proofs) is built on
 //! `purecrypto::bignum::BoxedUint`.

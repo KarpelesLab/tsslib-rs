@@ -1,5 +1,5 @@
 //! Importing a plain Ed25519 private key as a 1-of-1 [`Key`] — the migration
-//! entry point. Port of Go `eddsatss/import.go`.
+//! entry point.
 
 #![allow(dead_code)]
 

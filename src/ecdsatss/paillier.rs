@@ -1,5 +1,5 @@
 //! Paillier cryptosystem (additively homomorphic) + the GG18 key-correctness
-//! proof, on `BoxedUint`. Byte/value-compatible with Go `tss-lib/crypto/paillier`.
+//! proof, on `BoxedUint`, in the legacy GG18 encoding.
 
 #![allow(dead_code)]
 
@@ -200,7 +200,7 @@ fn in_mult_group(n: &BoxedUint, v: &BoxedUint) -> bool {
     !v.is_zero() && v.lt(n) && bn::is_one(&bn::gcd(v, n))
 }
 
-/// All primes below 1000 (matches Go `primesBelow1000`).
+/// All primes below 1000.
 const PRIMES_BELOW_1000: &[u64] = &[
     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
     101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193,
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(bn::to_be(&sk.pk.n), bn::to_be(&dec(&ps["n"])));
         assert_eq!(bn::to_be(&sk.lambda), bn::to_be(&dec(&ps["lambda"])));
 
-        // Each (m, x, c): encrypt_with reproduces Go's c, and decrypt recovers m.
+        // Each (m, x, c): encrypt_with reproduces the fixture c, and decrypt recovers m.
         for e in ps["enc"].as_array().unwrap() {
             let m = dec(&e["M"]);
             let x = dec(&e["X"]);
@@ -263,8 +263,11 @@ mod tests {
         let sx = dec(&pp["ecdsa_x"]);
         let sy = dec(&pp["ecdsa_y"]);
         let pi: Vec<BoxedUint> = pp["pi"].as_array().unwrap().iter().map(dec).collect();
-        // The Go-emitted proof verifies in Rust.
-        assert!(verify_proof(&n, &k, &sx, &sy, &pi), "Go proof must verify");
+        // The fixture proof verifies.
+        assert!(
+            verify_proof(&n, &k, &sx, &sy, &pi),
+            "fixture proof must verify"
+        );
 
         // A Rust-built proof (same key) also verifies.
         let sk = PrivateKey::from_primes(dec(&pp["p"]), dec(&pp["q"]));

@@ -1,6 +1,5 @@
 //! `LocalPreParams` generation — the per-party Paillier key and ring-Pedersen
-//! parameters (`Ñ, h1, h2`) that GG18 keygen consumes. Port of Go
-//! `ecdsatss/prepare.go`.
+//! parameters (`Ñ, h1, h2`) that GG18 keygen consumes.
 //!
 //! Generation needs four safe primes (two for the Paillier modulus, two for `Ñ`)
 //! and is very slow at the production 1024-bit safe-prime size; tests pass a small
@@ -19,9 +18,8 @@ pub const SAFE_PRIME_BITS: usize = 1024;
 
 /// Minimum accepted bit length for a *peer's* Paillier modulus `N` and
 /// ring-Pedersen `Ñ`, checked where peer parameters are first received (keygen
-/// round 2 and resharing). Mirrors Go's `paillierModulusLen` (= 2048) checks in
-/// `ecdsatss/keygen.go` and `ecdsatss/resharing.go`: a short modulus weakens
-/// the MtA range proofs and the Paillier encryption itself.
+/// round 2 and resharing): a short modulus weakens the MtA range proofs and
+/// the Paillier encryption itself.
 #[cfg(not(test))]
 pub(crate) const MIN_PEER_MODULUS_BITS: usize = 2 * SAFE_PRIME_BITS;
 /// In the crate's own test build the floor is lowered, because the slow keygen

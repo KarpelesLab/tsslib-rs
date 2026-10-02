@@ -1,9 +1,8 @@
-//! Byte-based hash commitment over a list of group elements. Port of
-//! `commitElements` / `verifyCommitElements` in internal.go.
+//! Byte-based hash commitment over a list of group elements.
 //!
 //! `commit = SHA-512(randomness(32) || enc(e0) || enc(e1) || …)` where each
 //! `enc(e)` is the 32-byte canonical Ristretto255 encoding. The decommitment is
-//! `randomness || encodings`. This avoids the `big.Int` length ambiguity of the
+//! `randomness || encodings`. This avoids the integer-encoding length ambiguity of the
 //! Ed25519 variant's commitment for 32-byte encodings with leading zeros.
 
 use crate::frost::{Ciphersuite, Ristretto255};

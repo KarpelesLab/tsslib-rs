@@ -1,6 +1,6 @@
 //! Threshold-EdDSA distributed key generation over a `MessageBroker` (3 rounds).
 //!
-//! Port of Go `eddsatss/keygen.go`. Round 1 broadcasts a hash commitment to the
+//! Round 1 broadcasts a hash commitment to the
 //! dealer's Feldman-VSS commitment points; round 2 unicasts each peer its Shamir
 //! share and broadcasts the commitment opening plus a Schnorr proof of knowledge
 //! of `u_i` (the secret behind `vs[0]`); the final step verifies every peer's
@@ -396,7 +396,7 @@ fn compute_ssid(params: &Parameters) -> Vec<u8> {
 
 fn context_bytes(ssid: &[u8], idx: usize) -> Vec<u8> {
     let mut c = ssid.to_vec();
-    // big.Int(idx).Bytes(): empty for 0, else minimal big-endian.
+    // idx as a minimal big-endian magnitude: empty for 0.
     if idx != 0 {
         let b = (idx as u64).to_be_bytes();
         let off = b.iter().position(|&x| x != 0).unwrap();

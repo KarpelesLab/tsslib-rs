@@ -6,8 +6,7 @@
 //! hash domains differ. The `Ciphersuite` trait captures that difference; the
 //! protocol math (`binding`) is written once against it.
 //!
-//! This mirrors the Go `crypto/frost` package. Scalar arithmetic is implicitly
-//! reduced mod the group order `L`.
+//! Scalar arithmetic is implicitly reduced mod the group order `L`.
 
 /// X25519 + HKDF-SHA256 + ChaCha20-Poly1305 envelope for DKG/resharing
 /// P2P shares (shared with [`crate::frostsecp256k1tss`]).
@@ -22,7 +21,7 @@ pub mod vss;
 #[cfg(feature = "frostristretto255tss")]
 mod ristretto255;
 
-// The tss-lib hash helpers live in `tss` (every protocol uses them); re-exported
+// The hash helpers live in `tss` (every protocol uses them); re-exported
 // here to keep the original `frost::hashing` path.
 use crate::prelude::*;
 pub use crate::tss::hashing;
@@ -99,7 +98,7 @@ pub fn encode_scalar(s: &Scalar) -> [u8; 32] {
     s.to_bytes()
 }
 
-/// Encodes a scalar as its big-endian minimal magnitude (Go `big.Int.Bytes()`).
+/// Encodes a scalar as its minimal big-endian magnitude.
 pub fn scalar_to_be(s: &Scalar) -> Vec<u8> {
     let be: Vec<u8> = s.to_bytes().iter().rev().copied().collect();
     let start = be.iter().position(|&x| x != 0).unwrap_or(be.len());
@@ -113,8 +112,8 @@ pub fn decode_scalar(b: &[u8; 32]) -> Option<Scalar> {
 }
 
 /// Reduces a big-endian integer of any length (e.g. a participant identifier /
-/// `PartyId` key, which may be `>= L`) into a scalar mod `L`, matching Go's
-/// reduce-then-use of identifiers.
+/// `PartyId` key, which may be `>= L`) into a scalar mod `L`; identifiers are
+/// always reduced before use.
 pub fn scalar_from_be_mod_l(be: &[u8]) -> Scalar {
     // 2^512 mod L: folds inputs longer than one wide reduction 64 bytes at a
     // time. Identifiers are normally far shorter and take a single pass.

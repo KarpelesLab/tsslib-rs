@@ -1,9 +1,9 @@
 //! Schnorr proof of knowledge of a discrete log (GG18 Fig. 16 form), over
 //! Ed25519, used to bind each dealer's constant coefficient in keygen.
 //!
-//! Port of tss-lib `crypto/schnorr.ZKProof`. The challenge is
+//! The challenge is
 //! `RejectionSample(L, SHA512_256i_TAGGED(session, X.x, X.y, G.x, G.y, α.x, α.y))`,
-//! reproduced byte-for-byte so Go and Rust verify each other's proofs.
+//! a fixed wire format: changing it breaks proofs exchanged with earlier versions.
 
 use super::Error;
 use super::point::{point_from_affine_be, point_to_affine_be};
@@ -46,7 +46,7 @@ impl ZkProof {
     }
 
     /// Decodes a proof from its wire form, rejecting an off-curve `α` or a
-    /// non-canonical `t` (`>= L`), matching the Go verifier's checks.
+    /// non-canonical `t` (`>= L`).
     pub fn from_wire(alpha_x_be: &[u8], alpha_y_be: &[u8], t_be: &[u8]) -> Result<Self, Error> {
         let alpha = point_from_affine_be(alpha_x_be, alpha_y_be)?;
         let t = be_to_scalar_canonical(t_be)
@@ -83,7 +83,7 @@ fn be32_to_scalar_mod_l(be: &[u8; 32]) -> Scalar {
     Scalar::from_bytes_mod_order(&le)
 }
 
-/// A scalar as its big-endian minimal magnitude (Go `big.Int.Bytes()`).
+/// A scalar as its minimal big-endian magnitude.
 fn scalar_to_be_min(s: &Scalar) -> Vec<u8> {
     let le = s.to_bytes();
     let be: Vec<u8> = le.iter().rev().copied().collect();

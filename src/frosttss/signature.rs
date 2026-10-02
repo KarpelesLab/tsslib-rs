@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 /// `signature` is the 64-byte `R || S` concatenation — a standard Ed25519
 /// signature verifiable by any Ed25519 verifier. `r` is the 32-byte canonical
 /// encoding of the group commitment, `s` the 32-byte little-endian scalar, and
-/// `m` the message that was signed. Field names mirror the Go
-/// `frosttss.SignatureData`; byte fields serialize as base64 (Go `[]byte`).
+/// `m` the message that was signed. Byte fields serialize as base64.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignatureData {
     /// 32-byte canonical encoding of the group commitment `R`.

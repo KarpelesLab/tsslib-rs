@@ -1,6 +1,6 @@
 //! Threshold-EdDSA key resharing over a `MessageBroker` (old + new committees).
 //!
-//! Port of Go `eddsatss/resharing.go`. The old committee re-splits its secret to
+//! The old committee re-splits its secret to
 //! a fresh `new_threshold`-of-`new_party_count` committee while preserving
 //! `EDDSAPub`. Unlike `ecdsatss` there are no Paillier/ring parameters and no
 //! zero-knowledge proofs: the new committee verifies each old party's VSS share
@@ -79,7 +79,7 @@ impl ResharingParty {
         let (tx, rx) = channel();
         // Old-committee members reindex their input to the old committee so the
         // Lagrange lookup in prepare_wi uses old-committee indices rather than
-        // keygen-party indices (mirrors Go round1Old's SubsetForParties). The
+        // keygen-party indices. The
         // full keygen key may thus be passed as-is. New-only members never index
         // the input's per-party slices (they take EDDSAPub from round-1
         // messages), so their input is left untouched.
@@ -179,8 +179,8 @@ impl Shared {
             v_commitment: B64Bytes(vc),
         };
         // Every new party, including ourselves when we sit on both committees:
-        // the new side expects round 1 from all old parties (Go sends the
-        // self-message explicitly).
+        // the new side expects round 1 from all old parties, so the self-message
+        // is sent explicitly.
         for pj in self.params.new_parties() {
             self.send_to(TYPE_R1, &r1, pj)?;
         }

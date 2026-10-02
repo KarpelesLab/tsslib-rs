@@ -1,6 +1,7 @@
-//! Loader for the Go-generated GG18 test vectors (`testdata/gg18.json`).
+//! Loader for the GG18 test vectors (`testdata/gg18.json`).
 //!
-//! Regenerate with `cd fixtures-gen && go run . > ../src/ecdsatss/testdata/gg18.json`.
+//! The fixtures are frozen vectors: tests pin their exact values, so do not
+//! regenerate them casually.
 //! Big integers are decimal strings in the fixture.
 
 use super::bn;

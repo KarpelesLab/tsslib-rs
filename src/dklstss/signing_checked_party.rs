@@ -5,8 +5,7 @@
 //! Mul-then-check primitives in [`super::ole_check`] so that a malicious peer
 //! who uses inconsistent `β` across the two parallel ΠMul instances is caught
 //! with **identifiable abort** — the offending peer is named in
-//! [`crate::tss::TssError::culprits`]. Port of tss-lib
-//! `dklstss.CheckedSigningParty` (`signing_checked_party.go`).
+//! [`crate::tss::TssError::culprits`].
 //!
 //! Cost is roughly 2× the wire traffic and CPU of [`SigningParty`] (two
 //! parallel ΠMul flows per pair instead of one).
@@ -50,11 +49,10 @@ const TYPE_R3: &str = "dkls:csign:r3";
 const TYPE_R4: &str = "dkls:csign:r4";
 const TYPE_R4ECHO: &str = "dkls:csign:r4echo";
 
-// Echo digest tags: Go's CheckedSigningParty reuses the unchecked sign-phase
-// digest helpers (kIDigest/r4Digest in signing_party.go), so these MUST be the
-// `-sign-` tags, not `-csign-`, for cross-implementation checked signing to
-// agree on echo digests. The message-type strings and echo-source string below
-// are independently `csign` to match Go's checkedSign* / echoSourceCheckedSign.
+// Echo digest tags: checked signing reuses the unchecked sign-phase digest
+// tags, so these MUST stay the `-sign-` tags, not `-csign-` — they are part of
+// the wire format existing peers compute. The message-type strings and
+// echo-source string below are independently `csign`.
 const ECHO_TAG_SIGN: &str = "DKLS23-echo-sign-v1";
 const ECHO_TAG_SIGN_R4: &str = "DKLS23-echo-sign-r4-v1";
 const ECHO_SOURCE_SIGN: &str = "dklstss-csign";
@@ -484,9 +482,9 @@ impl Shared {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(peer_fail(pid, e))),
             };
-            // Range-check Z: must be a canonical (< n) encoding, mirroring Go's
-            // explicit `Z >= q` rejection (scalar_from_be_reduce would silently
-            // reduce otherwise).
+            // Range-check Z: must be a canonical (< n) encoding; reject
+            // `Z >= q` explicitly (scalar_from_be_reduce would silently reduce
+            // otherwise).
             let z_k = match scalar_canonical(&r3.bob_kz.0) {
                 Some(z) => z,
                 None => {
@@ -529,7 +527,7 @@ impl Shared {
                     z: z_x,
                 };
                 // Mul-then-check failure → attribute to this Bob (identifiable
-                // abort), matching Go's tss.Error culprit attribution.
+                // abort) via the TssError culprit list.
                 let u_ak = match ole_check::checked_alice_step2(st_k, &bmsg_k) {
                     Ok(v) => v,
                     Err(e) => {
@@ -781,8 +779,8 @@ fn mulcheck_fail(cause: String, culprit: &PartyId) -> Error {
 }
 
 /// Returns `Some(scalar)` iff `be` is already a canonical (< n) big-endian
-/// encoding; `None` if reducing mod n would change it. Mirrors Go's explicit
-/// `Z >= q` rejection of a non-canonical consistency value.
+/// encoding; `None` if reducing mod n would change it, i.e. rejects a
+/// non-canonical (`Z >= q`) consistency value.
 fn scalar_canonical(be: &[u8]) -> Option<Scalar> {
     let s = secp::scalar_from_be_reduce(be);
     if secp::scalar_to_be_min(&s) == strip(be) {

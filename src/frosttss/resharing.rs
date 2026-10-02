@@ -1,5 +1,5 @@
 //! FROST(Ed25519) resharing: move a key from an old committee to a new one
-//! while preserving the group public key. Port of frosttss/resharing.go.
+//! while preserving the group public key.
 //!
 //! Old members Lagrange-weight their share (`wi`), VSS-share `wi` to the new
 //! committee under a fresh polynomial, prove knowledge of `wi`, and commit to
@@ -58,9 +58,9 @@ struct Round2Msg {}
 /// Round-3 sub-share message. The share is sent in **cleartext** and relies on
 /// the broker's per-recipient confidentiality (see the `frosttss` module docs);
 /// it is *not* wrapped in the X25519+ChaCha20-Poly1305 envelope that keygen and
-/// the `frostristretto255tss` resharing use. This is byte-compatible with the Go
-/// `frosttss` resharing (`resharing.go`, `round3Old`); encrypting it would change
-/// the wire format and is deferred to a coordinated Go+Rust change.
+/// the `frostristretto255tss` resharing use. Encrypting it would change the wire
+/// format (breaking resharing with earlier versions) and is deferred to a
+/// protocol-version bump.
 #[derive(Serialize, Deserialize)]
 struct Round3Msg1 {
     #[serde(rename = "share", with = "crate::tss::b64::vec")]

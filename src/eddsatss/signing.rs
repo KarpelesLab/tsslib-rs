@@ -1,6 +1,6 @@
 //! Threshold-EdDSA signing over a `MessageBroker` (3 rounds + finalize).
 //!
-//! Port of Go `eddsatss/signing.go`. A commit/reveal threshold Schnorr: round 1
+//! A commit/reveal threshold Schnorr: round 1
 //! commits to the nonce point `R_i = r_i·G`; round 2 opens it with a Schnorr
 //! proof of knowledge of `r_i`; round 3 reconstructs `R = Σ R_j`, computes the
 //! standard Ed25519 challenge `λ = SHA-512(R‖A‖M) mod L` and the partial
@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn go_keys_sign_and_verify() {
+    fn fixture_keys_sign_and_verify() {
         let f = fixtures();
         let keys: Vec<Key> = f["signing_keys"]
             .as_array()
@@ -666,7 +666,7 @@ mod tests {
         for s in &sigs[1..] {
             assert_eq!(s.signature, sigs[0].signature);
         }
-        // Valid stock Ed25519 signature under the Go-generated group key.
+        // Valid stock Ed25519 signature under the fixture group key.
         assert!(ed_verify(
             &keys[0].eddsa_pub_point().unwrap(),
             msg,

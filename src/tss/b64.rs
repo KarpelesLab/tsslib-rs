@@ -1,13 +1,13 @@
-//! Standard-base64 serde helpers, matching Go's `encoding/json` treatment of
-//! `[]byte` (base64 std string, or `null` for a nil slice).
+//! Standard-base64 serde helpers for byte-string fields (a base64 std string,
+//! or `null` for an absent value).
 
 use crate::prelude::*;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// A byte string that (de)serializes as a single base64 std string — Go's
-/// `[]byte` JSON form. Use inside a `Vec` for a `[][]byte` field.
+/// A byte string that (de)serializes as a single base64 std string. Use inside
+/// a `Vec` for a list of byte strings.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct B64Bytes(pub Vec<u8>);
 

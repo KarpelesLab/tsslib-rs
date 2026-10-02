@@ -1,8 +1,8 @@
-//! GG18 key save-data, JSON-compatible with Go `ecdsatss.Key` /
-//! `ecdsa/keygen.LocalPartySaveData`, so legacy serialized keys load directly.
+//! GG18 key save-data in the legacy GG18/GG20 save format, so existing
+//! serialized keys load directly.
 //!
-//! Go marshals `*big.Int` as a bare JSON number (`BigUintDec`), `[]byte` as
-//! base64, `crypto.ECPoint` as `{"Curve","Coords":[X,Y]}`, and the Paillier keys
+//! Arbitrary-precision integers are bare JSON decimal numbers (`BigUintDec`),
+//! byte strings base64, curve points `{"Curve","Coords":[X,Y]}`, and the Paillier keys
 //! by their (capitalized, embedded) field names. Field order is irrelevant to
 //! JSON; only names/shapes must match.
 
@@ -18,7 +18,7 @@ use crate::tss::bigint::BigUintDec;
 use purecrypto::bignum::BoxedUint;
 use serde::{Deserialize, Serialize};
 
-/// A Paillier private key as Go serializes it (embedded `PublicKey` promotes `N`).
+/// A Paillier private key in the save format (the public `N` sits at top level).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PaillierSkJson {
     #[serde(rename = "N")]
@@ -40,7 +40,7 @@ pub struct PaillierPkJson {
     pub n: BigUintDec,
 }
 
-/// A curve point as Go's `crypto.ECPoint` marshals it.
+/// A curve point in the save format.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EcPointJson {
     #[serde(rename = "Curve")]
@@ -49,7 +49,7 @@ pub struct EcPointJson {
     pub coords: [BigUintDec; 2],
 }
 
-/// One party's GG18 key share (save format). Mirrors Go `ecdsatss.Key`.
+/// One party's GG18 key share (save format).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Key {
     // --- LocalPreParams ---
@@ -92,12 +92,13 @@ pub struct Key {
 }
 
 impl Key {
-    /// Parses a Go-emitted `ecdsatss.Key` JSON document.
+    /// Parses a saved key JSON document.
     pub fn from_json(s: &str) -> Result<Key, Error> {
         Ok(serde_json::from_str(s)?)
     }
 
-    /// Serializes to JSON byte-compatible with Go `ecdsatss.Key`.
+    /// Serializes to JSON in the save format; existing saved keys and peers
+    /// depend on this exact format.
     pub fn to_json(&self) -> Result<String, Error> {
         Ok(serde_json::to_string(self)?)
     }
@@ -332,7 +333,7 @@ impl Key {
     }
 }
 
-/// A secp256k1 point in the `EcPointJson` wire shape Go uses.
+/// A secp256k1 point in the `EcPointJson` wire shape.
 fn ec_point(p: &secp::ProjectivePoint) -> EcPointJson {
     let (x, y) = secp::coords(p);
     EcPointJson {
@@ -366,10 +367,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn go_key_loads_and_round_trips() {
+    fn fixture_key_loads_and_round_trips() {
         let f = fixtures();
-        // The Go-emitted ecdsatss.Key deserializes into the Rust Key.
-        let key: Key = serde_json::from_value(f["ecdsatss_key"].clone()).expect("load Go key");
+        // The fixture key deserializes into a Key.
+        let key: Key = serde_json::from_value(f["ecdsatss_key"].clone()).expect("load fixture key");
         key.validate_basic().unwrap();
 
         // Spot-check fields against the fixture's known values.
@@ -403,7 +404,7 @@ mod tests {
     /// `ECDSAPub` — unlike the synthetic `ecdsatss_key` fixture.
     fn load_key() -> Key {
         let f = fixtures();
-        serde_json::from_value(f["signing_keys"][0].clone()).expect("load Go signing key")
+        serde_json::from_value(f["signing_keys"][0].clone()).expect("load fixture signing key")
     }
 
     /// Party IDs whose `key` is the big-endian `Ks` value, in the given order.

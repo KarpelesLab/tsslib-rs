@@ -35,7 +35,7 @@ const SCALAR_BYTES: usize = 32;
 const AD_PREFIX: &[u8] = b"frosttss/keygen/r2/v1|";
 const POK_TAG: &[u8] = b"dkg-pok";
 
-/// Round-1 broadcast. Byte fields are base64 (Go `[]byte`).
+/// Round-1 broadcast. Byte fields are base64.
 #[derive(Serialize, Deserialize)]
 struct KeygenRound1Msg {
     #[serde(rename = "poly_commitments")]

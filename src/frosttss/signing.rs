@@ -25,7 +25,7 @@ const HIDING_LABEL: &[u8] = b"hiding";
 const BINDING_LABEL: &[u8] = b"binding";
 
 /// Round-1 broadcast: this signer's nonce commitments `D_i`, `E_i` (32-byte
-/// canonical Ed25519 points). Byte fields are base64 (Go `[]byte`).
+/// canonical Ed25519 points). Byte fields are base64.
 #[derive(Serialize, Deserialize)]
 struct SignRound1Msg {
     #[serde(rename = "hiding", with = "crate::tss::b64::vec")]

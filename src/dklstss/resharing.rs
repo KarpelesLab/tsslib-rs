@@ -1,6 +1,5 @@
 //! Synchronous in-process DKLs resharing (old→new committee) and proactive
-//! refresh. Both preserve the joint public key. Mirrors tss-lib `dklstss.Reshare`
-//! / `dklstss.Refresh`.
+//! refresh. Both preserve the joint public key.
 
 use super::Error;
 use super::key::Key;

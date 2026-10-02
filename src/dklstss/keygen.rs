@@ -1,4 +1,4 @@
-//! Synchronous in-process DKLs DKG. Mirrors tss-lib `dklstss.Keygen`.
+//! Synchronous in-process DKLs DKG.
 
 use super::Error;
 use super::key::Key;

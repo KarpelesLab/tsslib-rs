@@ -1,10 +1,10 @@
 //! Big-integer helpers for GG18 (Paillier + ZK proofs), built on
 //! `purecrypto::bignum::BoxedUint`.
 //!
-//! GG18 follows Go's arbitrary-precision *signed* `math/big`; `BoxedUint` is
+//! GG18 is specified over arbitrary-precision *signed* integers; `BoxedUint` is
 //! unsigned, so all subtraction here is modular (results live in `[0, m)`).
-//! Callers mirror the reference's modular reductions, and the Go-generated
-//! fixtures catch any sign mishandling. None of this is field arithmetic over a
+//! Callers mirror the reference's modular reductions, and the fixtures catch
+//! any sign mishandling. None of this is field arithmetic over a
 //! fixed prime — it is integer/modular algorithms (GCD, Jacobi, Miller-Rabin,
 //! safe-prime search) layered on purecrypto's `BoxedMontModulus`.
 //!
@@ -35,8 +35,7 @@ pub(crate) fn is_one(n: &BoxedUint) -> bool {
     *n == one()
 }
 
-/// Big-endian magnitude with leading zeros stripped (empty for zero) — matches
-/// Go `big.Int.Bytes()`.
+/// Big-endian magnitude with leading zeros stripped (empty for zero).
 pub(crate) fn to_be(n: &BoxedUint) -> Vec<u8> {
     if n.is_zero() {
         return Vec::new();
@@ -55,7 +54,7 @@ pub(crate) fn from_be(b: &[u8]) -> BoxedUint {
     BoxedUint::from_be_bytes(b)
 }
 
-/// `BigUintDec` (Go-compatible JSON number) → `BoxedUint`.
+/// `BigUintDec` (JSON decimal number) → `BoxedUint`.
 pub(crate) fn from_dec(d: &BigUintDec) -> BoxedUint {
     from_be(d.as_be_bytes())
 }
@@ -145,7 +144,7 @@ pub(crate) fn divrem(a: &BoxedUint, b: &BoxedUint) -> (BoxedUint, BoxedUint) {
     a.divrem(b)
 }
 
-/// Floor integer square root (`⌊√n⌋`), matching Go `big.Int.Sqrt`.
+/// Floor integer square root (`⌊√n⌋`).
 pub(crate) fn sqrt(n: &BoxedUint) -> BoxedUint {
     if n.bit_len() <= 1 {
         return n.clone(); // 0 -> 0, 1 -> 1
@@ -267,8 +266,8 @@ impl Modulus {
         self.mont.sub_mod(&self.reduce(a), &self.reduce(b))
     }
 
-    /// `base^exp mod m`. Sized to the exponent's bit length, matching the Go
-    /// reference's non-constant-time `math/big` (this module is best-effort-CT;
+    /// `base^exp mod m`. Sized to the exponent's bit length, so not constant time
+    /// in the exponent's length (this module is best-effort-CT;
     /// see the `ecdsatss` warning). A modulus-width CT exponentiation over a
     /// 4096-bit `N²` would be ~5× slower for the typical GG18 exponents.
     pub(crate) fn pow(&self, base: &BoxedUint, exp: &BoxedUint) -> BoxedUint {
@@ -358,12 +357,11 @@ fn pow2(i: usize) -> BoxedUint {
     from_be(&buf)
 }
 
-/// Sets the *second*-highest bit of a `bits`-bit candidate. Go's safe-prime
-/// generator sets the top TWO bits of each candidate so that the product of
-/// two such primes always has full bit length; Go's keygen and resharing
-/// reject peer Paillier/ring-Pedersen moduli with BitLen() < 2048, so without
-/// this a freshly generated modulus could come out one bit short (2047) and
-/// be rejected by Go peers.
+/// Sets the *second*-highest bit of a `bits`-bit candidate. Setting the top
+/// TWO bits of each candidate makes the product of two such primes always have
+/// full bit length; keygen and resharing reject peer Paillier/ring-Pedersen
+/// moduli with fewer than 2048 bits, so without this a freshly generated
+/// modulus could come out one bit short (2047) and be rejected by peers.
 fn set_second_top_bit(q: BoxedUint, bits: usize) -> BoxedUint {
     if bit(&q, bits - 2) == 0 {
         add(&q, &pow2(bits - 2))
@@ -378,7 +376,7 @@ pub(crate) fn generate_safe_prime<R: RngCore>(bits: usize, rng: &mut R) -> Boxed
     assert!(bits >= 4);
     let rounds = 20;
     loop {
-        // q has bits-1 bits (top two bits set, like Go); p = 2q+1 has `bits` bits.
+        // q has bits-1 bits (top two bits set); p = 2q+1 has `bits` bits.
         let mut q = set_second_top_bit(rand_bits(bits - 1, rng), bits - 1);
         // q ≡ 2 (mod 3) keeps p = 2q+1 ≢ 0 (mod 3) (cheap pre-filter).
         if mod_small(&q, 3) != 2 {
@@ -400,7 +398,7 @@ pub(crate) fn generate_germain<R: RngCore>(bits: usize, rng: &mut R) -> (BoxedUi
     assert!(bits >= 4);
     let rounds = 20;
     loop {
-        // Top two bits set, like Go (see set_second_top_bit).
+        // Top two bits set (see set_second_top_bit).
         let mut q = set_second_top_bit(rand_bits(bits - 1, rng), bits - 1);
         if mod_small(&q, 3) != 2 {
             continue;
@@ -450,7 +448,7 @@ pub(crate) fn rand_below<R: RngCore>(n: &BoxedUint, rng: &mut R) -> BoxedUint {
     }
 }
 
-/// A uniformly random integer in `[1, n)` (Go `common.GetRandomPositiveInt`).
+/// A uniformly random integer in `[1, n)`.
 /// Unlike [`rand_range`], the upper bound is *exclusive*: use this for secret
 /// scalars mod a group order `q`, where both 0 and q (≡ 0) must be excluded.
 pub(crate) fn rand_positive_below<R: RngCore>(n: &BoxedUint, rng: &mut R) -> BoxedUint {

@@ -7,7 +7,7 @@
 //! the radius by integer `ceil(sqrt(·))`. The only cryptographic primitive is
 //! SHAKE256 (from `purecrypto`); everything else is plain constant-time integer
 //! and float arithmetic, so it lives here rather than being field arithmetic.
-//! Byte-identical to Go `mldsa` `SampleHyperball44` / `FVec44`.
+//! The output must stay byte-for-byte stable: signers must agree on it.
 
 use crate::prelude::*;
 use purecrypto::hash::shake256;
@@ -26,7 +26,7 @@ const HYPERBALL_BYTES_PER_SAMPLE: usize = 9;
 
 /// `HYPERBALL_CDT[k] = floor(2^64 · Pr[|X| ≤ k])` for `X ~ D_σ` over `Z`.
 /// Input-independent; frozen here so the `no_std` build needs no `exp`. The
-/// `cdt_matches_go_derivation` test recomputes it the way Go does.
+/// `cdt_matches_exp_derivation` test recomputes it from `exp`.
 const HYPERBALL_CDT: [u64; HYPERBALL_CDT_SIZE] = [
     0x0cc42299ea1b2880,
     0x26198a31e7087c00,
@@ -112,8 +112,8 @@ fn ct_sample_d_gaussian(mag_bytes: u64, sign_byte: u8) -> i32 {
     (mag ^ sign_mask) - sign_mask
 }
 
-/// `x` rounded to the nearest integer, ties away from zero: `f64::round` (Go
-/// `math.Round`) without `std`, saturating to `i32` like `as i32`. Exact for
+/// `x` rounded to the nearest integer, ties away from zero: `f64::round`
+/// without `std`, saturating to `i32` like `as i32`. Exact for
 /// `|x| < 2^52`, where `x - trunc(x)` is representable; larger doubles are
 /// already integers. No data-dependent branch on the (secret) value.
 fn round_ties_away(x: f64) -> i32 {
@@ -208,7 +208,7 @@ impl FVec {
 
     /// Best-effort wipe of every float lane. The vector holds the secret
     /// hyperball mask `y` during signing; call this once the sample is no
-    /// longer needed. Mirrors Go `zeroizeFVec44`.
+    /// longer needed.
     pub fn zeroize(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.v);
     }
@@ -278,7 +278,7 @@ pub fn sample_hyperball(p: &mut FVec, r: f64, nu: f64, rhop: &[u8; 64], nonce: u
 mod tests {
     use super::*;
 
-    /// The Go derivation of the CDT (`exp`-based), run with `std`'s floats.
+    /// The reference derivation of the CDT (`exp`-based), run with `std`'s floats.
     fn derive_cdt() -> [u64; HYPERBALL_CDT_SIZE] {
         let sigma2 = HYPERBALL_SIGMA * HYPERBALL_SIGMA;
         let tail_extent: i64 = HYPERBALL_CDT_SIZE as i64 + 16;
@@ -298,7 +298,7 @@ mod tests {
                 acc += 2.0 * (-((k * k) as f64) / (2.0 * sigma2)).exp() / rho;
             }
             let scaled = acc * scale;
-            // `f64 as u64` saturates to u64::MAX / 0 (matches the Go clamp).
+            // Clamp to u64::MAX / 0 at the ends (as `f64 as u64` saturates).
             *slot = if scaled >= scale {
                 u64::MAX
             } else if scaled <= 0.0 {
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn cdt_matches_go_derivation() {
+    fn cdt_matches_exp_derivation() {
         assert_eq!(derive_cdt(), HYPERBALL_CDT);
     }
 

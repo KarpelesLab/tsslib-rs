@@ -19,8 +19,8 @@
 //! under its own context string (`FROST-secp256k1-SHA256-TR-v1`) and swaps
 //! the challenge hash for BIP340's, as the Zcash Foundation's
 //! `frost-secp256k1-tr` does; even-`Y` handling happens at signing time (see
-//! [`signing`](self#signing)). This module is Rust-only: the Go tss-lib has no
-//! counterpart, so its wire messages are not cross-implementation tested.
+//! [`signing`](self#signing)). Its wire messages are this crate's own format and
+//! are not shared with other FROST implementations.
 //!
 //! # Signing
 //!

@@ -1,7 +1,7 @@
 //! Dealerless distributed key generation for threshold ML-DSA-44.
 //!
-//! **Experimental.** Threshold ML-DSA has no DKG in the paper or the Go
-//! reference (both use a trusted dealer); this is an original "distribute the
+//! **Experimental.** Threshold ML-DSA has no DKG in the paper or its
+//! reference implementation (both use a trusted dealer); this is an original "distribute the
 //! dealer" protocol and has **not** received any independent review. Do not use
 //! it for anything but experimentation.
 //!
@@ -261,7 +261,7 @@ impl Shared {
                 *p = hazmat::sample_bounded_poly(&sseed, eta, (j + L) as u16);
             }
             // The seed alone reproduces the whole share; wipe it as soon as
-            // sampling is done (best-effort, Go `ZeroizeBytes(sSeed)`).
+            // sampling is done (best-effort).
             zeroize::Zeroize::zeroize(&mut sseed);
             let t_m = compute_t_m(&a, &s1, &s2);
             let commit = commit_share(mask, &s1, &s2);

@@ -3,21 +3,20 @@
 //! The broker-style protocols don't manage channels or routing themselves —
 //! they hand every outgoing message to a [`MessageBroker`] the caller supplies,
 //! and register typed handlers ([`MessageReceiver`]) for incoming messages. The
-//! wire envelope is [`JsonMessage`], whose JSON shape matches the Go
-//! `tss.JsonMessage`.
+//! wire envelope is [`JsonMessage`].
 
 use super::PartyId;
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Boxed error returned by transport callbacks, matching Go's generic `error`.
+/// Boxed error returned by transport callbacks.
 pub type BrokerResult = Result<(), Box<dyn core::error::Error + Send + Sync>>;
 
 /// An envelope carrying an arbitrary payload for JSON transmission.
 ///
 /// `data` is kept as a raw [`serde_json::Value`] so a received message can be
-/// decoded into its concrete type on demand via [`json_get`]. Field names
-/// (`type`, `from`, `to`, `data`) match the Go `tss.JsonMessage`.
+/// decoded into its concrete type on demand via [`json_get`]. The JSON field
+/// names are `type`, `from`, `to` and `data`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JsonMessage {
     /// Message type discriminator used for handler dispatch.

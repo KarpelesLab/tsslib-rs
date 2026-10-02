@@ -1,8 +1,7 @@
 //! A participant's FROST(ristretto255) key share.
 //!
-//! Unlike the Ed25519 variant, the Go library ships no canonical JSON for this
-//! key, so we define a straightforward Rust-native format: `big.Int` fields as
-//! bare decimal numbers (matching `tss::bigint`) and group elements as their
+//! JSON format: arbitrary-precision integers as bare JSON decimal numbers
+//! (`tss::bigint`) and group elements as their
 //! 32-byte canonical Ristretto255 encoding, base64-encoded.
 
 use super::Error;

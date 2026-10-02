@@ -1,6 +1,6 @@
-//! Hash commitments over big-endian integer "parts" (Go `crypto/commitments`):
+//! Hash commitments over big-endian integer "parts":
 //! `C = SHA512_256i(r, parts...)`, decommitment `D = [r, parts...]`. Parts are
-//! the big-endian magnitudes of the committed `big.Int`s (e.g. flattened point
+//! the big-endian magnitudes of the committed integers (e.g. flattened point
 //! coordinates).
 
 #![allow(dead_code)]

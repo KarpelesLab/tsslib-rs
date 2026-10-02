@@ -1,5 +1,5 @@
 //! Paillier-Blum modulus proof: `N` is a product of two primes `≡ 3 (mod 4)`.
-//! 80-iteration ZK proof. Port of Go `tss-lib/crypto/modproof` (GG18 keygen).
+//! 80-iteration ZK proof (GG18 keygen).
 
 #![allow(dead_code)]
 // Index-paired loops over the per-iteration X/Z/Y/A-bit/B-bit arrays read closer
@@ -13,7 +13,7 @@ use crate::tss::hashing::sha512_256i_tagged;
 use purecrypto::bignum::BoxedUint;
 use purecrypto::rng::RngCore;
 
-/// Soundness iterations (must match Go).
+/// Soundness iterations (fixed by the wire format).
 pub(crate) const ITERATIONS: usize = 80;
 
 /// A Paillier-Blum modulus proof.
@@ -219,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn go_modproof_verifies() {
+    fn fixture_modproof_verifies() {
         let f = fixtures();
         let mp = &f["modproof"];
         let session = mp["session"].as_str().unwrap().as_bytes();
@@ -228,7 +228,7 @@ mod tests {
         let mut rng = crate::rng::SystemRng;
         assert!(
             verify(session, &n, &pf, &mut rng),
-            "Go modproof must verify"
+            "fixture modproof must verify"
         );
 
         let mut bad = load(mp);

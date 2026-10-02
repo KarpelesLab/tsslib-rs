@@ -1,5 +1,5 @@
 //! FROST(ristretto255) resharing: move a key to a new committee while
-//! preserving the group public key. Port of frostristretto255tss/resharing.go.
+//! preserving the group public key.
 //!
 //! Like the Ed25519 variant but: the round-3 sub-shares are encrypted (new
 //! members publish a fresh ephemeral X25519 key + nonce in a round-2 ACK so old

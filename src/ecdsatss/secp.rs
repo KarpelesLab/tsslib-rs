@@ -17,15 +17,14 @@ pub(crate) fn scalar(n: &BoxedUint) -> Scalar {
     Scalar::from_bytes_be_reduce(&b)
 }
 
-/// A scalar as its minimal big-endian bytes (Go `big.Int.Bytes()`).
+/// A scalar as its minimal big-endian magnitude.
 pub(crate) fn scalar_to_be(s: &Scalar) -> Vec<u8> {
     let b = s.to_bytes_be();
     let off = b.iter().position(|&x| x != 0).unwrap_or(b.len());
     b[off..].to_vec()
 }
 
-/// A scalar from big-endian bytes of any length, reduced mod the group order
-/// (Go `new(big.Int).Mod(key, q)`).
+/// A scalar from big-endian bytes of any length, reduced mod the group order.
 pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
     scalar(&bn::from_be(be))
 }

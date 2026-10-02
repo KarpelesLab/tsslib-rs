@@ -1,6 +1,6 @@
 //! Threshold ML-DSA-44 (t, n) parameter table and replicated-sharing patterns.
 //! Ported verbatim from the reference implementation
-//! (github.com/GuilhemN/threshold-ml-dsa-and-raccoon, via tss-lib mldsatss).
+//! (github.com/GuilhemN/threshold-ml-dsa-and-raccoon).
 
 use crate::prelude::*;
 

@@ -10,7 +10,6 @@
 //! equivocation; (2) per-peer Alice ΠMul envelopes for `k·ρ` and `x·ρ`;
 //! (3) per-peer Bob ΠMul responses; (4) broadcast `(φ_i, ŝ_i)`; (4-echo)
 //! cross-check the reveals; finalize aggregates and emits `s = ŝ·φ⁻¹`.
-//! Wire-compatible with Go `dklstss` signing.
 
 use super::echo::{EchoMsg, commit_digest, other_parties, peer_key_str, point_from_be_xy, strip};
 use super::key::{Key, Signature};

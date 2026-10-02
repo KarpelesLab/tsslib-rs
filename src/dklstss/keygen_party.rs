@@ -6,7 +6,7 @@
 //! peer its Shamir share plus a base-OT-Sender first message; an echo phase
 //! cross-checks the broadcast commitments for equivocation; round 2 returns the
 //! base-OT-Receiver response; finalize assembles the per-pair OT-extension state
-//! and this party's [`Key`]. Wire-compatible with Go `dklstss` keygen.
+//! and this party's [`Key`].
 
 use super::Error;
 use super::baseot;

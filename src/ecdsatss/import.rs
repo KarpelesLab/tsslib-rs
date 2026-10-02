@@ -1,6 +1,6 @@
 //! Importing a plain ECDSA private key as a degenerate 1-of-1 GG18 [`Key`], the
 //! migration entry point: wrap an existing single-party key, then reshare it to a
-//! `t`-of-`n` committee. Port of Go `ecdsatss/import.go`.
+//! `t`-of-`n` committee.
 //!
 //! The imported key carries only the secret share and public points; the Paillier
 //! and ring-Pedersen parameters are left zero (a placeholder) and are generated

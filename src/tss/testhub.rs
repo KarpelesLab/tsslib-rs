@@ -1,10 +1,9 @@
 //! In-process multi-party transport for tests.
 //!
-//! Port of the Go `hubBroker`/`testHub`: each party gets a [`MessageBroker`]
-//! that routes its outbound messages to the other parties' brokers (honoring
-//! `To` for point-to-point, broadcasting to all others when `To` is `None`) and
-//! dispatches inbound messages to the registered handler — buffering them until
-//! a handler for that type is connected.
+//! Each party gets a [`MessageBroker`] that routes its outbound messages to the
+//! other parties' brokers (honoring `To` for point-to-point, broadcasting to all
+//! others when `To` is `None`) and dispatches inbound messages to the registered
+//! handler — buffering them until a handler for that type is connected.
 
 use super::{JsonMessage, MessageBroker, MessageReceiver, PartyId};
 use crate::prelude::*;
@@ -135,8 +134,7 @@ fn key_of(p: &PartyId) -> Vec<u8> {
 }
 
 /// A hub that routes by participant key rather than index, so the disjoint
-/// index spaces of a resharing's old and new committees coexist. Port of the Go
-/// `resharingHub`.
+/// index spaces of a resharing's old and new committees coexist.
 pub(crate) struct ReshareHub {
     brokers: Mutex<HashMap<Vec<u8>, Arc<ReshareBroker>>>,
 }

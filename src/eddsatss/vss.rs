@@ -26,7 +26,7 @@ pub(crate) fn random_scalar<R: RngCore>(rng: &mut R) -> Scalar {
     }
 }
 
-/// Port of Go `vss.CheckIndexes`: rejects a share id that is zero or a
+/// Rejects a share id that is zero or a
 /// duplicate mod the group order. An id of zero would be dealt `f(0)` — the
 /// secret itself — and two equal ids would hold the same share.
 pub(crate) fn check_indexes(ids: &[Scalar]) -> Result<(), &'static str> {

@@ -32,9 +32,9 @@
 //! party finishes with `ECDSAPub = a·G` for an `a` the colluders know outright.
 //! This needs `n − t ≤ t`, i.e. **`n ≤ 2t`** (2-of-2, 3-of-3, 3-of-4, …; with
 //! the `t+1`-signers convention that is every "all parties must sign" setup).
-//! The protocol is inherited from Go tss-lib and the fix (a hash-commit round
-//! or a Schnorr PoK of `v_0` bound to the session and dealer) changes the wire
-//! format, so it has to land in both implementations together. Until then, run
+//! The fix (a hash-commit round or a Schnorr PoK of `v_0` bound to the session
+//! and dealer) changes the wire format, so it needs a versioned protocol
+//! change. Until then, run
 //! keygen only among parties that do not collude at that scale, or use
 //! `n > 2t`. (An identity `ECDSAPub`, the degenerate variant, is rejected by
 //! [`Key::validate_basic`].)
@@ -49,8 +49,8 @@
 //! correction value, the session either produces a valid signature or aborts
 //! at the final `ecdsa_verify` gate depending on one bit of the victim's
 //! secret share/nonce — leaking roughly one bit per aborted signing session.
-//! This default path is kept **byte-compatible with Go tss-lib's default
-//! (unchecked) signing** on purpose, so it is not changed.
+//! This default path's wire format is fixed (existing peers depend on it), so
+//! it is not changed.
 //!
 //! ## Opt-in malicious-security: the *checked* signing path
 //!
@@ -71,14 +71,15 @@
 //! [`crate::tss::TssError::culprits`] (identifiable abort). Cost is roughly
 //! 2× the wire/CPU of the default path.
 //!
-//! **Inherited limitation (matches Go):** this simplified check catches an
+//! **Known limitation:** this simplified check catches an
 //! *inconsistent* `β` across the two runs but **not** a deviation applied
 //! identically to both. In particular the same offset on one correction value
 //! in both runs cancels in the check and corrupts the product only when the
 //! corresponding bit of the victim's secret is set — a per-bit
 //! selective-failure attack that still surfaces only as an unattributed abort
 //! at the final ECDSA verification gate, leaking about one bit per abort. The
-//! real DKLs23 check (Go's task #17) is intentionally not ported. With
+//! real DKLs23 check is not implemented: it changes the wire format, so it
+//! needs a versioned protocol change. With
 //! untrusted co-signers, bound retries and rotate/reshare the key after
 //! repeated unexplained signing aborts, on either path.
 //!

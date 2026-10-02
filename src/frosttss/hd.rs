@@ -1,5 +1,5 @@
 //! BIP32-shape non-hardened HD derivation for FROST(Ed25519) keys, plus key
-//! import. Port of frosttss/hd.go and import.go.
+//! import.
 //!
 //! Derivation is deterministic and public: anyone with the parent public key,
 //! chain code, and path computes the same child public key and additive
