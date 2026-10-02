@@ -117,7 +117,7 @@ impl Resharing {
     /// members and `None` for pure new members.
     pub fn new(params: ReSharingParameters, input: Option<Key>) -> Result<Resharing, Error> {
         let keys = |ps: &[PartyId]| ps.iter().map(|p| p.key.clone()).collect::<Vec<_>>();
-        vss::check_indexes(params.old_threshold(), &keys(params.old_parties()))
+        vss::check_old_committee(params.old_threshold(), &keys(params.old_parties()))
             .map_err(|e| Error::Validation(format!("old committee: {e}")))?;
         vss::check_indexes(params.new_threshold(), &keys(params.new_parties()))
             .map_err(|e| Error::Validation(format!("new committee: {e}")))?;
@@ -754,6 +754,61 @@ mod tests {
             sb.copy_from_slice(&sig.signature);
             pk.verify(&msg, &Ed25519Signature::from_bytes(sb))
                 .expect("post-reshare signature verifies under preserved key");
+        }
+    }
+
+    /// `import_key`'s 1-of-1 output is a valid sole old committee
+    /// (threshold 0): reshare it to 2-of-3 and sign under the original key.
+    #[test]
+    fn import_then_reshare_then_sign() {
+        let secret = crate::frost::random_scalar(&mut crate::rng::SystemRng);
+        let dealer = PartyId::new("100", "dealer", vec![100]);
+        let imported = crate::frosttss::import_key(&secret, &dealer).unwrap();
+        let group_pub = imported.group_public_key;
+        let old_ids = vec![dealer.clone()];
+        let new_ids = ids(&[1, 2, 3]);
+        let mut all = old_ids.clone();
+        all.extend(new_ids.iter().cloned());
+        let hub = ReshareHub::new(&all);
+        let params = |p: &PartyId| {
+            ReSharingParameters::new(
+                old_ids.clone(),
+                new_ids.clone(),
+                0,
+                1,
+                p.clone(),
+                hub.broker(p),
+            )
+        };
+        let dealer_session = Resharing::new(params(&dealer), Some(imported)).unwrap();
+        let sessions: Vec<Resharing> = new_ids
+            .iter()
+            .map(|p| Resharing::new(params(p), None).unwrap())
+            .collect();
+        assert!(dealer_session.wait().unwrap().is_none());
+        let keys: Vec<Key> = sessions
+            .iter()
+            .map(|s| s.wait().unwrap().expect("new party receives a key"))
+            .collect();
+
+        let committee = new_ids[..2].to_vec();
+        let sign_hub = TestHub::new(&committee);
+        let msg = b"imported, reshared, signed".to_vec();
+        let signings: Vec<_> = (0..2)
+            .map(|i| {
+                let params =
+                    Parameters::new(committee.clone(), &committee[i], 1, sign_hub.broker(i));
+                keys[i].new_signing(msg.clone(), params).unwrap()
+            })
+            .collect();
+        let pk = Ed25519PublicKey::from_bytes(Ed25519::encode_point(&group_pub));
+        for s in &signings {
+            let sig = s.wait().expect("signing succeeds");
+            pk.verify(
+                &msg,
+                &Ed25519Signature::from_bytes(sig.signature.try_into().unwrap()),
+            )
+            .expect("verifies under the imported key");
         }
     }
 

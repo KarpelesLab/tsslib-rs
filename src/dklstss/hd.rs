@@ -152,4 +152,36 @@ mod tests {
             &s
         ));
     }
+
+    #[test]
+    fn import_then_reshare_then_sign() {
+        let priv_scalar = secp::random_scalar(&mut SystemRng);
+        let party = PartyId::new("imp", "imp", vec![100]);
+        let key = import_key(&priv_scalar, &party).unwrap();
+        let new_ids: Vec<PartyId> = PartyId::sort(
+            (1u8..=3)
+                .map(|i| PartyId::new(i.to_string(), format!("P{i}"), vec![i]))
+                .collect(),
+            0,
+        );
+        let keys = super::super::resharing::reshare(
+            core::slice::from_ref(&key),
+            &[0],
+            &new_ids,
+            1,
+            &mut SystemRng,
+        )
+        .unwrap();
+        let msg = sha256(b"imported then reshared");
+        let sig = sign(&keys, &[0, 2], &msg, &mut SystemRng).unwrap();
+        let e = super::super::signing::hash_to_scalar(&msg);
+        let r = secp::scalar_from_be_reduce(&sig.r);
+        let s = secp::scalar_from_be_reduce(&sig.s);
+        assert!(super::super::signing::ecdsa_verify(
+            &secp::mul_base(&priv_scalar),
+            &e,
+            &r,
+            &s
+        ));
+    }
 }

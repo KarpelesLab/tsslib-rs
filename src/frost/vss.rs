@@ -43,6 +43,12 @@ pub fn check_indexes(threshold: usize, ids: &[Vec<u8>]) -> Result<(), VssError> 
     if threshold < 1 {
         return Err(VssError("threshold must be at least 1"));
     }
+    check_old_committee(threshold, ids)
+}
+
+/// [`check_indexes`] for a committee handing its key on in a resharing,
+/// which may also be a 1-of-1 (`threshold == 0`), e.g. an imported key.
+pub fn check_old_committee(threshold: usize, ids: &[Vec<u8>]) -> Result<(), VssError> {
     if ids.len() <= threshold {
         return Err(VssError("fewer than threshold+1 identifiers"));
     }
