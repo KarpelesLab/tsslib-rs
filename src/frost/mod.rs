@@ -9,7 +9,11 @@
 //! This mirrors the Go `crypto/frost` package. Scalar arithmetic is implicitly
 //! reduced mod the group order `L`.
 
-pub mod aead;
+/// X25519 + HKDF-SHA256 + ChaCha20-Poly1305 envelope for DKG/resharing
+/// P2P shares (shared with [`crate::frostsecp256k1tss`]).
+pub mod aead {
+    pub use crate::share_aead::*;
+}
 pub mod binding;
 pub mod commitments;
 mod ed25519;

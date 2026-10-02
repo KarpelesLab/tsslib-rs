@@ -17,7 +17,7 @@ name = "tsslib"
 # Each protocol is gated so downstream users can compile only what they need;
 # each pulls in exactly the purecrypto curve/lattice features it requires.
 # `default` pulls in everything.
-default = ["std", "frosttss", "frostristretto255tss", "mldsatss", "dklstss", "ecdsatss", "eddsatss"]
+default = ["std", "frosttss", "frostristretto255tss", "frostsecp256k1tss", "mldsatss", "dklstss", "ecdsatss", "eddsatss"]
 
 # The crate is `#![no_std]` + `alloc`. `std` adds OS randomness (without it,
 # register one with `rng::set_entropy_source`), the blocking `wait()` on every
@@ -29,6 +29,10 @@ std = ["purecrypto/std", "serde/std", "serde_json/std", "base64/std", "hex/std",
 frosttss = ["purecrypto/hazmat-edwards25519", "purecrypto/cipher", "purecrypto/kdf"]
 # FROST(ristretto255, SHA-512) — RFC 9591 §6.2.
 frostristretto255tss = ["purecrypto/ristretto255", "purecrypto/cipher", "purecrypto/kdf"]
+# FROST(secp256k1, SHA-256) producing BIP340 Schnorr signatures, with the
+# BIP341 Taproot tweak and BIP32 non-hardened derivation. Rust-only (no Go
+# counterpart). bip340 backs the tagged hashes and the final self-check.
+frostsecp256k1tss = ["purecrypto/hazmat-secp256k1", "purecrypto/bip340", "purecrypto/cipher", "purecrypto/kdf"]
 # Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
 # hazmat-mldsa exposes the low-level Poly/NTT/sampler/packing API.
 mldsatss = ["purecrypto/mldsa", "purecrypto/hazmat-mldsa"]

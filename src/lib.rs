@@ -14,6 +14,7 @@
 //! |----------------------------|------------------------------------------|-------------------------|
 //! | [`frosttss`]               | FROST(Ed25519, SHA-512), RFC 9591        | Ed25519 signatures      |
 //! | [`frostristretto255tss`]   | FROST(ristretto255, SHA-512), RFC 9591   | Ristretto255 signatures |
+//! | [`frostsecp256k1tss`]      | FROST(secp256k1, SHA-256), RFC 9591      | BIP340 / Taproot        |
 //! | [`mldsatss`]               | Threshold ML-DSA-44 (FIPS 204)           | ML-DSA signatures       |
 //! | [`dklstss`]                | Threshold ECDSA / secp256k1 (DKLs23)     | ECDSA signatures        |
 //! | [`ecdsatss`]               | Legacy threshold ECDSA (GG18/GG20)       | ECDSA signatures        |
@@ -54,6 +55,7 @@
     not(all(
         feature = "frosttss",
         feature = "frostristretto255tss",
+        feature = "frostsecp256k1tss",
         feature = "mldsatss",
         feature = "dklstss",
         feature = "ecdsatss",
@@ -71,6 +73,12 @@ extern crate std;
 
 mod prelude;
 pub mod rng;
+#[cfg(any(
+    feature = "frosttss",
+    feature = "frostristretto255tss",
+    feature = "frostsecp256k1tss"
+))]
+mod share_aead;
 mod sync;
 pub mod tss;
 mod vecmap;
@@ -84,6 +92,9 @@ pub mod frosttss;
 
 #[cfg(feature = "frostristretto255tss")]
 pub mod frostristretto255tss;
+
+#[cfg(feature = "frostsecp256k1tss")]
+pub mod frostsecp256k1tss;
 
 #[cfg(feature = "mldsatss")]
 pub mod mldsatss;

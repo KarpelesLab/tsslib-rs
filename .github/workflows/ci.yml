@@ -52,7 +52,7 @@ jobs:
         if: runner.os == 'Linux' # feature gating is platform-independent
         shell: bash
         run: |
-          for f in frosttss frostristretto255tss mldsatss dklstss ecdsatss eddsatss; do
+          for f in frosttss frostristretto255tss frostsecp256k1tss mldsatss dklstss ecdsatss eddsatss; do
             echo "::group::$f"
             cargo clippy --no-default-features --features "$f" --all-targets -- -D warnings
             echo "::endgroup::"
@@ -83,7 +83,7 @@ jobs:
       - name: Clippy (all protocols, no std)
         run: >-
           cargo clippy --target ${{ matrix.target }} --no-default-features
-          --features frosttss,frostristretto255tss,mldsatss,dklstss,ecdsatss,eddsatss
+          --features frosttss,frostristretto255tss,frostsecp256k1tss,mldsatss,dklstss,ecdsatss,eddsatss
           -- -D warnings
 
   docs:

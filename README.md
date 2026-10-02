@@ -25,6 +25,7 @@ hand-rolled field arithmetic.
 |--------------------------|-----------------------------------------|-------------------------|-----------------|
 | `frosttss`               | FROST(Ed25519, SHA-512) — RFC 9591      | Ed25519 signatures      | Edwards25519    |
 | `frostristretto255tss`   | FROST(ristretto255, SHA-512) — RFC 9591 | Ristretto255 signatures | ristretto255    |
+| `frostsecp256k1tss`      | FROST(secp256k1, SHA-256) — RFC 9591    | BIP340 / Taproot        | secp256k1       |
 | `mldsatss`               | Threshold ML-DSA-44 — FIPS 204          | ML-DSA signatures       | ML-DSA-44       |
 | `dklstss`                | Threshold ECDSA — DKLs23                | ECDSA signatures        | secp256k1       |
 | `ecdsatss`               | Threshold ECDSA — GG18/GG20             | ECDSA signatures        | secp256k1       |
@@ -47,7 +48,11 @@ dealer; not independently reviewed). `ecdsatss` is a broker-driven port of the
 legacy GG18/GG20 Paillier+MtA protocol (keygen, 9-round signing, resharing, and
 1-of-1 `import_key`) provided for **migrating existing Go `tss-lib/ecdsatss` keys**
 — it loads those save files byte-for-byte and signs with them; new deployments
-should prefer `dklstss`. `eddsatss` is the EdDSA counterpart — a broker-driven
+should prefer `dklstss`. `frostsecp256k1tss` is FROST for Bitcoin Taproot: it
+outputs standard 64-byte BIP340 signatures, optionally under a BIP341 output key
+(key-path only or committing to a script tree) and/or a non-hardened BIP32
+child, and `import_key` brings in an existing secp256k1 key (with its chain
+code) to reshare. It is Rust-only, with no Go counterpart. `eddsatss` is the EdDSA counterpart — a broker-driven
 port of the legacy GG18-style threshold Ed25519 (Feldman VSS + threshold Schnorr,
 no Paillier): keygen, 3-round signing, resharing, and 1-of-1 `import_key`, for
 migrating existing Go `tss-lib/eddsatss` keys (it loads them and emits standard
@@ -76,6 +81,7 @@ src/
   frost/      shared FROST core: ciphersuite, binding, VSS, AEAD, commitments
   frosttss/                FROST(Ed25519)            keygen · sign · reshare · HD
   frostristretto255tss/    FROST(ristretto255)       keygen · sign · reshare
+  frostsecp256k1tss/       FROST(secp256k1) Taproot  keygen · BIP340/341 sign · reshare · BIP32 · import
   mldsatss/                Threshold ML-DSA-44       dealer + DKG keygen · sync/broker sign (+ hyperball)
   dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh · presign
   ecdsatss/                Threshold ECDSA (GG18)    broker keygen/sign/reshare · import · Go save-data compat
