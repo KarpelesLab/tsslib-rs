@@ -9,15 +9,28 @@ use purecrypto::mldsa::hazmat::{self, Poly};
 const K: usize = 4; // ML_DSA_44.k
 const L: usize = 4; // ML_DSA_44.l
 
+/// A heap-allocated vector of `N` polynomials (each 1 KiB). The ML-DSA
+/// vectors are boxed so keys, shares and intermediate values move as pointers
+/// instead of being copied through the stack, which matters on small targets.
+pub type PolyVec<const N: usize> = Box<[Poly; N]>;
+
+/// A zeroed [`PolyVec`], allocated directly on the heap (no stack temporary).
+pub(crate) fn zero_polys<const N: usize>() -> PolyVec<N> {
+    match vec![Poly::zero(); N].into_boxed_slice().try_into() {
+        Ok(b) => b,
+        Err(_) => unreachable!("length is N"),
+    }
+}
+
 /// One `(s1, s2)` secret share, identified by the honest-signer subset mask it
 /// was drawn for. Holds both plain (`s1`, `s2`) and cached NTT (`s1h`, `s2h`)
 /// representations.
 #[derive(Clone)]
 pub struct Share44 {
-    pub s1: [Poly; L],
-    pub s2: [Poly; K],
-    pub s1h: [Poly; L],
-    pub s2h: [Poly; K],
+    pub s1: PolyVec<L>,
+    pub s2: PolyVec<K>,
+    pub s1h: PolyVec<L>,
+    pub s2h: PolyVec<K>,
 }
 
 impl Share44 {
@@ -51,7 +64,7 @@ pub struct Key44 {
     /// `SHAKE256(packed pk)` (the FIPS 204 `tr`).
     pub tr: [u8; 64],
     /// Public `t1` vector (high bits of `t = A·s1 + s2`).
-    pub t1: [Poly; K],
+    pub t1: PolyVec<K>,
     /// Shares keyed by honest-signer mask.
     pub shares: BTreeMap<u8, Share44>,
 }
@@ -121,9 +134,9 @@ impl Key44 {
         &self,
         act: u8,
         params: &ThresholdParams44,
-    ) -> Result<([Poly; L], [Poly; K]), Error> {
-        let mut s1h = [Poly::zero(); L];
-        let mut s2h = [Poly::zero(); K];
+    ) -> Result<(PolyVec<L>, PolyVec<K>), Error> {
+        let mut s1h = zero_polys::<L>();
+        let mut s2h = zero_polys::<K>();
 
         // Exactly t signers, all with ids below n: the permutation below has
         // t slots for signers and n−t for the rest, and would run past either
@@ -143,7 +156,7 @@ impl Key44 {
                 .values()
                 .next()
                 .ok_or_else(|| Error::Validation("recover_share(t==n): no shares".into()))?;
-            return Ok((sh.s1h, sh.s2h));
+            return Ok((sh.s1h.clone(), sh.s2h.clone()));
         }
 
         let pattern = sharing_pattern(params.t, params.n)

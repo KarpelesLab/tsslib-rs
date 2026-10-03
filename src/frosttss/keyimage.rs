@@ -838,7 +838,7 @@ mod tests {
 /// writing the output to `testdata/keyimage_vectors.json`. A changed vector file
 /// means every previously derived child key is gone: only ever regenerate for a
 /// deliberate, versioned construction change.
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod vectors {
     use super::*;
     use crate::tss::bigint::BigUintDec;
@@ -916,13 +916,11 @@ mod vectors {
         hex::encode(Ed25519::encode_point(p))
     }
 
-    #[cfg(feature = "json")]
     fn scalar_from_hex(s: &str) -> Scalar {
         let b: [u8; 32] = hex::decode(s).unwrap().try_into().unwrap();
         crate::frost::decode_scalar(&b).expect("canonical scalar")
     }
 
-    #[cfg(feature = "json")]
     fn point_from_hex(s: &str) -> EdwardsPoint {
         let b: [u8; 32] = hex::decode(s).unwrap().try_into().unwrap();
         Ed25519::decode_point(&b).expect("valid point")
@@ -1085,7 +1083,6 @@ mod vectors {
 
     /// Prints a regenerated vector file. Ignored by default — read the module
     /// docs before ever using its output.
-    #[cfg(feature = "json")]
     #[test]
     #[ignore]
     fn print() {
@@ -1110,7 +1107,6 @@ mod vectors {
     /// The checked-in file is internally consistent: partials sum to the key
     /// image, the key image is `x·P`, secret and child key follow, and the
     /// pinned DLEQ proof verifies.
-    #[cfg(feature = "json")]
     #[test]
     fn checked_in_file_is_self_consistent() {
         let f = checked_in();

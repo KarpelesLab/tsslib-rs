@@ -18,7 +18,7 @@
 
 use super::Error;
 use super::hyperball::FVec;
-use super::key::Key44;
+use super::key::{Key44, PolyVec, zero_polys};
 use super::packing::{PACK_POLYQ_SIZE, pack_polyq, unpack_polyq};
 use super::params::ThresholdParams44;
 use super::signing::{K, L, combine_try, compute_mu, compute_response, sample_w};
@@ -351,7 +351,7 @@ impl Shared {
             for tri in 0..self.kk {
                 let z =
                     compute_response(&s1h, &s2h, &st.stws[tri], &wfinal[tri], &self.mu, &self.th);
-                let zp = z.unwrap_or([Poly::zero(); L]);
+                let zp = z.unwrap_or_else(zero_polys::<L>);
                 for zj in zp.iter() {
                     let packed = purecrypto::mldsa::hazmat::pack_z(zj, &ML_DSA_44.params);
                     respbuf[off..off + packed.len()].copy_from_slice(&packed);
@@ -435,9 +435,9 @@ impl Shared {
                 aggregate_zfinal(&st.r3resps, self.kk),
             )
         };
-        let t1 = self.key.t1;
+        let t1 = &self.key.t1;
         for tri in 0..self.kk {
-            if let Some(sig) = combine_try(&self.a, &t1, &self.mu, &wfinal[tri], &zfinal[tri]) {
+            if let Some(sig) = combine_try(&self.a, t1, &self.mu, &wfinal[tri], &zfinal[tri]) {
                 return self.deliver(Ok(sig));
             }
         }
@@ -510,8 +510,8 @@ struct SignR3 {
 // --- aggregation + validation ----------------------------------------------
 
 /// `wfinal[try][i] = Σ_slot unpack_polyq(wbuf_slot)` over the committee.
-fn aggregate_wfinal(r2wbufs: &[Option<Vec<u8>>], kk: usize) -> Vec<[Poly; K]> {
-    let mut wfinal: Vec<[Poly; K]> = (0..kk).map(|_| [Poly::zero(); K]).collect();
+fn aggregate_wfinal(r2wbufs: &[Option<Vec<u8>>], kk: usize) -> Vec<PolyVec<K>> {
+    let mut wfinal: Vec<PolyVec<K>> = (0..kk).map(|_| zero_polys::<K>()).collect();
     for wbuf in r2wbufs.iter().flatten() {
         let mut off = 0;
         for wf in wfinal.iter_mut() {
@@ -526,9 +526,9 @@ fn aggregate_wfinal(r2wbufs: &[Option<Vec<u8>>], kk: usize) -> Vec<[Poly; K]> {
 }
 
 /// `zfinal[try][j] = Σ_slot unpack_z(resp_slot)` over the committee.
-fn aggregate_zfinal(r3resps: &[Option<Vec<u8>>], kk: usize) -> Vec<[Poly; L]> {
+fn aggregate_zfinal(r3resps: &[Option<Vec<u8>>], kk: usize) -> Vec<PolyVec<L>> {
     let sz = encoding_z_size();
-    let mut zfinal: Vec<[Poly; L]> = (0..kk).map(|_| [Poly::zero(); L]).collect();
+    let mut zfinal: Vec<PolyVec<L>> = (0..kk).map(|_| zero_polys::<L>()).collect();
     for resp in r3resps.iter().flatten() {
         let mut off = 0;
         for zf in zfinal.iter_mut() {

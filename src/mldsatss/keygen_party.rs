@@ -27,7 +27,7 @@
 //! catches a dealer that reveals different `t_M` to different parties.
 
 use super::Error;
-use super::key::{Key44, Share44, expand_matrix};
+use super::key::{Key44, PolyVec, Share44, expand_matrix, zero_polys};
 use super::keygen::gosper_masks;
 use super::packing::{PACK_POLYQ_SIZE, pack_polyq, unpack_polyq};
 use super::params::ThresholdParams44;
@@ -82,9 +82,9 @@ struct Shared {
 struct State {
     own_contrib: [u8; 32],
     contribs: Vec<Option<[u8; 32]>>, // by committee slot (= id)
-    dealt: VecMap<u8, ([Poly; L], [Poly; K])>,
-    received: VecMap<u8, ([Poly; L], [Poly; K])>,
-    t_by_mask: VecMap<u8, [Poly; K]>,
+    dealt: VecMap<u8, (PolyVec<L>, PolyVec<K>)>,
+    received: VecMap<u8, (PolyVec<L>, PolyVec<K>)>,
+    t_by_mask: VecMap<u8, PolyVec<K>>,
     commit_by_mask: VecMap<u8, [u8; 32]>,
     /// Joint `rho`, fixed at the end of round 1.
     rho: [u8; 32],
@@ -252,8 +252,8 @@ impl Shared {
         for &mask in &self.masks_deal {
             let mut sseed = [0u8; 64];
             SystemRng.fill_bytes(&mut sseed);
-            let mut s1 = [Poly::zero(); L];
-            let mut s2 = [Poly::zero(); K];
+            let mut s1 = zero_polys::<L>();
+            let mut s2 = zero_polys::<K>();
             for (j, p) in s1.iter_mut().enumerate() {
                 *p = hazmat::sample_bounded_poly(&sseed, eta, j as u16);
             }
@@ -265,6 +265,7 @@ impl Shared {
             zeroize::Zeroize::zeroize(&mut sseed);
             let t_m = compute_t_m(&a, &s1, &s2);
             let commit = commit_share(mask, &s1, &s2);
+            let t_packed = pack_vec(t_m.as_slice());
             {
                 let mut st = self.state.lock();
                 st.dealt.insert(mask, (s1, s2));
@@ -273,7 +274,7 @@ impl Shared {
             }
             bcast_entries.push(MaskT {
                 mask,
-                t: B64Bytes(pack_vec(&t_m)),
+                t: B64Bytes(t_packed),
                 commit: B64Bytes(commit.to_vec()),
             });
         }
@@ -330,15 +331,16 @@ impl Shared {
             let mut entries = Vec::new();
             for &mask in &self.masks_deal {
                 if (mask >> rid) & 1 == 1 {
-                    let (s1, s2) = {
+                    let entry = {
                         let st = self.state.lock();
-                        st.dealt[&mask]
+                        let (s1, s2) = &st.dealt[&mask];
+                        MaskShare {
+                            mask,
+                            s1: B64Bytes(pack_vec(s1.as_slice())),
+                            s2: B64Bytes(pack_vec(s2.as_slice())),
+                        }
                     };
-                    entries.push(MaskShare {
-                        mask,
-                        s1: B64Bytes(pack_vec(&s1)),
-                        s2: B64Bytes(pack_vec(&s2)),
-                    });
+                    entries.push(entry);
                 }
             }
             if !entries.is_empty() {
@@ -512,14 +514,14 @@ impl Shared {
         }
 
         // Aggregate t = Σ_M t_M, then t1 = high bits.
-        let mut t = [Poly::zero(); K];
+        let mut t = zero_polys::<K>();
         for &m in &all_masks {
             let t_m = &st.t_by_mask[&m];
             for i in 0..K {
                 t[i] = t[i].add(&t_m[i]);
             }
         }
-        let mut t1 = [Poly::zero(); K];
+        let mut t1 = zero_polys::<K>();
         for (i, t1i) in t1.iter_mut().enumerate() {
             for j in 0..N {
                 let (hi, _) = power2_round(t[i].c[j]);
@@ -532,9 +534,9 @@ impl Shared {
             alloc::collections::BTreeMap::new();
         for &mask in &self.masks_hold {
             let (s1, s2) = if let Some(v) = st.dealt.get(&mask) {
-                *v
+                v.clone()
             } else if let Some(v) = st.received.get(&mask) {
-                *v
+                v.clone()
             } else {
                 return self.deliver(Err(Error::Validation(format!(
                     "missing held share for mask {mask}"
@@ -560,8 +562,8 @@ impl Shared {
                     "mask {mask} t_M inconsistent with its share"
                 ))));
             }
-            let mut s1h = s1;
-            let mut s2h = s2;
+            let mut s1h = s1.clone();
+            let mut s2h = s2.clone();
             for p in s1h.iter_mut() {
                 p.ntt();
             }
@@ -574,7 +576,7 @@ impl Shared {
         // Public key + tr.
         let mut pk_bytes = Vec::with_capacity(32 + K * 320);
         pk_bytes.extend_from_slice(&rho);
-        for t1i in &t1 {
+        for t1i in t1.iter() {
             pk_bytes.extend_from_slice(&pack_t1(t1i));
         }
         let pk = match MlDsa44PublicKey::from_bytes(&pk_bytes) {
@@ -743,12 +745,12 @@ struct Dkg2Share {
 // --- helpers ---------------------------------------------------------------
 
 /// `t_M = InvNTT(A · NTT(s1)) + s2` (the per-mask public contribution).
-fn compute_t_m(a: &[Poly], s1: &[Poly; L], s2: &[Poly; K]) -> [Poly; K] {
+fn compute_t_m(a: &[Poly], s1: &[Poly; L], s2: &[Poly; K]) -> PolyVec<K> {
     let mut s1h = *s1;
     for p in s1h.iter_mut() {
         p.ntt();
     }
-    let mut out = [Poly::zero(); K];
+    let mut out = zero_polys::<K>();
     for (i, oi) in out.iter_mut().enumerate() {
         let mut acc = Poly::zero();
         for j in 0..L {
@@ -808,11 +810,11 @@ fn pack_vec(v: &[Poly]) -> Vec<u8> {
     out
 }
 
-fn unpack_vec_k(b: &[u8]) -> Option<[Poly; K]> {
+fn unpack_vec_k(b: &[u8]) -> Option<PolyVec<K>> {
     if b.len() != K * PACK_POLYQ_SIZE {
         return None;
     }
-    let mut out = [Poly::zero(); K];
+    let mut out = zero_polys::<K>();
     for (i, oi) in out.iter_mut().enumerate() {
         *oi = unpack_polyq(&b[i * PACK_POLYQ_SIZE..(i + 1) * PACK_POLYQ_SIZE]);
         // 23-bit fields can hold values ≥ q; `Poly` arithmetic requires < q.
@@ -823,11 +825,11 @@ fn unpack_vec_k(b: &[u8]) -> Option<[Poly; K]> {
     Some(out)
 }
 
-fn unpack_vec_l(b: &[u8]) -> Option<[Poly; L]> {
+fn unpack_vec_l(b: &[u8]) -> Option<PolyVec<L>> {
     if b.len() != L * PACK_POLYQ_SIZE {
         return None;
     }
-    let mut out = [Poly::zero(); L];
+    let mut out = zero_polys::<L>();
     for (i, oi) in out.iter_mut().enumerate() {
         *oi = unpack_polyq(&b[i * PACK_POLYQ_SIZE..(i + 1) * PACK_POLYQ_SIZE]);
         // 23-bit fields can hold values ≥ q; `Poly` arithmetic requires < q.

@@ -2,7 +2,9 @@
 //! or `null` for an absent value).
 
 use crate::prelude::*;
+#[cfg(feature = "json")]
 use base64::Engine as _;
+#[cfg(feature = "json")]
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -24,24 +26,24 @@ impl<'de> Deserialize<'de> for B64Bytes {
 }
 
 /// A base64 string in human-readable formats (JSON), raw bytes in the binary
-/// [`crate::wire`] format.
+/// [`crate::wire`] format. Without the `json` feature it is always raw bytes.
 pub(crate) fn serialize_bytes<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    #[cfg(feature = "json")]
     if s.is_human_readable() {
-        s.serialize_str(&BASE64.encode(bytes))
-    } else {
-        s.serialize_bytes(bytes)
+        return s.serialize_str(&BASE64.encode(bytes));
     }
+    s.serialize_bytes(bytes)
 }
 
 /// Inverse of [`serialize_bytes`].
 pub(crate) fn deserialize_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-    use serde::de::Error as _;
+    #[cfg(feature = "json")]
     if d.is_human_readable() {
+        use serde::de::Error as _;
         let s = String::deserialize(d)?;
-        BASE64.decode(s.as_bytes()).map_err(D::Error::custom)
-    } else {
-        d.deserialize_byte_buf(crate::wire::ByteBufVisitor)
+        return BASE64.decode(s.as_bytes()).map_err(D::Error::custom);
     }
+    d.deserialize_byte_buf(crate::wire::ByteBufVisitor)
 }
 
 /// `#[serde(with = "crate::tss::b64::vec")]` for a `Vec<u8>` field.

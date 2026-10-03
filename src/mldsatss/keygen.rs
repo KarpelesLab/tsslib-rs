@@ -6,7 +6,7 @@
 //! the shares whose mask includes its id. No DKG.
 
 use super::Error;
-use super::key::{Key44, Share44};
+use super::key::{Key44, Share44, zero_polys};
 use super::params::ThresholdParams44;
 use crate::prelude::*;
 use alloc::collections::BTreeMap;
@@ -47,7 +47,7 @@ pub fn trusted_dealer_keygen44(
             id: i as u8,
             rho,
             tr: [0u8; 64],
-            t1: [Poly::zero(); K],
+            t1: zero_polys::<K>(),
             shares: BTreeMap::new(),
         })
         .collect();
@@ -55,18 +55,18 @@ pub fn trusted_dealer_keygen44(
     let a = super::key::expand_matrix(&rho);
 
     // Aggregate accumulators (dealer-only): s1 in NTT, s2 in plain domain.
-    let mut s1h_total = [Poly::zero(); L];
-    let mut s2_total = [Poly::zero(); K];
+    let mut s1h_total = zero_polys::<L>();
+    let mut s2_total = zero_polys::<K>();
 
     let mut off = 32 + n * 32;
     for &mask in &masks {
         let sseed = &stream[off..off + 64];
         off += 64;
 
-        let mut s1 = [Poly::zero(); L];
-        let mut s2 = [Poly::zero(); K];
-        let mut s1h = [Poly::zero(); L];
-        let mut s2h = [Poly::zero(); K];
+        let mut s1 = zero_polys::<L>();
+        let mut s2 = zero_polys::<K>();
+        let mut s1h = zero_polys::<L>();
+        let mut s2h = zero_polys::<K>();
         for (j, p) in s1.iter_mut().enumerate() {
             *p = hazmat::sample_bounded_poly(sseed, eta, j as u16);
             let mut h = *p;
@@ -81,20 +81,13 @@ pub fn trusted_dealer_keygen44(
             s2h[j] = h;
             s2_total[j] = s2_total[j].add(p);
         }
+        // The polynomials move into `share`, whose `Drop` wipes the dealer's
+        // copy at the end of this iteration; each key gets its own clone.
         let share = Share44 { s1, s2, s1h, s2h };
         for (i, key) in keys.iter_mut().enumerate() {
             if mask & (1 << i) != 0 {
                 key.shares.insert(mask, share.clone());
             }
-        }
-        // Wipe the dealer-side local copies of this share's polynomials; the
-        // distributed shares are independent copies (and `Share44`'s `Drop`
-        // wipes `share` itself at the end of this iteration). Best-effort.
-        for p in s1.iter_mut().chain(s1h.iter_mut()) {
-            zeroize::Zeroize::zeroize(&mut p.c);
-        }
-        for p in s2.iter_mut().chain(s2h.iter_mut()) {
-            zeroize::Zeroize::zeroize(&mut p.c);
         }
     }
     // The tail of `stream` holds every share's sSeed; wipe it now that all
@@ -102,7 +95,7 @@ pub fn trusted_dealer_keygen44(
     zeroize::Zeroize::zeroize(&mut stream);
 
     // t = A·s1 + s2 ; t1 = high bits of t (Power2Round).
-    let mut t1 = [Poly::zero(); K];
+    let mut t1 = zero_polys::<K>();
     for (i, t1i) in t1.iter_mut().enumerate() {
         let mut acc = Poly::zero();
         for j in 0..L {
@@ -126,7 +119,7 @@ pub fn trusted_dealer_keygen44(
     // Pack the FIPS 204 public key: rho || pack_t1 per row.
     let mut pk_bytes = Vec::with_capacity(32 + K * 320);
     pk_bytes.extend_from_slice(&rho);
-    for t1i in &t1 {
+    for t1i in t1.iter() {
         pk_bytes.extend_from_slice(&pack_t1(t1i));
     }
     let pk = MlDsa44PublicKey::from_bytes(&pk_bytes)
@@ -136,7 +129,7 @@ pub fn trusted_dealer_keygen44(
     shake256(&pk_bytes, &mut tr);
     for key in &mut keys {
         key.tr = tr;
-        key.t1 = t1;
+        key.t1 = t1.clone();
     }
 
     Ok((pk, keys))

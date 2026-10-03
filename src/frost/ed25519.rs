@@ -102,20 +102,31 @@ fn concat(parts: &[&[u8]]) -> Vec<u8> {
     buf
 }
 
-/// `(8 mod L)^{-1}` — the scalar used to undo cofactor multiplication when
+/// `8⁻¹ mod L`, little-endian: undoes the cofactor multiplication when
 /// clearing torsion from a decoded element.
-fn eight_inv() -> Scalar {
-    let mut eight = [0u8; 32];
-    eight[0] = 8;
-    Scalar::from_bytes_canonical(&eight)
-        .expect("8 < L")
-        .invert()
+pub(crate) const EIGHT_INV_LE: [u8; 32] = [
+    121, 47, 220, 226, 41, 229, 6, 97, 208, 218, 28, 125, 179, 157, 211, 7, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 6,
+];
+
+/// `8⁻¹ mod L` as a scalar.
+pub(crate) fn eight_inv() -> Scalar {
+    Scalar::from_bytes_canonical(&EIGHT_INV_LE).expect("8^-1 < L")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::frost::Ciphersuite;
+
+    #[test]
+    fn eight_inv_is_the_inverse_of_eight() {
+        let mut eight = [0u8; 32];
+        eight[0] = 8;
+        let eight = Scalar::from_bytes_canonical(&eight).unwrap();
+        assert!(bool::from(eight.mul(&eight_inv()).ct_eq(&Scalar::ONE)));
+        assert!(bool::from(eight.invert().ct_eq(&eight_inv())));
+    }
 
     #[test]
     fn h2_is_bare_sha512_reduced() {

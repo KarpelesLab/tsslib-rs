@@ -55,12 +55,22 @@ pub(crate) fn scalar_to_be(s: &Scalar) -> Vec<u8> {
 
 /// The edwards25519 field prime `P = 2^255 − 19`, big-endian.
 pub(crate) fn field_prime_be() -> Vec<u8> {
-    hex_be("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed")
+    let mut p = vec![0xff; 32];
+    p[0] = 0x7f;
+    p[31] = 0xed;
+    p
 }
 
-/// The edwards25519 group order `L`, big-endian.
+/// The edwards25519 group order `L = 2^252 + 27742317777372353535851937790883648493`,
+/// big-endian.
 pub(crate) fn order_be() -> Vec<u8> {
-    hex_be("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
+    let mut l = vec![0u8; 32];
+    l[0] = 0x10;
+    l[16..].copy_from_slice(&[
+        0x14, 0xde, 0xf9, 0xde, 0xa2, 0xf7, 0x9c, 0xd6, 0x58, 0x12, 0x63, 0x1a, 0x5c, 0xf5, 0xd3,
+        0xed,
+    ]);
+    l
 }
 
 /// The basepoint's affine `(x, y)` as minimal big-endian magnitudes.
@@ -69,20 +79,17 @@ pub(crate) fn generator_coords_be() -> (Vec<u8>, Vec<u8>) {
 }
 
 /// `p · 8 · (8⁻¹ mod L)` — clears any torsion component, leaving the prime-order
-/// part. A no-op on honest prime-order points.
+/// part. A no-op on honest prime-order points. The `·8` is three doublings.
 pub(crate) fn eight_inv_eight(p: &EdwardsPoint) -> EdwardsPoint {
-    let mut eight_bytes = [0u8; 32];
-    eight_bytes[0] = 8;
-    let eight = Scalar::from_bytes_canonical(&eight_bytes).unwrap();
-    let inv8 = eight.invert();
-    p.mul(&eight).mul(&inv8)
+    let inv8 = Scalar::from_bytes_canonical(&EIGHT_INV_LE).expect("8^-1 < L");
+    p.mul_by_cofactor().mul(&inv8)
 }
 
-fn hex_be(s: &str) -> Vec<u8> {
-    (0..s.len() / 2)
-        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap())
-        .collect()
-}
+/// `8⁻¹ mod L`, little-endian.
+const EIGHT_INV_LE: [u8; 32] = [
+    121, 47, 220, 226, 41, 229, 6, 97, 208, 218, 28, 125, 179, 157, 211, 7, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 6,
+];
 
 /// `n·G`.
 pub(crate) fn mul_base(s: &Scalar) -> EdwardsPoint {
@@ -178,6 +185,25 @@ fn le32_to_be_min(le: &[u8; 32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curve_constants_and_cofactor_clearing() {
+        assert_eq!(
+            hex::encode(field_prime_be()),
+            "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed"
+        );
+        assert_eq!(
+            hex::encode(order_be()),
+            "1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed"
+        );
+        // Same result as the textbook p·8·(8⁻¹ mod L).
+        let p = mul_base(&sc(7));
+        let mut eight = [0u8; 32];
+        eight[0] = 8;
+        let eight = Scalar::from_bytes_canonical(&eight).unwrap();
+        let slow = p.mul(&eight).mul(&eight.invert());
+        assert!(bool::from(eight_inv_eight(&p).ct_eq(&slow)));
+    }
 
     fn sc(n: u8) -> Scalar {
         let mut b = [0u8; 32];

@@ -247,7 +247,7 @@ pub fn sample_hyperball(p: &mut FVec, r: f64, nu: f64, rhop: &[u8; 64], nonce: u
     let mut buf = vec![0u8; TOTAL * HYPERBALL_BYTES_PER_SAMPLE];
     shake256(&input, &mut buf);
 
-    let mut z = [0i32; TOTAL];
+    let mut z = vec![0i32; TOTAL];
     let mut sq: u64 = 0;
     for (i, zi) in z.iter_mut().enumerate() {
         let base = i * HYPERBALL_BYTES_PER_SAMPLE;

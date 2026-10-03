@@ -22,12 +22,12 @@ default = ["std", "json", "frosttss", "frostristretto255tss", "frostsecp256k1tss
 # The crate is `#![no_std]` + `alloc`. `std` adds OS randomness (without it,
 # register one with `rng::set_entropy_source`), the blocking `wait()` on every
 # session, and OS-backed locks in place of spin locks.
-std = ["purecrypto/std", "serde/std", "serde_json?/std", "base64/std", "hex/std", "zeroize/std", "subtle/std"]
+std = ["purecrypto/std", "serde/std", "serde_json?/std", "base64?/std", "zeroize/std"]
 
 # JSON keys and messages (serde_json). Without it, keys and messages use only
 # the compact binary encoding in `tsslib::wire`, which needs neither std nor
 # serde_json. Independent of `std`.
-json = ["dep:serde_json"]
+json = ["dep:serde_json", "dep:base64"]
 
 # FROST(Ed25519, SHA-512) — RFC 9591. Ed25519-compatible output.
 # cipher/kdf back the X25519+HKDF+ChaCha20-Poly1305 encrypted-share envelope.
@@ -57,20 +57,19 @@ eddsatss = ["purecrypto/hazmat-edwards25519", "purecrypto/hash"]
 # primitives). Pulled from crates.io so tsslib is itself publishable.
 # `hash` and `rng` are unconditional: the always-compiled `tss` module
 # re-exports `purecrypto::hash::HashAlgorithm`, and `rng` backs `tsslib::rng`.
-purecrypto = { version = "0.9", default-features = false, features = ["alloc", "hash", "rng"] }
+purecrypto = { version = "0.9.9", default-features = false, features = ["alloc", "hash", "rng"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 # arbitrary_precision: emit/parse big-integer JSON numbers (>2^53) losslessly,
 # as the save formats store them.
 serde_json = { version = "1", default-features = false, features = ["alloc", "arbitrary_precision"], optional = true }
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
-hex = { version = "0.4", default-features = false, features = ["alloc"] }
+base64 = { version = "0.22", default-features = false, features = ["alloc"], optional = true }
 zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
-subtle = { version = "2", default-features = false }
 # no_std locks / lazy init (the `std` build uses OS locks for `Mutex`).
 spin = { version = "0.10", default-features = false, features = ["spin_mutex", "once"] }
 
 [dev-dependencies]
+hex = "0.4"
 serde_json = "1"
 # Tests always link `std`, so give them OS randomness even under
 # `--no-default-features`.
-purecrypto = { version = "0.9", default-features = false, features = ["std"] }
+purecrypto = { version = "0.9.9", default-features = false, features = ["std"] }

@@ -37,7 +37,7 @@ mod signing;
 mod signing_party;
 
 use crate::prelude::*;
-pub use key::{Key44, Share44};
+pub use key::{Key44, PolyVec, Share44};
 pub use keygen::trusted_dealer_keygen44;
 pub use keygen_party::DkgParty44;
 pub use params::{GetThresholdParams44Error, ThresholdParams44, get_threshold_params44};

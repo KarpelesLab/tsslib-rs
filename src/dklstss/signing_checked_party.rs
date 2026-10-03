@@ -955,7 +955,7 @@ fn mix_round_one_ssid(
             all.push((strip(&pid.key).to_vec(), *k));
         }
     }
-    all.sort_by(|a, b| {
+    all.sort_unstable_by(|a, b| {
         a.0.len()
             .cmp(&b.0.len())
             .then_with(|| a.0.as_slice().cmp(b.0.as_slice()))

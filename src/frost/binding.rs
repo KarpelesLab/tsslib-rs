@@ -38,7 +38,7 @@ fn id_key(id: &[u8]) -> Vec<u8> {
 /// for each signer, `EncodeScalar(id) || Encode(D_i) || Encode(E_i)`.
 pub fn encode_commitment_list<C: Ciphersuite>(commitments: &[NonceCommitment<C>]) -> Vec<u8> {
     let mut sorted: Vec<&NonceCommitment<C>> = commitments.iter().collect();
-    sorted.sort_by(|a, b| cmp_be(&a.identifier, &b.identifier));
+    sorted.sort_unstable_by(|a, b| cmp_be(&a.identifier, &b.identifier));
 
     let mut buf = Vec::new();
     for c in sorted {

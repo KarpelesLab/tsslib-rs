@@ -463,11 +463,11 @@ impl Shared {
         let old_parties = self.params.old_parties().to_vec();
 
         let (r1msgs, r3m1, r3m2, group_pub, my_eph_priv, my_eph_pub, my_nonce) = {
-            let st = self.state.lock();
+            let mut st = self.state.lock();
             (
-                st.r1.clone().unwrap(),
-                st.r3m1.clone().unwrap(),
-                st.r3m2.clone().unwrap(),
+                st.r1.take().unwrap(),
+                st.r3m1.take().unwrap(),
+                st.r3m2.take().unwrap(),
                 st.group_pub_key.unwrap(),
                 st.my_eph_priv,
                 st.my_eph_pub,

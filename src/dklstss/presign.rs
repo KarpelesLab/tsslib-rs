@@ -80,7 +80,7 @@ pub fn presign(
 
     // Resolve and sort the signing subset by party id.
     let mut signers: Vec<&Key> = signer_idx.iter().map(|&i| &keys[i]).collect();
-    signers.sort_by(|a, b| cmp_be(&a.party_ids[a.idx].key, &b.party_ids[b.idx].key));
+    signers.sort_unstable_by(|a, b| cmp_be(&a.party_ids[a.idx].key, &b.party_ids[b.idx].key));
     let sgn = signers.len();
 
     // Lagrange coefficients and effective shares sx_i = λ_i·x_i.

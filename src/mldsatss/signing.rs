@@ -16,7 +16,7 @@
 
 use super::Error;
 use super::hyperball::{FVec, sample_hyperball};
-use super::key::Key44;
+use super::key::{Key44, PolyVec, zero_polys};
 use super::params::ThresholdParams44;
 use crate::prelude::*;
 use purecrypto::hash::shake256;
@@ -59,11 +59,11 @@ pub fn sign44(
 
     let mu = compute_mu(&signers[0].tr, ctx, msg);
     let a = signers[0].matrix();
-    let t1 = signers[0].t1;
+    let t1 = &signers[0].t1;
 
     let act = super::key::signing_set_mask(signers.iter().map(|k| k.id), params)?;
-    let mut s1h: Vec<[Poly; L]> = Vec::with_capacity(signers.len());
-    let mut s2h: Vec<[Poly; K]> = Vec::with_capacity(signers.len());
+    let mut s1h: Vec<PolyVec<L>> = Vec::with_capacity(signers.len());
+    let mut s2h: Vec<PolyVec<K>> = Vec::with_capacity(signers.len());
     for k in signers {
         let (a1, a2) = k.recover_share(act, params)?;
         s1h.push(a1);
@@ -74,7 +74,7 @@ pub fn sign44(
     for _attempt in 0..MAX_ATTEMPTS {
         // Phase 1: each party samples k hyperball points and computes w = A·r+e.
         let mut stws: Vec<Vec<FVec>> = Vec::with_capacity(nsign);
-        let mut w_by: Vec<Vec<[Poly; K]>> = Vec::with_capacity(nsign);
+        let mut w_by: Vec<Vec<PolyVec<K>>> = Vec::with_capacity(nsign);
         for _ in 0..nsign {
             let mut rhop = [0u8; 64];
             rng.fill_bytes(&mut rhop);
@@ -90,7 +90,7 @@ pub fn sign44(
         }
 
         // Aggregate w per try.
-        let mut wfinal: Vec<[Poly; K]> = (0..kk).map(|_| [Poly::zero(); K]).collect();
+        let mut wfinal: Vec<PolyVec<K>> = (0..kk).map(|_| zero_polys::<K>()).collect();
         for (tri, wf) in wfinal.iter_mut().enumerate() {
             for w in w_by.iter() {
                 for (i, wfi) in wf.iter_mut().enumerate() {
@@ -100,7 +100,7 @@ pub fn sign44(
         }
 
         // Phase 2: each party's response z_i per try (None = rejected).
-        let mut zresp: Vec<Vec<Option<[Poly; L]>>> = Vec::with_capacity(nsign);
+        let mut zresp: Vec<Vec<Option<PolyVec<L>>>> = Vec::with_capacity(nsign);
         for s in 0..nsign {
             let mut my_z = Vec::with_capacity(kk);
             for (tri, wf) in wfinal.iter().enumerate() {
@@ -121,14 +121,14 @@ pub fn sign44(
             if zresp.iter().any(|zs| zs[tri].is_none()) {
                 continue;
             }
-            let mut zfinal = [Poly::zero(); L];
+            let mut zfinal = zero_polys::<L>();
             for zs in zresp.iter() {
                 let z = zs[tri].as_ref().unwrap();
                 for j in 0..L {
                     zfinal[j] = zfinal[j].add(&z[j]);
                 }
             }
-            if let Some(sig) = combine_try(&a, &t1, &mu, wf, &zfinal) {
+            if let Some(sig) = combine_try(&a, t1, &mu, wf, &zfinal) {
                 return Ok(sig);
             }
         }
@@ -169,21 +169,21 @@ pub(crate) fn sample_w(
     nu: f64,
     rhop: &[u8; 64],
     tri: u16,
-) -> (FVec, [Poly; K]) {
+) -> (FVec, PolyVec<K>) {
     let mut fv = FVec::zero();
     sample_hyperball(&mut fv, rp, nu, rhop, tri);
 
-    let mut rpoly = [Poly::zero(); L];
-    let mut epoly = [Poly::zero(); K];
+    let mut rpoly = zero_polys::<L>();
+    let mut epoly = zero_polys::<K>();
     fv.round_into(&mut rpoly, &mut epoly);
 
-    let mut rh = [Poly::zero(); L];
+    let mut rh = zero_polys::<L>();
     for j in 0..L {
         let mut h = rpoly[j];
         h.ntt();
         rh[j] = h;
     }
-    let mut wi = [Poly::zero(); K];
+    let mut wi = zero_polys::<K>();
     for (i, wij) in wi.iter_mut().enumerate() {
         let mut acc = Poly::zero();
         for j in 0..L {
@@ -205,20 +205,20 @@ pub(crate) fn compute_response(
     wfinal_tri: &[Poly; K],
     mu: &[u8; 64],
     params: &ThresholdParams44,
-) -> Option<[Poly; L]> {
+) -> Option<PolyVec<L>> {
     let tau = ML_DSA_44.params.tau;
     let w1 = high_bits_vec(wfinal_tri);
     let ctilde = compute_ctilde(mu, &w1);
     let mut chat = hazmat::sample_challenge(&ctilde, tau);
     chat.ntt();
 
-    let mut zpart = [Poly::zero(); L];
+    let mut zpart = zero_polys::<L>();
     for j in 0..L {
         let mut p = hazmat::ntt_mul(&chat, &s1h[j]);
         p.inv_ntt();
         zpart[j] = p;
     }
-    let mut ypart = [Poly::zero(); K];
+    let mut ypart = zero_polys::<K>();
     for j in 0..K {
         let mut p = hazmat::ntt_mul(&chat, &s2h[j]);
         p.inv_ntt();
@@ -229,8 +229,8 @@ pub(crate) fn compute_response(
     if zf.excess(params.r, params.nu) {
         None
     } else {
-        let mut z2 = [Poly::zero(); L];
-        let mut yd = [Poly::zero(); K];
+        let mut z2 = zero_polys::<L>();
+        let mut yd = zero_polys::<K>();
         zf.round_into(&mut z2, &mut yd);
         Some(z2)
     }
@@ -259,13 +259,13 @@ pub(crate) fn combine_try(
     let mut chat = hazmat::sample_challenge(&ctilde, tau);
     chat.ntt();
 
-    let mut zhat = [Poly::zero(); L];
+    let mut zhat = zero_polys::<L>();
     for j in 0..L {
         let mut h = zfinal_tri[j];
         h.ntt();
         zhat[j] = h;
     }
-    let mut f = [Poly::zero(); K];
+    let mut f = zero_polys::<K>();
     for (i, fi) in f.iter_mut().enumerate() {
         let mut az = Poly::zero();
         for j in 0..L {
@@ -285,7 +285,7 @@ pub(crate) fn combine_try(
         return None;
     }
 
-    let mut hints = [Poly::zero(); K];
+    let mut hints = zero_polys::<K>();
     let mut ones = 0usize;
     for i in 0..K {
         for j in 0..N {
@@ -309,7 +309,7 @@ pub(crate) fn combine_try(
     for j in 0..L {
         sig.extend_from_slice(&hazmat::pack_z(&zfinal_tri[j], &ML_DSA_44.params));
     }
-    sig.extend_from_slice(&hazmat::pack_hint(&hints, omega)?);
+    sig.extend_from_slice(&hazmat::pack_hint(hints.as_slice(), omega)?);
     Some(sig)
 }
 
@@ -339,8 +339,8 @@ pub(crate) fn compute_ctilde(mu: &[u8; 64], w1: &[Poly; K]) -> Vec<u8> {
 }
 
 /// w₁ = HighBits(w) per coefficient (γ₂ = (q−1)/88).
-pub(crate) fn high_bits_vec(w: &[Poly; K]) -> [Poly; K] {
-    let mut out = [Poly::zero(); K];
+pub(crate) fn high_bits_vec(w: &[Poly; K]) -> PolyVec<K> {
+    let mut out = zero_polys::<K>();
     for i in 0..K {
         for j in 0..N {
             out[i].c[j] = hazmat::high_bits(w[i].c[j], GAMMA2_88);

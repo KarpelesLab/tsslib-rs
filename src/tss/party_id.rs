@@ -1,10 +1,7 @@
 //! Participant identity.
 
 use crate::prelude::*;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use core::cmp::Ordering;
-use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A participant in the TSS protocol rounds.
@@ -61,7 +58,7 @@ impl PartyId {
     /// Sorts `ids` by `key` ascending and assigns each party its `index`
     /// (`start_at + position`).
     pub fn sort(mut ids: Vec<PartyId>, start_at: i32) -> Vec<PartyId> {
-        ids.sort_by(|a, b| cmp_be_unsigned(&a.key, &b.key));
+        ids.sort_unstable_by(|a, b| cmp_be_unsigned(&a.key, &b.key));
         for (i, id) in ids.iter_mut().enumerate() {
             id.index = start_at + i as i32;
         }
@@ -126,20 +123,10 @@ struct PartyIdWire {
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        serialize_with = "ser_b64",
-        deserialize_with = "de_b64"
+        with = "super::b64::vec"
     )]
     key: Vec<u8>,
     index: i32,
-}
-
-fn ser_b64<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&BASE64.encode(bytes))
-}
-
-fn de_b64<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-    let s = String::deserialize(d)?;
-    BASE64.decode(s.as_bytes()).map_err(D::Error::custom)
 }
 
 /// The binary [`crate::wire`] form: every field, always present (a positional
