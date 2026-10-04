@@ -3,10 +3,18 @@
 //! The per-party state machine that runs the DKG over a [`MessageBroker`],
 //! the broker-driven equivalent of the synchronous [`keygen`](super::keygen).
 //! Round 1 broadcasts the dealer's Feldman-VSS commitments and unicasts each
-//! peer its Shamir share plus a base-OT-Sender first message; an echo phase
-//! cross-checks the broadcast commitments for equivocation; round 2 returns the
-//! base-OT-Receiver response; finalize assembles the per-pair OT-extension state
-//! and this party's [`Key`].
+//! peer its Shamir share plus a base-OT-Sender first message. Round 2 checks
+//! the shares, then sends an echo of every peer's commitments (cross-checking
+//! the broadcast for equivocation) together with the base-OT-Receiver
+//! responses `R`. Finalize waits for both, refuses unless every echo verifies,
+//! and assembles the per-pair OT-extension state and this party's [`Key`].
+//!
+//! `R` can travel with the echo because it depends only on the peer's round-1
+//! unicast, not on the commitments being consistent, so keygen needs two
+//! message rounds rather than three. An `R` sent ahead of a failed echo leaks
+//! nothing about the key: it is a fresh base-OT message that hides the
+//! receiver's choice bits and is independent of the shares, and the session
+//! aborts before using it.
 
 use super::Error;
 use super::baseot;
@@ -66,6 +74,13 @@ struct State {
     my_delta: VecMap<String, Vec<u8>>,
     peer_vs: VecMap<String, Vec<ProjectivePoint>>,
     peer_shares: VecMap<String, Scalar>,
+
+    /// Every peer's echo matched our view of the commitments.
+    echo_ok: bool,
+    /// The peers' base-OT receiver responses, once all have arrived.
+    r2_msgs: Option<Vec<Message>>,
+    /// Set when `finalize` is claimed, so it runs once.
+    finalizing: bool,
 }
 
 impl KeygenParty {
@@ -88,6 +103,9 @@ impl KeygenParty {
                 my_delta: VecMap::new(),
                 peer_vs: VecMap::new(),
                 peer_shares: VecMap::new(),
+                echo_ok: false,
+                r2_msgs: None,
+                finalizing: false,
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -213,7 +231,7 @@ impl Shared {
             st.r1_join == 2
         };
         if ready {
-            self.start_echo(others);
+            self.round2(others);
         }
     }
 
@@ -230,37 +248,8 @@ impl Shared {
             st.r1_join == 2
         };
         if ready {
-            self.start_echo(others);
+            self.round2(others);
         }
-    }
-
-    fn start_echo(self: &Arc<Self>, others: &[PartyId]) {
-        let digests: VecMap<String, B64Bytes> = {
-            let st = self.state.lock();
-            others
-                .iter()
-                .enumerate()
-                .map(|(n, pid)| {
-                    let raw = vss_bytes(&st.r1_bcasts[n].vss_commitments);
-                    (
-                        peer_key_str(pid),
-                        B64Bytes(commit_digest(ECHO_TAG, pid, &raw)),
-                    )
-                })
-                .collect()
-        };
-        let out = EchoMsg { digests };
-        if let Err(e) = self.broadcast(TYPE_ECHO, &out) {
-            return self.deliver(Err(e));
-        }
-        let me = Arc::clone(self);
-        let others_owned = others.to_vec();
-        let exp = JsonExpect::new(
-            TYPE_ECHO,
-            others.to_vec(),
-            Box::new(move |msgs| me.on_echo(&others_owned, msgs)),
-        );
-        self.params.broker().connect(TYPE_ECHO, Arc::new(exp));
     }
 
     fn on_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
@@ -290,9 +279,30 @@ impl Shared {
         if let Err(e) = verify_echoes(&my_digests, &self_key, others, &echoes, &all, ECHO_SOURCE) {
             return self.deliver(Err(e));
         }
-        self.round2(others);
+        self.state.lock().echo_ok = true;
+        self.try_finalize(others);
     }
 
+    fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        self.state.lock().r2_msgs = Some(msgs);
+        self.try_finalize(others);
+    }
+
+    /// Finalizes once the echoes have verified and every `R` has arrived.
+    fn try_finalize(self: &Arc<Self>, others: &[PartyId]) {
+        let msgs = {
+            let mut st = self.state.lock();
+            if st.finalizing || !st.echo_ok || st.r2_msgs.is_none() {
+                return;
+            }
+            st.finalizing = true;
+            st.r2_msgs.take().expect("checked above")
+        };
+        self.finalize(others, msgs);
+    }
+
+    /// Checks every peer's round-1 share and base-OT message, then sends the
+    /// echo of their commitments and the base-OT receiver responses together.
     fn round2(self: &Arc<Self>, others: &[PartyId]) {
         let mut rng = SystemRng;
         let t = self.params.threshold();
@@ -305,6 +315,7 @@ impl Shared {
             (st.r1_bcasts.clone(), st.r1_unicasts.clone())
         };
 
+        let mut r2_out = Vec::with_capacity(others.len());
         for (n, pid) in others.iter().enumerate() {
             let bc = &bcasts[n];
             let uc = &ucs[n];
@@ -376,20 +387,47 @@ impl Shared {
                 st.peer_shares.insert(k, share);
             }
 
-            let r2 = KeygenR2 {
+            r2_out.push(KeygenR2 {
                 ot_receiver_r: flatten_point_xy(&rmsg.r),
-            };
-            if let Err(e) = self.send_to(TYPE_R2, &r2, pid) {
+            });
+        }
+
+        // Echo every peer's commitments, then hand each peer its `R`.
+        let digests: VecMap<String, B64Bytes> = others
+            .iter()
+            .zip(&bcasts)
+            .map(|(pid, bc)| {
+                let raw = vss_bytes(&bc.vss_commitments);
+                (
+                    peer_key_str(pid),
+                    B64Bytes(commit_digest(ECHO_TAG, pid, &raw)),
+                )
+            })
+            .collect();
+        if let Err(e) = self.broadcast(TYPE_ECHO, &EchoMsg { digests }) {
+            return self.deliver(Err(e));
+        }
+        for (pid, r2) in others.iter().zip(&r2_out) {
+            if let Err(e) = self.send_to(TYPE_R2, r2, pid) {
                 return self.deliver(Err(e));
             }
         }
 
-        let me_arc = Arc::clone(self);
+        let me = Arc::clone(self);
+        let others_owned = others.to_vec();
+        let exp = JsonExpect::new(
+            TYPE_ECHO,
+            others.to_vec(),
+            Box::new(move |msgs| me.on_echo(&others_owned, msgs)),
+        );
+        self.params.broker().connect(TYPE_ECHO, Arc::new(exp));
+
+        let me = Arc::clone(self);
         let others_owned = others.to_vec();
         let exp = JsonExpect::new(
             TYPE_R2,
             others.to_vec(),
-            Box::new(move |msgs| me_arc.finalize(&others_owned, msgs)),
+            Box::new(move |msgs| me.on_r2(&others_owned, msgs)),
         );
         self.params.broker().connect(TYPE_R2, Arc::new(exp));
     }
@@ -651,5 +689,99 @@ mod tests {
         let hash = [0x42u8; 32];
         let sig = super::super::sign(&keys, &[0, 1], &hash, &mut SystemRng).expect("sign");
         assert!(!sig.r.is_empty() && !sig.s.is_empty());
+    }
+
+    /// Starts keygen over a [`BatchHub`] and flushes until every party has a
+    /// result, returning the results and the number of flushes it took.
+    fn run_batched(
+        ids: &[PartyId],
+        t: usize,
+        tamper: Option<&crate::tss::testhub::Tamper>,
+    ) -> (Vec<Result<Key, Error>>, usize) {
+        let hub = crate::tss::testhub::BatchHub::new(ids);
+        let parties: Vec<KeygenParty> = (0..ids.len())
+            .map(|i| {
+                KeygenParty::new(Parameters::new(ids.to_vec(), &ids[i], t, hub.broker(i))).unwrap()
+            })
+            .collect();
+        let mut results: Vec<Option<Result<Key, Error>>> = (0..ids.len()).map(|_| None).collect();
+        let mut flushes = 0;
+        while results.iter().any(Option::is_none) {
+            assert!(hub.flush(tamper) > 0, "stalled after {flushes} flushes");
+            flushes += 1;
+            for (r, p) in results.iter_mut().zip(&parties) {
+                if r.is_none() {
+                    *r = p.try_result();
+                }
+            }
+        }
+        (results.into_iter().map(Option::unwrap).collect(), flushes)
+    }
+
+    /// After round 1, the echo and the base-OT responses share a round: every
+    /// party has its key after two deliveries of everyone's messages.
+    #[test]
+    fn keygen_completes_in_two_rounds_after_start() {
+        for (n, t) in [(2, 1), (3, 1), (5, 2)] {
+            let (results, flushes) = run_batched(&party_ids(n), t, None);
+            assert_eq!(flushes, 2, "{t}-of-{n}");
+            for r in results {
+                r.expect("keygen succeeds").validate_basic().unwrap();
+            }
+        }
+    }
+
+    /// A dealer that shows party 2 a different (but self-consistent)
+    /// polynomial passes party 2's share check; only the echo can catch it.
+    /// The base-OT responses go out before the echo is verified, but no party
+    /// may finish with a key.
+    #[test]
+    fn equivocating_dealer_is_caught_by_the_echo() {
+        let ids = party_ids(3);
+        // Shift dealer 0's linear coefficient by G for party 2 only, and its
+        // share for party 2 by id(2) to match: f'(x) = f(x) + x.
+        let id2 = secp::scalar_from_be_reduce(&ids[2].key);
+        let tamper = move |from: usize, to: usize, msg: &mut Message| {
+            if from != 0 || to != 2 {
+                return;
+            }
+            if msg.typ == TYPE_R1BC {
+                let mut bc: KeygenR1Bcast = msg.decode().unwrap();
+                let mut vs = unflatten_point_xy(&bc.vss_commitments).unwrap();
+                vs[1] = vs[1].add(&secp::generator());
+                bc.vss_commitments = flatten_point_xy(&vs);
+                *msg = Message::encode(
+                    msg.format(),
+                    &msg.typ,
+                    &bc,
+                    msg.from.clone(),
+                    msg.to.clone(),
+                )
+                .unwrap();
+            } else if msg.typ == TYPE_R1UC {
+                let mut uc: KeygenR1Unicast = msg.decode().unwrap();
+                let share = secp::scalar_from_be_reduce(&uc.share.0).add(&id2);
+                uc.share = B64Bytes(secp::scalar_to_be_min(&share));
+                *msg = Message::encode(
+                    msg.format(),
+                    &msg.typ,
+                    &uc,
+                    msg.from.clone(),
+                    msg.to.clone(),
+                )
+                .unwrap();
+            }
+        };
+        let (results, _) = run_batched(&ids, 1, Some(&tamper));
+        for (i, r) in results.iter().enumerate() {
+            let err = r
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("party {i} produced a key"));
+            assert!(
+                matches!(err, Error::Tss(_)) || err.to_string().contains("echo"),
+                "party {i}: {err}"
+            );
+        }
     }
 }

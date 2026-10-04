@@ -127,6 +127,122 @@ impl MessageBroker for HubBroker {
     }
 }
 
+// --- batched hub: delivers messages one round-trip ("lap") at a time ---
+
+/// A hub that holds every outbound message until [`BatchHub::flush`], which
+/// delivers the whole batch; messages sent while handling it wait for the next
+/// flush. Counting flushes counts message rounds, as when parties pass one
+/// storage medium around.
+pub(crate) struct BatchHub {
+    brokers: Vec<Arc<BatchBroker>>,
+    outbox: Arc<Mutex<Vec<(usize, Message)>>>,
+}
+
+/// Rewrites a message in flight: `(sender index, recipient index, message)`.
+pub(crate) type Tamper = dyn Fn(usize, usize, &mut Message) + Send + Sync;
+
+impl BatchHub {
+    pub(crate) fn new(parties: &[PartyId]) -> Arc<BatchHub> {
+        let outbox = Arc::new(Mutex::new(Vec::new()));
+        let brokers = (0..parties.len())
+            .map(|i| {
+                Arc::new(BatchBroker {
+                    party_index: i,
+                    party_count: parties.len(),
+                    outbox: outbox.clone(),
+                    inner: Mutex::new(HubInner {
+                        handlers: HashMap::new(),
+                        pending: HashMap::new(),
+                    }),
+                })
+            })
+            .collect();
+        Arc::new(BatchHub { brokers, outbox })
+    }
+
+    pub(crate) fn broker(&self, i: usize) -> Arc<dyn MessageBroker + Send + Sync> {
+        self.brokers[i].clone()
+    }
+
+    /// Delivers everything queued so far, passing each message through
+    /// `tamper` first. Returns how many messages were delivered.
+    pub(crate) fn flush(&self, tamper: Option<&Tamper>) -> usize {
+        let batch = core::mem::take(&mut *self.outbox.lock().unwrap());
+        for (to, mut msg) in batch.iter().cloned() {
+            if let Some(t) = tamper {
+                let from = msg
+                    .from
+                    .as_ref()
+                    .map(|p| p.index as usize)
+                    .unwrap_or(usize::MAX);
+                t(from, to, &mut msg);
+            }
+            let _ = self.brokers[to].deliver_inbound(&msg);
+        }
+        batch.len()
+    }
+}
+
+pub(crate) struct BatchBroker {
+    party_index: usize,
+    party_count: usize,
+    outbox: Arc<Mutex<Vec<(usize, Message)>>>,
+    inner: Mutex<HubInner>,
+}
+
+impl BatchBroker {
+    fn deliver_inbound(&self, msg: &Message) -> super::BrokerResult {
+        let msg = &over_the_wire(msg);
+        let handler = {
+            let mut inner = self.inner.lock().unwrap();
+            match inner.handlers.get(&msg.typ) {
+                Some(h) => Some(h.clone()),
+                None => {
+                    inner
+                        .pending
+                        .entry(msg.typ.clone())
+                        .or_default()
+                        .push(msg.clone());
+                    None
+                }
+            }
+        };
+        match handler {
+            Some(h) => h.receive(msg),
+            None => Ok(()),
+        }
+    }
+}
+
+impl MessageReceiver for BatchBroker {
+    /// Queues an outbound message for the next flush.
+    fn receive(&self, msg: &Message) -> super::BrokerResult {
+        let mut out = self.outbox.lock().unwrap();
+        match &msg.to {
+            Some(to) => out.push((to.index as usize, msg.clone())),
+            None => {
+                for j in (0..self.party_count).filter(|&j| j != self.party_index) {
+                    out.push((j, msg.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl MessageBroker for BatchBroker {
+    fn connect(&self, typ: &str, dest: Arc<dyn MessageReceiver + Send + Sync>) {
+        let queued = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.handlers.insert(typ.to_string(), dest.clone());
+            inner.pending.remove(typ).unwrap_or_default()
+        };
+        for msg in queued {
+            let _ = dest.receive(&msg);
+        }
+    }
+}
+
 // --- key-routed hub for resharing (old + new committees share no index space) ---
 
 fn key_of(p: &PartyId) -> Vec<u8> {
