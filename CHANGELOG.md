@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.12...v0.3.0) - 2026-10-04
+## [0.2.13](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.12...v0.2.13) - 2026-10-04
 
 ### Other
 
