@@ -28,6 +28,7 @@ pub use signing::Signing;
 
 /// Errors raised by the `frostristretto255tss` protocols.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A [`Key`] or message failed an internal consistency check.
     Validation(String),

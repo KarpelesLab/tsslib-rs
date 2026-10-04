@@ -111,6 +111,7 @@ impl<W: std::io::Write> Write for IoWriter<W> {
 
 /// An encoding or decoding failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// The input ended in the middle of a value.
     UnexpectedEof,

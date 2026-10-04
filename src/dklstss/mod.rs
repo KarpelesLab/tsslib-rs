@@ -157,6 +157,7 @@ pub use signing_party::SigningParty;
 
 /// Errors raised by the `dklstss` protocols.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A value failed an internal consistency check.
     Validation(String),

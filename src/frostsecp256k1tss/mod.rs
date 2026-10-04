@@ -51,6 +51,7 @@ pub use signing::{SignOptions, Signing, TaprootTweak};
 
 /// Errors raised by the `frostsecp256k1tss` protocols.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A [`Key`] or message failed a consistency check.
     Validation(String),

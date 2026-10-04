@@ -63,6 +63,7 @@ pub use signing::Signing;
 
 /// Errors raised by the `frosttss` protocols.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A [`Key`] failed an internal consistency check.
     Validation(String),

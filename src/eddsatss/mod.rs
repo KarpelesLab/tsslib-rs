@@ -33,6 +33,7 @@ pub use signing::{SignatureData, SigningParty};
 
 /// Errors raised by the `eddsatss` protocol.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A value failed an internal consistency or proof check.
     Validation(String),

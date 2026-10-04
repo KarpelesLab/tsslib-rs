@@ -47,6 +47,7 @@ pub use signing_party::SigningParty44;
 
 /// Errors raised by the `mldsatss` protocol.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A value failed an internal consistency check.
     Validation(String),

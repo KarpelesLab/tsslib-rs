@@ -44,6 +44,7 @@ pub(crate) mod vss;
 
 /// Errors raised by the `ecdsatss` protocol.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A value failed an internal consistency or proof check.
     Validation(String),
