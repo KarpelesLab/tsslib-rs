@@ -6,6 +6,7 @@ use super::key::{Key, Signature};
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::{ole, ole_check};
 use crate::prelude::*;
+use crate::tss::PartyId;
 use purecrypto::rng::RngCore;
 
 /// Signs `hash` with the `t+1` parties named by `signer_idx`.
@@ -96,6 +97,10 @@ fn sign_core(
     let mut signers: Vec<&Key> = signer_idx.iter().map(|&i| &keys[i]).collect();
     signers.sort_unstable_by(|a, b| cmp_be(&a.party_ids[a.idx].key, &b.party_ids[b.idx].key));
     let sgn = signers.len();
+    let signer_ids: Vec<PartyId> = signers.iter().map(|k| k.party_ids[k.idx].clone()).collect();
+    for k in &signers {
+        k.require_pairs(&signer_ids)?;
+    }
 
     // Lagrange coefficients and effective shares sx_i = λ_i·x_i.
     let ids: Vec<Scalar> = signers

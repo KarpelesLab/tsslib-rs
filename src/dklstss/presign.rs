@@ -15,6 +15,7 @@ use super::signing::{
     cmp_be, ecdsa_verify, hash_to_scalar, is_high_s, lagrange_coefficient, make_sid, pad32,
 };
 use crate::prelude::*;
+use crate::tss::PartyId;
 use crate::tss::hashing::sha512_256i_tagged;
 use core::sync::atomic::{AtomicBool, Ordering};
 use purecrypto::rng::RngCore;
@@ -82,6 +83,10 @@ pub fn presign(
     let mut signers: Vec<&Key> = signer_idx.iter().map(|&i| &keys[i]).collect();
     signers.sort_unstable_by(|a, b| cmp_be(&a.party_ids[a.idx].key, &b.party_ids[b.idx].key));
     let sgn = signers.len();
+    let signer_ids: Vec<PartyId> = signers.iter().map(|k| k.party_ids[k.idx].clone()).collect();
+    for k in &signers {
+        k.require_pairs(&signer_ids)?;
+    }
 
     // Lagrange coefficients and effective shares sx_i = λ_i·x_i.
     let ids: Vec<Scalar> = signers

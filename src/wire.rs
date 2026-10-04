@@ -751,6 +751,28 @@ pub(crate) fn write_key<T: Serialize + ?Sized, W: Write>(
     to_writer(value, w)
 }
 
+/// Counts the bytes written to it, discarding them.
+struct Counter(usize);
+
+impl Write for Counter {
+    fn write_all(&mut self, buf: &[u8]) -> Result<(), Error> {
+        self.0 += buf.len();
+        Ok(())
+    }
+}
+
+/// [`write_key`] into a new buffer allocated at its exact final size. Keys
+/// hold secrets, and a buffer grown by doubling would leave partial copies of
+/// them in freed memory.
+pub(crate) fn key_to_vec<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
+    let mut counter = Counter(0);
+    write_key(value, &mut counter)?;
+    let mut out = Vec::with_capacity(counter.0);
+    write_key(value, &mut out)?;
+    debug_assert_eq!(out.len(), counter.0);
+    Ok(out)
+}
+
 /// Reads a key's wire struct written by [`write_key`].
 pub(crate) fn read_key<T: DeserializeOwned, R: Read>(r: &mut R) -> Result<T, Error> {
     let mut v = [0u8; 1];
@@ -789,9 +811,8 @@ macro_rules! key_codec {
             /// The key in the compact binary encoding (see
             /// [`Self::write_to`]).
             pub fn to_bytes(&self) -> Result<Vec<u8>, $err> {
-                let mut out = Vec::new();
-                self.write_to(&mut out)?;
-                Ok(out)
+                let $k = self;
+                Ok(crate::wire::key_to_vec(&$to?)?)
             }
 
             /// Parses a binary-encoded key that spans all of `bytes`.

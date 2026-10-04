@@ -77,6 +77,87 @@ impl Key {
         Ok(())
     }
 
+    /// Position of `peer` in [`Self::party_ids`], matched by party key.
+    fn position_of(&self, peer: &PartyId) -> Option<usize> {
+        self.party_ids
+            .iter()
+            .position(|p| p.cmp_key(peer) == core::cmp::Ordering::Equal)
+    }
+
+    /// The pairwise OT-extension state shared with `peer`, if loaded.
+    pub fn pair(&self, peer: &PartyId) -> Option<&PairOTState> {
+        self.ot.get(self.position_of(peer)?)?.as_ref()
+    }
+
+    /// Installs the pairwise OT-extension state shared with `peer` (from
+    /// [`PairOTState::read_from`] or a
+    /// `PairSetupParty` run), returning the state it
+    /// replaces. Fails when `peer` is not a member of this key or is this
+    /// party itself.
+    pub fn set_pair(
+        &mut self,
+        peer: &PartyId,
+        state: PairOTState,
+    ) -> Result<Option<PairOTState>, super::Error> {
+        let pos = self.peer_position(peer)?;
+        Ok(self.ot[pos].replace(state))
+    }
+
+    /// Removes the pairwise OT-extension state shared with `peer`, returning
+    /// it. The key stays usable for signing with every peer whose state is
+    /// still loaded.
+    pub fn remove_pair(&mut self, peer: &PartyId) -> Option<PairOTState> {
+        let pos = self.position_of(peer)?;
+        self.ot.get_mut(pos)?.take()
+    }
+
+    /// The members of `signers` (other than this party) whose pairwise state
+    /// is not loaded. Signing with `signers` needs this to be empty; pairs
+    /// with parties outside `signers` are never needed. Parties that are not
+    /// members of this key are ignored here.
+    pub fn missing_pairs(&self, signers: &[PartyId]) -> Vec<PartyId> {
+        signers
+            .iter()
+            .filter(|p| match self.position_of(p) {
+                Some(pos) => pos != self.idx && self.ot.get(pos).is_none_or(|o| o.is_none()),
+                None => false,
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Checks that this key holds the pairwise state for every other member
+    /// of `signers` (all of which must be members), failing with [`Error::MissingPairs`](super::Error::MissingPairs)
+    /// naming the peers it lacks.
+    pub(crate) fn require_pairs(&self, signers: &[PartyId]) -> Result<(), super::Error> {
+        if let Some(p) = signers.iter().find(|p| self.position_of(p).is_none()) {
+            return Err(super::Error::Validation(format!(
+                "signer {p} is not a member of this key"
+            )));
+        }
+        let peers = self.missing_pairs(signers);
+        if peers.is_empty() {
+            return Ok(());
+        }
+        Err(super::Error::MissingPairs {
+            party: self.party_ids[self.idx].clone(),
+            peers,
+        })
+    }
+
+    /// Position of a member other than this party, or a validation error.
+    fn peer_position(&self, peer: &PartyId) -> Result<usize, super::Error> {
+        match self.position_of(peer) {
+            Some(pos) if pos == self.idx => Err(super::Error::Validation(
+                "a party has no pairwise state with itself".into(),
+            )),
+            Some(pos) if pos < self.ot.len() => Ok(pos),
+            _ => Err(super::Error::Validation(format!(
+                "{peer} is not a member of this key"
+            ))),
+        }
+    }
+
     /// Overwrites the secret share with zero and scrubs every per-pair OT
     /// state (PRG seeds and correlation Δ), rendering the key unusable for
     /// signing or resharing. The chain code (public, but consistent with the

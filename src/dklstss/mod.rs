@@ -159,6 +159,15 @@ pub enum Error {
     Serde(crate::tss::CodecError),
     /// A protocol-round error (carries victim / culprits).
     Tss(Box<crate::tss::TssError>),
+    /// Signing needs the pairwise OT state between every two signers, and
+    /// `party`'s key lacks it for `peers`. Run a
+    /// `PairSetupParty` (or `setup_pair`) with each of them, then retry.
+    MissingPairs {
+        /// The party whose key lacks the state.
+        party: crate::tss::PartyId,
+        /// The signers it has no pairwise state with.
+        peers: Vec<crate::tss::PartyId>,
+    },
 }
 
 impl core::fmt::Display for Error {
@@ -167,6 +176,13 @@ impl core::fmt::Display for Error {
             Error::Validation(m) => write!(f, "dklstss: {m}"),
             Error::Serde(e) => write!(f, "dklstss: {e}"),
             Error::Tss(e) => write!(f, "{e}"),
+            Error::MissingPairs { party, peers } => {
+                write!(f, "dklstss: {party} has no pairwise OT state with")?;
+                for (i, p) in peers.iter().enumerate() {
+                    write!(f, "{}{p}", if i == 0 { " " } else { ", " })?;
+                }
+                Ok(())
+            }
         }
     }
 }

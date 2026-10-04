@@ -99,6 +99,7 @@ impl SigningParty {
             )));
         }
         validate_sorted_subset(&subset)?;
+        key.require_pairs(&subset)?;
 
         let me = params.party_id().clone();
         let my_pos = subset

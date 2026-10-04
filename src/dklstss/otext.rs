@@ -71,6 +71,16 @@ impl ExtSender {
         self.delta
     }
 
+    /// Δ (sensitive), borrowed so encoders need not copy it.
+    pub(crate) fn delta_ref(&self) -> &[u8; DELTA_BYTES] {
+        &self.delta
+    }
+
+    /// The κ PRG seeds (sensitive), borrowed so encoders need not copy them.
+    pub(crate) fn seeds(&self) -> &[[u8; SEED_LEN]] {
+        &self.seeds
+    }
+
     /// Serializes to `delta || seeds` (`DELTA_BYTES + KAPPA·SEED_LEN` bytes).
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(DELTA_BYTES + KAPPA * SEED_LEN);
@@ -191,6 +201,11 @@ impl ExtReceiver {
             out.extend_from_slice(s);
         }
         out
+    }
+
+    /// The κ seed pairs (sensitive), borrowed so encoders need not copy them.
+    pub(crate) fn seeds(&self) -> (&[[u8; SEED_LEN]], &[[u8; SEED_LEN]]) {
+        (&self.seeds0, &self.seeds1)
     }
 
     /// Inverse of [`to_bytes`](ExtReceiver::to_bytes).
@@ -406,6 +421,20 @@ fn popcount_byte(b: u8) -> u8 {
 }
 
 /// Splits a flat buffer into `KAPPA` 32-byte seeds.
+// Long-lived key material: wipe it whenever a state (or a clone of one) is
+// dropped, not only on an explicit `zeroize`.
+impl Drop for ExtSender {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl Drop for ExtReceiver {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 fn chunk_seeds(b: &[u8]) -> Vec<[u8; SEED_LEN]> {
     b.as_chunks::<SEED_LEN>().0.to_vec()
 }
