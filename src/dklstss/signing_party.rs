@@ -6,10 +6,16 @@
 //! own [`SigningParty`] against the same key, message hash, and committee; the
 //! parties converge on one standard ECDSA signature.
 //!
-//! Rounds: (1) broadcast `K_i = k_i·G`; (1-echo) cross-check every `K_j` for
-//! equivocation; (2) per-peer Alice ΠMul envelopes for `k·ρ` and `x·ρ`;
-//! (3) per-peer Bob ΠMul responses; (4) broadcast `(φ_i, ŝ_i)`; (4-echo)
-//! cross-check the reveals; finalize aggregates and emits `s = ŝ·φ⁻¹`.
+//! Rounds: (1) broadcast `K_i = k_i·G`; (2) cross-check every `K_j` for
+//! equivocation (echo) and, in the same round, send per-peer Alice ΠMul
+//! envelopes for `k·ρ` and `x·ρ`; (3) once every echo has verified, per-peer
+//! Bob ΠMul responses; (4) broadcast `(φ_i, ŝ_i)`; (5) cross-check the
+//! reveals; finalize aggregates and emits `s = ŝ·φ⁻¹`. Five message rounds.
+//!
+//! The Alice envelopes can share the echo's round: they depend only on the
+//! received `K_j` (mixed into the session id) and hide this party's inputs,
+//! so a session that then fails its echo leaks nothing, and its nonce is never
+//! reused. Bob, whose responses use his own inputs, waits for the echo.
 
 use super::echo::{EchoMsg, commit_digest, other_parties, peer_key_str, point_from_be_xy, strip};
 use super::key::{Key, Signature};
@@ -74,6 +80,12 @@ struct State {
     phi_i: Scalar,
     shat_i: Scalar,
     r4msgs: VecMap<String, SignR4>,
+    /// Every peer's round-1 echo matched our view of the `K_j`.
+    echo_ok: bool,
+    /// The peers' round-2 Alice envelopes, once all have arrived.
+    r2_msgs: Option<Vec<Message>>,
+    /// Set when round 3 is claimed, so it runs once.
+    round3_started: bool,
 }
 
 impl SigningParty {
@@ -147,6 +159,9 @@ impl SigningParty {
                 phi_i: Scalar::ZERO,
                 shat_i: Scalar::ZERO,
                 r4msgs: VecMap::new(),
+                echo_ok: false,
+                r2_msgs: None,
+                round3_started: false,
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -256,7 +271,11 @@ impl Shared {
         if let Err(e) = self.broadcast(TYPE_R1ECHO, &EchoMsg { digests }) {
             return self.deliver(Err(e));
         }
-        let _ = me;
+        // Round 2 travels with the echo (see `send_round2`).
+        if let Err(e) = self.send_round2(&me) {
+            return self.deliver(Err(e));
+        }
+
         let me = Arc::clone(self);
         let others_owned = others.to_vec();
         let exp = JsonExpect::new(
@@ -265,6 +284,15 @@ impl Shared {
             Box::new(move |msgs| me.on_r1_echo(&others_owned, msgs)),
         );
         self.params.broker().connect(TYPE_R1ECHO, Arc::new(exp));
+
+        let me = Arc::clone(self);
+        let others_owned = others.to_vec();
+        let exp = JsonExpect::new(
+            TYPE_R2,
+            self.other_subset.clone(),
+            Box::new(move |msgs| me.on_r2_arrived(&others_owned, msgs)),
+        );
+        self.params.broker().connect(TYPE_R2, Arc::new(exp));
     }
 
     fn on_r1_echo(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
@@ -298,12 +326,41 @@ impl Shared {
             return self.deliver(Err(e));
         }
 
+        self.state.lock().echo_ok = true;
+        self.try_round3(others);
+    }
+
+    fn on_r2_arrived(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
+        self.state.lock().r2_msgs = Some(msgs);
+        self.try_round3(others);
+    }
+
+    /// Runs round 3 once the round-1 echoes have verified and every round-2
+    /// envelope has arrived: Bob only answers after the `K_j` are confirmed.
+    fn try_round3(self: &Arc<Self>, others: &[PartyId]) {
+        let msgs = {
+            let mut st = self.state.lock();
+            if st.round3_started || !st.echo_ok || st.r2_msgs.is_none() {
+                return;
+            }
+            st.round3_started = true;
+            st.r2_msgs.take().expect("checked above")
+        };
+        self.on_r2(others, msgs);
+    }
+
+    /// Round 2: for each peer, play Alice in the two ΠMul instances. Sent in
+    /// the same round as the round-1 echo, before the echoes are verified:
+    /// the envelopes depend only on the received `K_j` (mixed into the ssid)
+    /// and hide this party's inputs, so a session that then fails its echo
+    /// leaks nothing, and its nonce is never reused.
+    fn send_round2(self: &Arc<Self>, me: &PartyId) -> Result<(), Error> {
         // Mix every signer's K_i into the effective ssid for rounds 2+.
         {
             let mut st = self.state.lock();
             let peer_k = st.peer_k.clone();
             let base = st.ssid.clone();
-            st.ssid = mix_round_one_ssid(&base, &me, &st.big_k_i, others, &peer_k);
+            st.ssid = mix_round_one_ssid(&base, me, &st.big_k_i, &self.other_subset, &peer_k);
         }
 
         // For each peer, play Alice in two ΠMul instances: (k_i, ρ_j), (sx_i, ρ_j).
@@ -312,9 +369,7 @@ impl Shared {
             let alice_pair = match idx.and_then(|i| self.key.ot[i].as_ref()) {
                 Some(p) => &p.as_alice,
                 None => {
-                    return self.deliver(Err(Error::Validation(format!(
-                        "missing OT state with {pj}"
-                    ))));
+                    return Err(Error::Validation(format!("missing OT state with {pj}")));
                 }
             };
             let (ssid, k_i) = {
@@ -324,14 +379,8 @@ impl Shared {
             let sid_k = sign_mul_sid(&ssid, "kxrho", &me.key, &pj.key);
             let sid_x = sign_mul_sid(&ssid, "xxrho", &me.key, &pj.key);
 
-            let (msg_k, st_k) = match ole::alice_step1(&sid_k, alice_pair, &k_i) {
-                Ok(v) => v,
-                Err(e) => return self.deliver(Err(e)),
-            };
-            let (msg_x, st_x) = match ole::alice_step1(&sid_x, alice_pair, &self.sx_mine) {
-                Ok(v) => v,
-                Err(e) => return self.deliver(Err(e)),
-            };
+            let (msg_k, st_k) = ole::alice_step1(&sid_k, alice_pair, &k_i)?;
+            let (msg_x, st_x) = ole::alice_step1(&sid_x, alice_pair, &self.sx_mine)?;
             {
                 let mut st = self.state.lock();
                 st.alice_k.insert(peer_key_str(pj), st_k);
@@ -341,19 +390,9 @@ impl Shared {
                 alice_k: EncExtendMsg::from_msg(&msg_k),
                 alice_x: EncExtendMsg::from_msg(&msg_x),
             };
-            if let Err(e) = self.send_to(TYPE_R2, &r2, pj) {
-                return self.deliver(Err(e));
-            }
+            self.send_to(TYPE_R2, &r2, pj)?;
         }
-
-        let me_arc = Arc::clone(self);
-        let others_owned = others.to_vec();
-        let exp = JsonExpect::new(
-            TYPE_R2,
-            self.other_subset.clone(),
-            Box::new(move |msgs| me_arc.on_r2(&others_owned, msgs)),
-        );
-        self.params.broker().connect(TYPE_R2, Arc::new(exp));
+        Ok(())
     }
 
     fn on_r2(self: &Arc<Self>, others: &[PartyId], msgs: Vec<Message>) {
@@ -954,6 +993,101 @@ mod tests {
         for sig in &sigs[1..] {
             assert_eq!(sig.r, sigs[0].r);
             assert_eq!(sig.s, sigs[0].s);
+        }
+    }
+
+    /// Signs over a [`BatchHub`](crate::tss::testhub::BatchHub) (one delivery
+    /// lap per flush) and returns each signer's result and the lap count.
+    fn run_batched_signing(
+        keys: &[Key],
+        pick: &[usize],
+        hash: &[u8],
+        tamper: Option<&crate::tss::testhub::Tamper>,
+    ) -> (Vec<Result<Signature, Error>>, usize) {
+        let subset = PartyId::sort(
+            pick.iter()
+                .map(|&i| keys[i].party_ids[keys[i].idx].clone())
+                .collect(),
+            0,
+        );
+        let hub = crate::tss::testhub::BatchHub::new(&subset);
+        let signers: Vec<SigningParty> = subset
+            .iter()
+            .enumerate()
+            .map(|(pos, sid)| {
+                let key = keys
+                    .iter()
+                    .find(|k| k.party_ids[k.idx].cmp_key(sid) == core::cmp::Ordering::Equal)
+                    .unwrap()
+                    .clone();
+                let params = Parameters::new(subset.clone(), sid, keys[0].t, hub.broker(pos));
+                SigningParty::new(params, key, hash.to_vec(), subset.clone(), None).unwrap()
+            })
+            .collect();
+        let mut out: Vec<Option<Result<Signature, Error>>> = signers.iter().map(|_| None).collect();
+        let mut laps = 0;
+        while out.iter().any(Option::is_none) {
+            assert!(hub.flush(tamper) > 0, "stalled after {laps} laps");
+            laps += 1;
+            for (o, s) in out.iter_mut().zip(&signers) {
+                if o.is_none() {
+                    *o = s.try_result();
+                }
+            }
+        }
+        (out.into_iter().map(Option::unwrap).collect(), laps)
+    }
+
+    /// Round 2 travels with the round-1 echo: signing completes in five
+    /// delivery laps (`K`, echo + Alice, Bob, reveal, reveal echo).
+    #[test]
+    fn signing_completes_in_five_rounds() {
+        let keys = run_keygen(&party_ids(3), 1);
+        let hash = purecrypto::hash::sha256(b"batched sign");
+        let (results, laps) = run_batched_signing(&keys, &[0, 2], &hash, None);
+        assert_eq!(laps, 5);
+        let e = hash_to_scalar(&hash);
+        for r in results {
+            let sig = r.expect("signing succeeds");
+            let (r, s) = (
+                secp::scalar_from_be_reduce(&sig.r),
+                secp::scalar_from_be_reduce(&sig.s),
+            );
+            assert!(ecdsa_verify(&keys[0].ecdsa_pub, &e, &r, &s));
+        }
+    }
+
+    /// A signer that shows one peer a different `K` is caught by the round-1
+    /// echo. The Alice envelopes went out before the echo was verified, but no
+    /// signer may produce a signature.
+    #[test]
+    fn equivocated_nonce_commitment_aborts_every_signer() {
+        let keys = run_keygen(&party_ids(3), 2);
+        let hash = purecrypto::hash::sha256(b"equivocation");
+        let tamper = |from: usize, to: usize, msg: &mut Message| {
+            if from == 0 && to == 2 && msg.typ == TYPE_R1 {
+                let mut r1: SignR1 = msg.decode().unwrap();
+                let k = point_from_be_xy(&r1.k_i_x.0, &r1.k_i_y.0).unwrap();
+                let (x, y) = secp::affine_be(&k.add(&secp::generator()));
+                r1.k_i_x = B64Bytes(x);
+                r1.k_i_y = B64Bytes(y);
+                *msg = Message::encode(
+                    msg.format(),
+                    &msg.typ,
+                    &r1,
+                    msg.from.clone(),
+                    msg.to.clone(),
+                )
+                .unwrap();
+            }
+        };
+        let (results, _) = run_batched_signing(&keys, &[0, 1, 2], &hash, Some(&tamper));
+        for (i, r) in results.iter().enumerate() {
+            let err = r
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("signer {i} produced a signature"));
+            assert!(err.to_string().contains("echo"), "signer {i}: {err}");
         }
     }
 }
