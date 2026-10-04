@@ -10,6 +10,8 @@
 //! - (t+1)-party threshold signing producing standard ECDSA signatures
 //! - Pre-signing as a separate offline phase with single-use online sign
 //! - Proactive share + OT-extension refresh
+//! - Per-pair OT-extension re-setup ([`PairSetupParty`]), so a key's pairwise
+//!   state can be stored apart from its core and rebuilt one pair at a time
 //! - Resharing to a new committee preserving the public key
 //! - HD wallet derivation (BIP32 non-hardened) at sign time
 //! - Threshold key images ([`KeyImageParty`]) — a distributed PRF on the shared
@@ -120,6 +122,7 @@ mod keyimage_party;
 pub(crate) mod ole;
 pub(crate) mod ole_check;
 pub(crate) mod otext;
+mod pair_setup_party;
 mod presign;
 mod refresh_party;
 mod resharing;
@@ -139,6 +142,7 @@ pub use key::{Key, PairOTState, Signature};
 pub use keygen::{derive_chain_code, keygen};
 pub use keygen_party::KeygenParty;
 pub use keyimage_party::{KeyImageParty, KeyImageSecret, hash_to_point};
+pub use pair_setup_party::PairSetupParty;
 pub use presign::{
     InMemoryPresignStore, PresignOutput, UsedPresignStore, presign, sign_with_presign,
     sign_with_presign_durable,
@@ -146,6 +150,7 @@ pub use presign::{
 pub use refresh_party::RefreshParty;
 pub use resharing::{refresh, reshare};
 pub use resharing_party::ResharingParty;
+pub use setup::setup_pair;
 pub use signing::{sign, sign_checked, sign_checked_with_tweak, sign_with_tweak};
 pub use signing_checked_party::CheckedSigningParty;
 pub use signing_party::SigningParty;
@@ -161,7 +166,7 @@ pub enum Error {
     Tss(Box<crate::tss::TssError>),
     /// Signing needs the pairwise OT state between every two signers, and
     /// `party`'s key lacks it for `peers`. Run a
-    /// `PairSetupParty` (or `setup_pair`) with each of them, then retry.
+    /// [`PairSetupParty`] (or [`setup_pair`]) with each of them, then retry.
     MissingPairs {
         /// The party whose key lacks the state.
         party: crate::tss::PartyId,

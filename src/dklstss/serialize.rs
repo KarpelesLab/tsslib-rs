@@ -47,7 +47,7 @@ impl Key {
     /// The core is an ordinary key encoding with no pairs loaded, so
     /// [`Key::read_from`] / [`Key::from_bytes`] read it back; restore the
     /// pairs with [`Key::set_pair`], or rebuild a lost one with a
-    /// `PairSetupParty`. Like [`Key::write_to`], the
+    /// [`PairSetupParty`](super::PairSetupParty). Like [`Key::write_to`], the
     /// output holds the secret share in the clear.
     pub fn write_core_to<W: crate::wire::Write>(&self, w: &mut W) -> Result<(), Error> {
         crate::wire::write_key(&self.to_wire(false)?, w)?;

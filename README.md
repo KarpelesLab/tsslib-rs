@@ -72,6 +72,14 @@ the same format as earlier releases) or in the compact **binary** format of
 `json` trims roughly 20–30% of code size on bare-metal builds.
 
 - Keys: `to_json`/`from_json`, or `write_to`/`read_from` (`to_bytes`/`from_bytes`).
+- A `dklstss::Key` is mostly pairwise OT state (~12.8 KB binary per other
+  member). `write_core_to` writes the rest (share, public data, parties: a few
+  hundred bytes), and `PairOTState::write_to` writes each pair, so devices can
+  keep the core and store the pairs elsewhere (`Key::set_pair` loads one).
+  Signing needs only the pairs among the signers and fails with
+  `Error::MissingPairs` naming any that are missing. A lost pair is rebuilt by
+  its two members alone with `PairSetupParty` (a tsslib-rs-only session; shares
+  and other pairs are unchanged).
 - Messages: each session's encoding is fixed by
   `Parameters::with_wire_format(WireFormat::Binary)` (all parties must agree);
   the broker moves `tss::Message` envelopes with `to_json`/`from_json` or
@@ -102,7 +110,7 @@ src/
   frostristretto255tss/    FROST(ristretto255)       keygen · sign · reshare
   frostsecp256k1tss/       FROST(secp256k1) Taproot  keygen · BIP340/341 sign · reshare · BIP32 · import
   mldsatss/                Threshold ML-DSA-44       dealer + DKG keygen · sync/broker sign (+ hyperball)
-  dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh · presign
+  dklstss/                 Threshold ECDSA (DKLs23)  sync + broker keygen/sign/reshare/refresh/pair-setup · presign
   ecdsatss/                Threshold ECDSA (GG18)    broker keygen/sign/reshare · import · legacy save format
   eddsatss/                Threshold EdDSA (GG18)    broker keygen/sign/reshare · import · standard Ed25519 out
 ```

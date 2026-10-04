@@ -1,8 +1,10 @@
 //! In-process pairwise OT-extension setup for the synchronous DKLs API.
 
+use super::Error;
 use super::baseot;
-use super::key::PairOTState;
+use super::key::{Key, PairOTState};
 use super::otext::{self, ExtReceiver, ExtSender};
+use super::secp;
 use crate::prelude::*;
 use purecrypto::rng::RngCore;
 
@@ -66,4 +68,50 @@ fn encode_pair(i: usize, j: usize, dir: u8) -> [u8; 9] {
     let ib = i.to_be_bytes();
     let jb = j.to_be_bytes();
     [ib[0], ib[1], ib[2], ib[3], jb[0], jb[1], jb[2], jb[3], dir]
+}
+
+/// Rebuilds the pairwise OT-extension state between two members of the same
+/// key in process, replacing what each holds for the other; shares and every
+/// other pair are unchanged. The synchronous counterpart to
+/// [`PairSetupParty`](super::PairSetupParty), mainly for tests.
+pub fn setup_pair(a: &mut Key, b: &mut Key, rng: &mut impl RngCore) -> Result<(), Error> {
+    a.validate_basic()?;
+    b.validate_basic()?;
+    let same_key = secp::point_eq(&a.ecdsa_pub, &b.ecdsa_pub)
+        && a.party_ids.len() == b.party_ids.len()
+        && (a.party_ids.iter().zip(&b.party_ids))
+            .all(|(x, y)| x.cmp_key(y) == core::cmp::Ordering::Equal);
+    if !same_key {
+        return Err(Error::Validation(
+            "setup_pair needs two shares of the same key".into(),
+        ));
+    }
+    if a.idx == b.idx {
+        return Err(Error::Validation(
+            "setup_pair needs two different parties".into(),
+        ));
+    }
+    let (i, j) = (a.idx, b.idx);
+    let mut nonce = [0u8; 16];
+    rng.fill_bytes(&mut nonce);
+    let mut sid = b"DKLS23-pairsetup-sync-v1-".to_vec();
+    sid.extend_from_slice(&nonce);
+
+    // Direction A: a = Alice (ExtReceiver), b = Bob (ExtSender); B the reverse.
+    let mut sid_a = sid.clone();
+    sid_a.extend_from_slice(&encode_pair(i, j, b'A'));
+    let (rcv_a, snd_a) = run_base_ot_pair(&sid_a, rng);
+    let mut sid_b = sid;
+    sid_b.extend_from_slice(&encode_pair(i, j, b'B'));
+    let (rcv_b, snd_b) = run_base_ot_pair(&sid_b, rng);
+
+    a.ot[j] = Some(PairOTState {
+        as_alice: rcv_a,
+        as_bob: snd_b,
+    });
+    b.ot[i] = Some(PairOTState {
+        as_alice: rcv_b,
+        as_bob: snd_a,
+    });
+    Ok(())
 }

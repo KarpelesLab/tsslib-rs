@@ -91,7 +91,7 @@ impl Key {
 
     /// Installs the pairwise OT-extension state shared with `peer` (from
     /// [`PairOTState::read_from`] or a
-    /// `PairSetupParty` run), returning the state it
+    /// [`PairSetupParty`](super::PairSetupParty) run), returning the state it
     /// replaces. Fails when `peer` is not a member of this key or is this
     /// party itself.
     pub fn set_pair(
