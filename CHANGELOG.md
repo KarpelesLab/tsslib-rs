@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.14](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.13...v0.2.14) - 2026-10-04
+
+### Other
+
+- *(dklstss)* send signing round 2 with the round-1 echo (one round fewer)
+- *(dklstss)* send keygen base-OT responses with the echo (one round fewer)
+
 ## [0.2.13](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.12...v0.2.13) - 2026-10-04
 
 ### Other
