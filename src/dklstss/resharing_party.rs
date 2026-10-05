@@ -21,7 +21,7 @@ use super::echo::{
 use super::key::{Key, PairOTState};
 use super::keygen::derive_chain_code;
 use super::otext::{self, ExtReceiver, ExtSender};
-use super::schnorr::ZkProof;
+use super::schnorr::{ConstantTermPok, ZkProof};
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::signing::lagrange_coefficient;
 use super::vss;
@@ -43,6 +43,7 @@ const TYPE_R1UC: &str = "dkls:reshare:r1uc";
 const TYPE_ECHO: &str = "dkls:reshare:echo";
 const TYPE_R2: &str = "dkls:reshare:r2";
 const TYPE_R3: &str = "dkls:reshare:r3";
+const POK_TAG: &str = "DKLS23-reshare-v0-pok-v1";
 const ECHO_TAG: &str = "DKLS23-echo-reshare-v1";
 const ECHO_SOURCE: &str = "dklstss-reshare";
 
@@ -256,8 +257,21 @@ impl Shared {
             st.own_vs = vs.clone();
         }
 
+        let flat = flatten_point_xy(&vs);
+        let (pok_ax, pok_ay, pok_t) = ConstantTermPok::prove(
+            POK_TAG,
+            &self.ssid,
+            &self.params.party_id().key,
+            &scaled,
+            &vs,
+            &vss_bytes(&flat),
+            &mut rng,
+        );
         let bcast = ReshareR1Bcast {
-            vss_commitments: flatten_point_xy(&vs),
+            vss_commitments: flat,
+            v0_pok_alpha_x: B64Bytes(pok_ax),
+            v0_pok_alpha_y: B64Bytes(pok_ay),
+            v0_pok_t: B64Bytes(pok_t),
         };
         self.broadcast(TYPE_R1BC, &bcast)?;
         // A broadcast is not looped back to its sender, but a hybrid (OLD+NEW)
@@ -416,6 +430,20 @@ impl Shared {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e)),
             };
+            if !ConstantTermPok::verify(
+                POK_TAG,
+                &self.ssid,
+                &pid.key,
+                &vsj,
+                &vss_bytes(&bc.vss_commitments),
+                &bc.v0_pok_alpha_x.0,
+                &bc.v0_pok_alpha_y.0,
+                &bc.v0_pok_t.0,
+            ) {
+                return self.deliver(Err(Error::Validation(format!(
+                    "party {pid} proof of knowledge of its constant term failed"
+                ))));
+            }
             if !is_canonical_scalar(&uc.share.0) {
                 return self.deliver(Err(Error::Validation(format!(
                     "party {pid} sent non-canonical reshare-share (>= n)"
@@ -657,6 +685,13 @@ impl Shared {
 struct ReshareR1Bcast {
     #[serde(rename = "vss_commitments")]
     vss_commitments: Vec<B64Bytes>,
+    /// Proof of knowledge of the dealer's constant term `λ_i·x_i`.
+    #[serde(rename = "v0_pok_alpha_x")]
+    v0_pok_alpha_x: B64Bytes,
+    #[serde(rename = "v0_pok_alpha_y")]
+    v0_pok_alpha_y: B64Bytes,
+    #[serde(rename = "v0_pok_t")]
+    v0_pok_t: B64Bytes,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

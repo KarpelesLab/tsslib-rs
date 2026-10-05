@@ -25,7 +25,7 @@ use super::echo::{
 use super::key::{Key, PairOTState};
 use super::keygen::derive_chain_code;
 use super::otext::{self, ExtReceiver, ExtSender};
-use super::schnorr::ZkProof;
+use super::schnorr::{ConstantTermPok, ZkProof};
 use super::secp::{self, ProjectivePoint, Scalar};
 use super::vss;
 use crate::prelude::*;
@@ -46,6 +46,7 @@ const TYPE_ECHO: &str = "dkls:keygen:echo";
 const TYPE_R2: &str = "dkls:keygen:r2";
 const ECHO_TAG: &str = "DKLS23-echo-keygen-v1";
 const ECHO_SOURCE: &str = "dklstss-keygen";
+const POK_TAG: &str = "DKLS23-keygen-v0-pok-v1";
 
 /// A running DKLs23 distributed key-generation session. Construct with
 /// [`KeygenParty::new`]; retrieve the resulting [`Key`] with [`KeygenParty::wait`].
@@ -160,9 +161,23 @@ impl Shared {
 
         let others = other_parties(&parties, &me);
 
-        // BROADCAST: VSS commitments — identical bytes to every recipient.
+        // BROADCAST: VSS commitments — identical bytes to every recipient —
+        // with a proof of knowledge of the constant term.
+        let flat = flatten_point_xy(&vs);
+        let (pok_ax, pok_ay, pok_t) = ConstantTermPok::prove(
+            POK_TAG,
+            &self.ssid,
+            &me.key,
+            &u,
+            &vs,
+            &vss_bytes(&flat),
+            &mut rng,
+        );
         let bcast = KeygenR1Bcast {
-            vss_commitments: flatten_point_xy(&vs),
+            vss_commitments: flat,
+            v0_pok_alpha_x: B64Bytes(pok_ax),
+            v0_pok_alpha_y: B64Bytes(pok_ay),
+            v0_pok_t: B64Bytes(pok_t),
         };
         self.broadcast(TYPE_R1BC, &bcast)?;
 
@@ -331,6 +346,20 @@ impl Shared {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e)),
             };
+            if !ConstantTermPok::verify(
+                POK_TAG,
+                &self.ssid,
+                &pid.key,
+                &vsj,
+                &vss_bytes(&bc.vss_commitments),
+                &bc.v0_pok_alpha_x.0,
+                &bc.v0_pok_alpha_y.0,
+                &bc.v0_pok_t.0,
+            ) {
+                return self.deliver(Err(Error::Validation(format!(
+                    "party {pid} proof of knowledge of its constant term failed"
+                ))));
+            }
 
             // Reject non-canonical (>= n) shares: VSS.verify reduces mod n, so a
             // dealer shipping `share + k·n` would still verify while hashing to a
@@ -567,6 +596,13 @@ impl Shared {
 struct KeygenR1Bcast {
     #[serde(rename = "vss_commitments")]
     vss_commitments: Vec<B64Bytes>,
+    /// Proof of knowledge of the dealer's constant term `a_0` (`V[0] = a_0·G`).
+    #[serde(rename = "v0_pok_alpha_x")]
+    v0_pok_alpha_x: B64Bytes,
+    #[serde(rename = "v0_pok_alpha_y")]
+    v0_pok_alpha_y: B64Bytes,
+    #[serde(rename = "v0_pok_t")]
+    v0_pok_t: B64Bytes,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -595,9 +631,13 @@ struct KeygenR2 {
 
 /// Session id binding the protocol tag, threshold, and sorted party set.
 fn keygen_session(params: &Parameters) -> Vec<u8> {
+    keygen_session_for(params.threshold(), params.parties())
+}
+
+fn keygen_session_for(threshold: usize, parties: &[PartyId]) -> Vec<u8> {
     let mut data = b"DKLS23-keygen-party-v2-".to_vec();
-    data.extend_from_slice(&(params.threshold() as u32).to_be_bytes());
-    for p in params.parties() {
+    data.extend_from_slice(&(threshold as u32).to_be_bytes());
+    for p in parties {
         data.extend_from_slice(strip(&p.key));
         data.push(0);
     }
@@ -697,7 +737,7 @@ mod tests {
         ids: &[PartyId],
         t: usize,
         tamper: Option<&crate::tss::testhub::Tamper>,
-    ) -> (Vec<Result<Key, Error>>, usize) {
+    ) -> (Vec<Option<Result<Key, Error>>>, usize) {
         let hub = crate::tss::testhub::BatchHub::new(ids);
         let parties: Vec<KeygenParty> = (0..ids.len())
             .map(|i| {
@@ -706,8 +746,9 @@ mod tests {
             .collect();
         let mut results: Vec<Option<Result<Key, Error>>> = (0..ids.len()).map(|_| None).collect();
         let mut flushes = 0;
-        while results.iter().any(Option::is_none) {
-            assert!(hub.flush(tamper) > 0, "stalled after {flushes} flushes");
+        // A party that aborts stops sending, so its peers may never finish:
+        // stop once a lap delivers nothing and report those as `None`.
+        while results.iter().any(Option::is_none) && hub.flush(tamper) > 0 {
             flushes += 1;
             for (r, p) in results.iter_mut().zip(&parties) {
                 if r.is_none() {
@@ -715,7 +756,7 @@ mod tests {
                 }
             }
         }
-        (results.into_iter().map(Option::unwrap).collect(), flushes)
+        (results, flushes)
     }
 
     /// After round 1, the echo and the base-OT responses share a round: every
@@ -726,30 +767,54 @@ mod tests {
             let (results, flushes) = run_batched(&party_ids(n), t, None);
             assert_eq!(flushes, 2, "{t}-of-{n}");
             for r in results {
-                r.expect("keygen succeeds").validate_basic().unwrap();
+                r.expect("finished")
+                    .expect("keygen succeeds")
+                    .validate_basic()
+                    .unwrap();
             }
         }
     }
 
-    /// A dealer that shows party 2 a different (but self-consistent)
-    /// polynomial passes party 2's share check; only the echo can catch it.
+    /// A dealer that shows party 2 a different polynomial, with matching
+    /// shares and a valid proof of knowledge (it knows both polynomials),
+    /// passes every check party 2 can make alone; only the echo can catch it.
     /// The base-OT responses go out before the echo is verified, but no party
     /// may finish with a key.
     #[test]
     fn equivocating_dealer_is_caught_by_the_echo() {
         let ids = party_ids(3);
-        // Shift dealer 0's linear coefficient by G for party 2 only, and its
-        // share for party 2 by id(2) to match: f'(x) = f(x) + x.
-        let id2 = secp::scalar_from_be_reduce(&ids[2].key);
+        let t = 1;
+        // Dealer 0's second polynomial, shown to party 2 only.
+        let g = [
+            secp::scalar_from_be_reduce(&[3]),
+            secp::scalar_from_be_reduce(&[5]),
+        ];
+        let gv: Vec<ProjectivePoint> = g.iter().map(secp::mul_base).collect();
+        let x2 = secp::scalar_from_be_reduce(&ids[2].key);
+        let share2 = g[0].add(&g[1].mul(&x2));
+        let ssid = keygen_session_for(t, &ids);
+        let dealer = ids[0].key.clone();
         let tamper = move |from: usize, to: usize, msg: &mut Message| {
             if from != 0 || to != 2 {
                 return;
             }
             if msg.typ == TYPE_R1BC {
-                let mut bc: KeygenR1Bcast = msg.decode().unwrap();
-                let mut vs = unflatten_point_xy(&bc.vss_commitments).unwrap();
-                vs[1] = vs[1].add(&secp::generator());
-                bc.vss_commitments = flatten_point_xy(&vs);
+                let flat = flatten_point_xy(&gv);
+                let (ax, ay, pt) = ConstantTermPok::prove(
+                    POK_TAG,
+                    &ssid,
+                    &dealer,
+                    &g[0],
+                    &gv,
+                    &vss_bytes(&flat),
+                    &mut SystemRng,
+                );
+                let bc = KeygenR1Bcast {
+                    vss_commitments: flat,
+                    v0_pok_alpha_x: B64Bytes(ax),
+                    v0_pok_alpha_y: B64Bytes(ay),
+                    v0_pok_t: B64Bytes(pt),
+                };
                 *msg = Message::encode(
                     msg.format(),
                     &msg.typ,
@@ -760,8 +825,7 @@ mod tests {
                 .unwrap();
             } else if msg.typ == TYPE_R1UC {
                 let mut uc: KeygenR1Unicast = msg.decode().unwrap();
-                let share = secp::scalar_from_be_reduce(&uc.share.0).add(&id2);
-                uc.share = B64Bytes(secp::scalar_to_be_min(&share));
+                uc.share = B64Bytes(secp::scalar_to_be_min(&share2));
                 *msg = Message::encode(
                     msg.format(),
                     &msg.typ,
@@ -772,14 +836,145 @@ mod tests {
                 .unwrap();
             }
         };
-        let (results, _) = run_batched(&ids, 1, Some(&tamper));
+        let (results, _) = run_batched(&ids, t, Some(&tamper));
         for (i, r) in results.iter().enumerate() {
             let err = r
                 .as_ref()
+                .expect("every party finishes")
+                .as_ref()
                 .err()
                 .unwrap_or_else(|| panic!("party {i} produced a key"));
+            assert!(err.to_string().contains("echo"), "party {i}: {err}");
+        }
+    }
+
+    /// The rogue-key attack on 3-of-3 (`n ≤ 2t`): the last dealer waits for
+    /// the honest commitments, then sends `V'` with `V'[0] = a·G − Σ V_honest[0]`
+    /// for an `a` it knows, deriving the rest of `V'` and the honest parties'
+    /// shares "in the exponent" so every share check passes. Without a proof
+    /// of knowledge of `V'[0]` the joint key would be `a·G`. Honest parties must
+    /// refuse the forged constant term.
+    #[test]
+    fn last_dealer_cannot_choose_the_key() {
+        use std::sync::{Arc, Mutex as StdMutex};
+
+        /// The forged commitments: the polynomial (in the exponent) through
+        /// `(0, a·G − Σ honest)`, `(x0, s0·G)` and `(x1, s1·G)`.
+        fn forge(
+            a: &Scalar,
+            xs: &[Scalar],
+            shares: &[Scalar; 2],
+            honest: &[ProjectivePoint],
+        ) -> Vec<ProjectivePoint> {
+            let p0 = honest
+                .iter()
+                .fold(secp::mul_base(a), |acc, v| acc.add(&v.negate()));
+            let nodes = [Scalar::ZERO, xs[0].clone(), xs[1].clone()];
+            let ys = [p0, secp::mul_base(&shares[0]), secp::mul_base(&shares[1])];
+            let mut vs = vec![ProjectivePoint::identity(); 3];
+            for m in 0..3 {
+                let (u, w) = match m {
+                    0 => (&nodes[1], &nodes[2]),
+                    1 => (&nodes[0], &nodes[2]),
+                    _ => (&nodes[0], &nodes[1]),
+                };
+                // Lagrange basis polynomial ℓ_m(x) = (x − u)(x − w) / d.
+                let d_inv = nodes[m].sub(u).mul(&nodes[m].sub(w)).invert();
+                let coeffs = [u.mul(w).mul(&d_inv), u.add(w).negate().mul(&d_inv), d_inv];
+                for (k, c) in coeffs.iter().enumerate() {
+                    vs[k] = vs[k].add(&ys[m].mul(c));
+                }
+            }
+            vs
+        }
+
+        let ids = party_ids(3);
+        let t = 2;
+        let xs: Vec<Scalar> = ids
+            .iter()
+            .map(|p| secp::scalar_from_be_reduce(&p.key))
+            .collect();
+        let a = secp::scalar_from_be_reduce(&[0x42; 32]);
+        // Shares the attacker hands honest parties 0 and 1 (chosen freely).
+        let shares = [
+            secp::scalar_from_be_reduce(&[7]),
+            secp::scalar_from_be_reduce(&[9]),
+        ];
+        let honest_v0: Arc<StdMutex<Vec<ProjectivePoint>>> = Arc::default();
+        let forged: Arc<StdMutex<Option<Vec<ProjectivePoint>>>> = Arc::default();
+
+        let tamper = {
+            let (honest_v0, forged) = (honest_v0.clone(), forged.clone());
+            let (a, xs, shares) = (a.clone(), xs.clone(), shares.clone());
+            move |from: usize, _to: usize, msg: &mut Message| {
+                if from != 2 {
+                    if msg.typ == TYPE_R1BC {
+                        let bc: KeygenR1Bcast = msg.decode().unwrap();
+                        let v0 = unflatten_point_xy(&bc.vss_commitments).unwrap()[0];
+                        let mut h = honest_v0.lock().unwrap();
+                        if !h.iter().any(|p| secp::point_eq(p, &v0)) {
+                            h.push(v0);
+                        }
+                    }
+                    return;
+                }
+                let vs = forged
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(|| forge(&a, &xs, &shares, &honest_v0.lock().unwrap()))
+                    .clone();
+                if msg.typ == TYPE_R1BC {
+                    // The attacker keeps its original proof: it cannot prove V'[0].
+                    let mut bc: KeygenR1Bcast = msg.decode().unwrap();
+                    bc.vss_commitments = flatten_point_xy(&vs);
+                    *msg = Message::encode(
+                        msg.format(),
+                        &msg.typ,
+                        &bc,
+                        msg.from.clone(),
+                        msg.to.clone(),
+                    )
+                    .unwrap();
+                } else if msg.typ == TYPE_R1UC {
+                    let to = msg.to.as_ref().unwrap().index as usize;
+                    let mut uc: KeygenR1Unicast = msg.decode().unwrap();
+                    uc.share = B64Bytes(secp::scalar_to_be_min(&shares[to]));
+                    *msg = Message::encode(
+                        msg.format(),
+                        &msg.typ,
+                        &uc,
+                        msg.from.clone(),
+                        msg.to.clone(),
+                    )
+                    .unwrap();
+                }
+            }
+        };
+        let (results, _) = run_batched(&ids, t, Some(&tamper));
+
+        // The forgery is complete: honest shares verify and the joint key
+        // would be a·G.
+        let vs = forged.lock().unwrap().clone().expect("attack ran");
+        for i in 0..2 {
+            assert!(vss::verify(&xs[i], &shares[i], t, &vs));
+        }
+        let joint = honest_v0
+            .lock()
+            .unwrap()
+            .iter()
+            .fold(vs[0], |acc, v| acc.add(v));
+        assert!(secp::point_eq(&joint, &secp::mul_base(&a)));
+
+        // ...and the honest parties refuse it.
+        for (i, r) in results.iter().take(2).enumerate() {
+            let err = r
+                .as_ref()
+                .expect("honest parties finish")
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("honest party {i} accepted"));
             assert!(
-                matches!(err, Error::Tss(_)) || err.to_string().contains("echo"),
+                err.to_string().contains("proof of knowledge"),
                 "party {i}: {err}"
             );
         }
