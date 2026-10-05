@@ -123,7 +123,9 @@ pub enum Error {
     Invalid(&'static str),
     /// [`from_slice`] decoded a value but bytes were left over.
     TrailingBytes,
-    /// A message from a `Serialize` / `Deserialize` implementation.
+    /// A message from a `Serialize` / `Deserialize` implementation (only with
+    /// the `error-messages` feature; without it such failures are
+    /// [`Error::Invalid`]).
     Message(String),
 }
 
@@ -144,13 +146,35 @@ impl core::error::Error for Error {}
 
 impl ser::Error for Error {
     fn custom<T: core::fmt::Display>(msg: T) -> Self {
-        Error::Message(msg.to_string())
+        Error::custom_message(msg)
     }
 }
 
 impl de::Error for Error {
     fn custom<T: core::fmt::Display>(msg: T) -> Self {
-        Error::Message(msg.to_string())
+        Error::custom_message(msg)
+    }
+}
+
+impl Error {
+    /// A failure reported by a `Serialize` / `Deserialize` implementation.
+    ///
+    /// With the `error-messages` feature the message is formatted into
+    /// [`Error::Message`]. Without it the text is dropped: formatting serde's
+    /// messages links code that can never run here (for example the `f64`
+    /// formatter behind serde's "invalid type: floating point" text, ~12 KB on
+    /// thumbv7em), and the value is rejected exactly the same way.
+    #[allow(clippy::needless_pass_by_value)]
+    fn custom_message<T: core::fmt::Display>(msg: T) -> Self {
+        #[cfg(feature = "error-messages")]
+        {
+            Error::Message(msg.to_string())
+        }
+        #[cfg(not(feature = "error-messages"))]
+        {
+            let _ = msg;
+            Error::Invalid("rejected by a Serialize/Deserialize implementation")
+        }
     }
 }
 

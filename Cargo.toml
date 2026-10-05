@@ -17,7 +17,7 @@ name = "tsslib"
 # Each protocol is gated so downstream users can compile only what they need;
 # each pulls in exactly the purecrypto curve/lattice features it requires.
 # `default` pulls in everything.
-default = ["std", "json", "frosttss", "frostristretto255tss", "frostsecp256k1tss", "mldsatss", "dklstss", "ecdsatss", "eddsatss"]
+default = ["std", "json", "error-messages", "frosttss", "frostristretto255tss", "frostsecp256k1tss", "mldsatss", "dklstss", "ecdsatss", "eddsatss"]
 
 # The crate is `#![no_std]` + `alloc`. `std` adds OS randomness (without it,
 # register one with `rng::set_entropy_source`), the blocking `wait()` on every
@@ -28,6 +28,12 @@ std = ["purecrypto/std", "serde/std", "serde_json?/std", "base64?/std", "zeroize
 # the compact binary encoding in `tsslib::wire`, which needs neither std nor
 # serde_json. Independent of `std`.
 json = ["dep:serde_json", "dep:base64"]
+
+# Keep serde's text in binary-decoding errors (`wire::Error::Message`).
+# Without it a refused value is reported as `wire::Error::Invalid` with no
+# formatted text, which keeps serde's message formatting (and the f64
+# formatter it pulls in) out of firmware images.
+error-messages = []
 
 # FROST(Ed25519, SHA-512) — RFC 9591. Ed25519-compatible output.
 # cipher/kdf back the X25519+HKDF+ChaCha20-Poly1305 encrypted-share envelope.

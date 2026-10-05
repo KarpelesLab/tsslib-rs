@@ -21,7 +21,9 @@
 //! [`tss::ReSharingParameters`]) with `with_wire_format`; all parties of a
 //! session must use the same one. The default is JSON when the `json` feature
 //! is enabled and binary otherwise. For embedded targets, disable default
-//! features and leave out `json`.
+//! features and leave out `json` and `error-messages` (the latter keeps
+//! serde's text in [`wire::Error::Message`]; without it a refused value is
+//! reported as [`wire::Error::Invalid`]).
 //!
 //! ## Protocols
 //!

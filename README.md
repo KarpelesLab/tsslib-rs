@@ -85,8 +85,13 @@ the same format as earlier releases) or in the compact **binary** format of
   the broker moves `tss::Message` envelopes with `to_json`/`from_json` or
   `write_to`/`read_from`.
 
+Binary-decoding errors carry serde's message text only with the default-on
+`error-messages` feature; without it a refused value is still refused, just
+without the text, which keeps serde's message formatting (including the `f64`
+formatter) out of firmware — about 20 KB with dklstss on thumbv7em.
+
 ```toml
-# Embedded: no std, no JSON.
+# Embedded: no std, no JSON, no error text.
 tsslib = { version = "0.3", default-features = false, features = ["frostsecp256k1tss"] }
 ```
 
