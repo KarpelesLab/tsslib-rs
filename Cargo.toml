@@ -63,7 +63,7 @@ eddsatss = ["purecrypto/hazmat-edwards25519", "purecrypto/hash"]
 # primitives). Pulled from crates.io so tsslib is itself publishable.
 # `hash` and `rng` are unconditional: the always-compiled `tss` module
 # re-exports `purecrypto::hash::HashAlgorithm`, and `rng` backs `tsslib::rng`.
-purecrypto = { version = "0.9.9", default-features = false, features = ["alloc", "hash", "rng"] }
+purecrypto = { version = "0.10", default-features = false, features = ["alloc", "hash", "rng"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 # arbitrary_precision: emit/parse big-integer JSON numbers (>2^53) losslessly,
 # as the save formats store them.
@@ -78,4 +78,4 @@ hex = "0.4"
 serde_json = "1"
 # Tests always link `std`, so give them OS randomness even under
 # `--no-default-features`.
-purecrypto = { version = "0.9.9", default-features = false, features = ["std"] }
+purecrypto = { version = "0.10", default-features = false, features = ["std"] }
