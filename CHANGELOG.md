@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.16](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.15...v0.2.16) - 2026-10-18
+
+### Other
+
+- raise MSRV to 1.95 to match purecrypto 0.10.1
+- update purecrypto to 0.10
+
 ## [0.2.15](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.14...v0.2.15) - 2026-10-05
 
 ### Fixed
