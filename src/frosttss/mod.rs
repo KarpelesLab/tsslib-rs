@@ -27,6 +27,12 @@
 //! nothing about them; against an active attacker the broker's authenticity
 //! guarantee is still required.
 //!
+//! The broker is not trusted to make broadcasts consistent: keygen binds a
+//! digest of the whole round-1 broadcast into every share envelope, and
+//! resharing has every new member confirm a digest of the combined commitments
+//! in its final ACK, so a dealer that shows different polynomials to different
+//! parties makes the session abort instead of yielding unusable shares.
+//!
 //! References:
 //! - RFC 9591: <https://www.rfc-editor.org/rfc/rfc9591.html>
 //! - FROST paper: <https://eprint.iacr.org/2020/852>
