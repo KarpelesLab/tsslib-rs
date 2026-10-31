@@ -226,6 +226,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn loading_rejects_oversized_xi() {
+        let mut w = KeyWire::from_key(&single_party_key(7));
+        // 7 with an extra high-order byte: must not truncate back to 7.
+        w.xi = BigUintDec::from_be_bytes(&[[1u8].as_slice(), &[0; 31], &[7]].concat());
+        assert!(w.to_key().is_err());
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip() {

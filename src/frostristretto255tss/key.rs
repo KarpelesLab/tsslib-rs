@@ -5,7 +5,7 @@
 //! 32-byte canonical Ristretto255 encoding, base64-encoded.
 
 use super::Error;
-use crate::frost::{Ciphersuite, Ristretto255, Scalar};
+use crate::frost::{Ciphersuite, Ristretto255, Scalar, scalar_from_be_mod_l};
 use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::b64::B64Bytes;
@@ -39,8 +39,9 @@ pub struct Key {
 
 impl Key {
     /// Validates internal consistency: non-empty `ks` equal in length to
-    /// `big_xj`, a non-identity group key, and the local share/commitment
-    /// binding `xi·G == big_xj[i]` for the slot where `ks[i] == share_id`.
+    /// `big_xj`, a non-identity group key, every `ks` entry a distinct
+    /// non-zero identifier, and the local share/commitment binding
+    /// `xi·G == big_xj[i]` for the slot where `ks[i] == share_id`.
     pub fn validate_basic(&self) -> Result<(), Error> {
         if self.ks.is_empty() {
             return Err(Error::Validation("Ks is empty".into()));
@@ -56,6 +57,19 @@ impl Key {
             return Err(Error::Validation(
                 "GroupPublicKey is the group identity".into(),
             ));
+        }
+        let ids: Vec<Scalar> = self
+            .ks
+            .iter()
+            .map(|k| scalar_from_be_mod_l(k.as_be_bytes()))
+            .collect();
+        for (i, x) in ids.iter().enumerate() {
+            if bool::from(x.ct_eq(&Scalar::ZERO)) || ids[..i].iter().any(|y| bool::from(y.ct_eq(x)))
+            {
+                return Err(Error::Validation(
+                    "Ks has a zero or duplicate identifier".into(),
+                ));
+            }
         }
         let my_idx = self
             .ks
@@ -101,10 +115,12 @@ impl Key {
         Ok(serde_json::to_string(&KeyWire::from_key(self))?)
     }
 
-    /// Parses a key from JSON (without validating).
+    /// Parses and validates a key from JSON.
     #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
-        KeyWire::deserialize_str(s)?.to_key()
+        let key = KeyWire::deserialize_str(s)?.to_key()?;
+        key.validate_basic()?;
+        Ok(key)
     }
 
     /// Overwrites the secret share with zero.
@@ -115,7 +131,11 @@ impl Key {
 
 crate::wire::key_codec!(Key, Error, KeyWire,
     to_wire: |k| Ok::<_, Error>(KeyWire::from_key(k)),
-    from_wire: |w| w.to_key(),
+    from_wire: |w| {
+        let key = w.to_key()?;
+        key.validate_basic()?;
+        Ok(key)
+    },
 );
 
 #[derive(Serialize, Deserialize)]
@@ -192,7 +212,12 @@ fn scalar_to_biguint(s: &Scalar) -> BigUintDec {
     BigUintDec::from_be_bytes(&*be)
 }
 
+/// Decodes a 32-byte-or-shorter big-endian scalar; longer values are
+/// rejected rather than truncated.
 fn biguint_to_scalar(v: &BigUintDec) -> Result<Scalar, Error> {
+    if strip(v.as_be_bytes()).len() > 32 {
+        return Err(Error::Validation("scalar >= L".into()));
+    }
     let be = Zeroizing::new(v.to_be_bytes_padded(32));
     let mut le = Zeroizing::new([0u8; 32]);
     for (i, &b) in be.iter().rev().enumerate() {
@@ -222,6 +247,33 @@ mod tests {
             big_xj: vec![pk],
             group_public_key: pk,
         }
+    }
+
+    #[test]
+    fn validate_basic_rejects_zero_or_duplicate_ids() {
+        let mut k = single_party_key(7);
+        k.ks = vec![
+            BigUintDec::from_be_bytes(&[1]),
+            BigUintDec::from_be_bytes(&[1]),
+        ];
+        k.big_xj.push(k.big_xj[0]);
+        assert!(k.validate_basic().is_err());
+        k.ks[1] = BigUintDec::from_be_bytes(&[]);
+        assert!(k.validate_basic().is_err());
+        k.ks[1] = BigUintDec::from_be_bytes(&[2]);
+        k.validate_basic().unwrap();
+    }
+
+    #[test]
+    fn loading_validates_and_rejects_oversized_xi() {
+        let mut k = single_party_key(7);
+        k.big_xj[0] = Ristretto255::generator();
+        assert!(Key::from_bytes(&k.to_bytes().unwrap()).is_err());
+
+        let mut w = KeyWire::from_key(&single_party_key(7));
+        // 7 with an extra high-order byte: must not truncate back to 7.
+        w.xi = BigUintDec::from_be_bytes(&[[1u8].as_slice(), &[0; 31], &[7]].concat());
+        assert!(w.to_key().is_err());
     }
 
     #[test]
