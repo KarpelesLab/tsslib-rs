@@ -8,6 +8,7 @@ use crate::prelude::*;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 /// The curve name stored for Edwards25519 points.
 pub(crate) const CURVE_NAME: &str = "ed25519";
@@ -40,6 +41,8 @@ pub(crate) fn scalar_from_be(be: &[u8]) -> Scalar {
             le[i] = b;
         }
         acc = acc.mul(&two512).add(&Scalar::from_bytes_mod_order(&le));
+        // The input may be a secret share; don't leave a copy on the stack.
+        le.zeroize();
     }
     acc
 }
@@ -148,20 +151,31 @@ pub(crate) fn point_from_json(j: &EcPointJson) -> Option<EdwardsPoint> {
 
 /// Reconstructs a point from big-endian affine coordinates: rebuild the RFC 8032
 /// compressed form (32-byte LE `y` with the parity of `x` as the sign bit),
-/// decompress, and confirm the recovered `x` matches the input.
+/// decompress, and confirm the recovered `(x, y)` matches the input.
+///
+/// Only canonical coordinates are accepted: each must fit in 32 bytes and be
+/// the reduced value the point re-encodes to, so `y` cannot be truncated or
+/// have its bit 255 folded into the sign bit, and `y >= p` is rejected.
 pub(crate) fn point_from_affine_be(x_be: &[u8], y_be: &[u8]) -> Option<EdwardsPoint> {
-    let y = BigUintDec::from_be_bytes(y_be);
-    let y_be32 = y.to_be_bytes_padded(32);
+    let x = strip(x_be);
+    let y = strip(y_be);
+    if x.len() > 32 || y.len() > 32 {
+        return None;
+    }
     let mut compressed = [0u8; 32];
-    for (i, &b) in y_be32.iter().rev().enumerate() {
+    for (i, &b) in y.iter().rev().enumerate() {
         compressed[i] = b;
+    }
+    if compressed[31] & 0x80 != 0 {
+        // y >= 2^255 > p: not a canonical field element.
+        return None;
     }
     if be_is_odd(x_be) {
         compressed[31] |= 1 << 7;
     }
     let p = EdwardsPoint::decompress(&compressed)?;
-    let (x_le, _) = p.to_affine();
-    if le32_to_be_min(&x_le) == strip(x_be) {
+    let (x_le, y_le) = p.to_affine();
+    if le32_to_be_min(&x_le) == x && le32_to_be_min(&y_le) == y {
         Some(p)
     } else {
         None
@@ -232,6 +246,41 @@ mod tests {
             assert_eq!(j.curve, "ed25519");
             assert!(eq(&point_from_json(&j).unwrap(), &p));
         }
+    }
+
+    #[test]
+    fn point_from_affine_rejects_non_canonical_y() {
+        let p = mul_base(&sc(3));
+        let (x, y) = coords_be(&p);
+        assert!(eq(&point_from_affine_be(&x, &y).unwrap(), &p));
+        // Leading zero padding is fine (minimal-magnitude comparison).
+        let mut padded = vec![0u8; 4];
+        padded.extend_from_slice(&y);
+        assert!(point_from_affine_be(&x, &padded).is_some());
+
+        // y + p (still < 2^256): non-canonical.
+        let mut y32 = vec![0u8; 32 - y.len()];
+        y32.extend_from_slice(&y);
+        let prime = field_prime_be();
+        let mut sum = vec![0u8; 33];
+        let mut carry = 0u16;
+        for i in (0..32).rev() {
+            let v = y32[i] as u16 + prime[i] as u16 + carry;
+            sum[i + 1] = v as u8;
+            carry = v >> 8;
+        }
+        sum[0] = carry as u8;
+        assert!(point_from_affine_be(&x, &sum).is_none());
+
+        // y with bit 255 set (would alias the sign bit).
+        let mut hi = y32.clone();
+        hi[0] |= 0x80;
+        assert!(point_from_affine_be(&x, &hi).is_none());
+
+        // Over-long y whose low 32 bytes are the valid y.
+        let mut long = vec![1u8];
+        long.extend_from_slice(&y32);
+        assert!(point_from_affine_be(&x, &long).is_none());
     }
 
     #[test]

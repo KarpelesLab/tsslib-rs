@@ -284,8 +284,8 @@ impl Shared {
                 .map(|b| b.0.clone())
                 .collect();
             let flat = match commit::decommit(&kgcj, &d) {
-                Some(v) => v,
-                None => return self.fail("keygen: decommitment verification failed"),
+                Some(v) if v.len() == (t + 1) * 2 => v,
+                _ => return self.fail("keygen: decommitment verification failed"),
             };
             let pjvs = match unflatten_points(&flat) {
                 Some(v) => v,
