@@ -532,4 +532,124 @@ pub(crate) mod tests {
         let hub = TestHub::new(&ids);
         assert!(Keygen::new(Parameters::new(ids.clone(), &ids[0], 2, hub.broker(0))).is_err());
     }
+
+    /// The rogue-key attack on 3-of-3 (`n ≤ 2t`): the last dealer replaces its
+    /// commitments with ones whose constant term is `a·G − Σ V_honest[0]`, for
+    /// an `a` it knows, derived "in the exponent" so freely chosen shares for
+    /// the honest parties verify. The joint key would be `a·G`; the dealer
+    /// cannot prove knowledge of the forged constant term, so the honest
+    /// parties refuse it.
+    #[test]
+    fn last_dealer_cannot_choose_the_key() {
+        use crate::frostsecp256k1tss::suite::mul_base;
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+
+        fn forge(
+            a: &Scalar,
+            xs: &[Scalar; 2],
+            shares: &[Scalar; 2],
+            honest: &[Point],
+        ) -> Vec<Point> {
+            let p0 = honest
+                .iter()
+                .fold(mul_base(a), |acc, v| acc.add(&v.negate()));
+            let nodes = [Scalar::ZERO, xs[0].clone(), xs[1].clone()];
+            let ys = [p0, mul_base(&shares[0]), mul_base(&shares[1])];
+            let mut vs = vec![Point::identity(); 3];
+            for m in 0..3 {
+                let (u, w) = match m {
+                    0 => (&nodes[1], &nodes[2]),
+                    1 => (&nodes[0], &nodes[2]),
+                    _ => (&nodes[0], &nodes[1]),
+                };
+                // Lagrange basis polynomial ℓ_m(x) = (x − u)(x − w) / d.
+                let d_inv = nodes[m].sub(u).mul(&nodes[m].sub(w)).invert();
+                let coeffs = [u.mul(w).mul(&d_inv), u.add(w).negate().mul(&d_inv), d_inv];
+                for (k, c) in coeffs.iter().enumerate() {
+                    vs[k] = vs[k].add(&ys[m].mul(c));
+                }
+            }
+            vs
+        }
+
+        let ids = party_ids(&[1, 2, 3]);
+        let t = 2;
+        let xs = [id_scalar(&ids[0].key), id_scalar(&ids[1].key)];
+        let a = id_scalar(&[0x42; 32]);
+        let shares = [id_scalar(&[7]), id_scalar(&[9])];
+        let honest_v0: StdArc<StdMutex<Vec<Point>>> = StdArc::default();
+        let forged: StdArc<StdMutex<Option<Vec<Point>>>> = StdArc::default();
+
+        let tamper = {
+            let (honest_v0, forged) = (honest_v0.clone(), forged.clone());
+            let (a, xs, shares) = (a.clone(), xs.clone(), shares.clone());
+            move |from: usize, _to: usize, msg: &mut Message| {
+                if msg.typ != ROUND1_TYPE {
+                    return;
+                }
+                let mut r1: KeygenRound1Msg = msg.decode().unwrap();
+                if from != 2 {
+                    let v0 = decode_point(&r1.poly_commitments[0].0).unwrap();
+                    let mut h = honest_v0.lock().unwrap();
+                    if !h.iter().any(|p| point_eq(p, &v0)) {
+                        h.push(v0);
+                    }
+                    return;
+                }
+                // The attacker keeps its original proof: it cannot prove the
+                // forged constant term.
+                let vs = forged
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(|| forge(&a, &xs, &shares, &honest_v0.lock().unwrap()))
+                    .clone();
+                r1.poly_commitments = vs
+                    .iter()
+                    .map(|p| B64Bytes(encode_point(p).unwrap().to_vec()))
+                    .collect();
+                *msg = Message::encode(
+                    msg.format(),
+                    &msg.typ,
+                    &r1,
+                    msg.from.clone(),
+                    msg.to.clone(),
+                )
+                .unwrap();
+            }
+        };
+        let (results, _) = crate::tss::testhub::run_batched(
+            &ids,
+            t,
+            Some(&tamper),
+            |params| Keygen::new(params).unwrap(),
+            Keygen::try_result,
+        );
+
+        // The forgery is complete: the chosen shares verify and the joint key
+        // would be a·G.
+        let vs = forged.lock().unwrap().clone().expect("attack ran");
+        for i in 0..2 {
+            assert!(vss::verify(&ids[i].key, &shares[i], t, &vs));
+        }
+        let joint = honest_v0
+            .lock()
+            .unwrap()
+            .iter()
+            .fold(vs[0], |acc, v| acc.add(v));
+        assert!(point_eq(&joint, &mul_base(&a)));
+
+        // ...and the honest parties refuse it.
+        for (i, r) in results.iter().take(2).enumerate() {
+            let err = r
+                .as_ref()
+                .expect("honest parties finish")
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("honest party {i} accepted"));
+            assert!(
+                err.to_string().contains("proof of knowledge"),
+                "party {i}: {err}"
+            );
+        }
+    }
 }

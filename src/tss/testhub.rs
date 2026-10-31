@@ -243,6 +243,41 @@ impl MessageBroker for BatchBroker {
     }
 }
 
+/// Starts one session per party over a [`BatchHub`] and flushes until every
+/// party has a result or a lap delivers nothing (a party that aborts stops
+/// sending, so its peers may never finish; those report `None`). Returns the
+/// results and the number of laps.
+pub(crate) fn run_batched<P, R>(
+    ids: &[PartyId],
+    t: usize,
+    tamper: Option<&Tamper>,
+    start: impl Fn(super::Parameters) -> P,
+    poll: impl Fn(&P) -> Option<R>,
+) -> (Vec<Option<R>>, usize) {
+    let hub = BatchHub::new(ids);
+    let sessions: Vec<P> = (0..ids.len())
+        .map(|i| {
+            start(super::Parameters::new(
+                ids.to_vec(),
+                &ids[i],
+                t,
+                hub.broker(i),
+            ))
+        })
+        .collect();
+    let mut results: Vec<Option<R>> = sessions.iter().map(|_| None).collect();
+    let mut laps = 0;
+    while results.iter().any(Option::is_none) && hub.flush(tamper) > 0 {
+        laps += 1;
+        for (r, s) in results.iter_mut().zip(&sessions) {
+            if r.is_none() {
+                *r = poll(s);
+            }
+        }
+    }
+    (results, laps)
+}
+
 // --- key-routed hub for resharing (old + new committees share no index space) ---
 
 fn key_of(p: &PartyId) -> Vec<u8> {

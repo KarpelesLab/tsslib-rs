@@ -632,4 +632,105 @@ mod tests {
             assert_eq!(sig.signature.len(), 64);
         }
     }
+
+    /// The rogue-key attack on 3-of-3 (`n ≤ 2t`): the last dealer replaces its
+    /// commitments with ones whose constant term is `a·G − Σ V_honest[0]`, for
+    /// an `a` it knows. The forgery admits freely chosen shares for the honest
+    /// parties and would make the joint key `a·G`; the dealer cannot prove
+    /// knowledge of the forged constant term, so the honest parties refuse it.
+    #[test]
+    fn last_dealer_cannot_choose_the_key() {
+        use crate::frost::scalar_from_be_mod_l;
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        type C = Ristretto255;
+
+        let ids = party_ids(3);
+        let t = 2;
+        let xs = [
+            scalar_from_be_mod_l(&ids[0].key),
+            scalar_from_be_mod_l(&ids[1].key),
+        ];
+        let a = scalar_from_be_mod_l(&[0x42; 32]);
+        let shares = [scalar_from_be_mod_l(&[7]), scalar_from_be_mod_l(&[9])];
+        let honest_v0: StdArc<StdMutex<Vec<RistrettoPoint>>> = StdArc::default();
+        let forged: StdArc<StdMutex<Option<Vec<RistrettoPoint>>>> = StdArc::default();
+
+        let tamper = {
+            let (honest_v0, forged) = (honest_v0.clone(), forged.clone());
+            let (a, xs, shares) = (a.clone(), xs.clone(), shares.clone());
+            move |from: usize, _to: usize, msg: &mut Message| {
+                if msg.typ != ROUND1_TYPE {
+                    return;
+                }
+                let mut r1: KeygenRound1Msg = msg.decode().unwrap();
+                if from != 2 {
+                    let v0 =
+                        C::decode_point(&r1.poly_commitments[0].0.as_slice().try_into().unwrap())
+                            .unwrap();
+                    let mut h = honest_v0.lock().unwrap();
+                    if !h.iter().any(|p| C::eq(p, &v0)) {
+                        h.push(v0);
+                    }
+                    return;
+                }
+                // The attacker keeps its original proof: it cannot prove the
+                // forged constant term.
+                let vs = forged
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(|| {
+                        vss::forge_rogue_commitments::<C>(
+                            &a,
+                            &xs,
+                            &shares,
+                            &honest_v0.lock().unwrap(),
+                        )
+                    })
+                    .clone();
+                r1.poly_commitments = vs
+                    .iter()
+                    .map(|p| B64Bytes(C::encode_point(p).to_vec()))
+                    .collect();
+                *msg = Message::encode(
+                    msg.format(),
+                    &msg.typ,
+                    &r1,
+                    msg.from.clone(),
+                    msg.to.clone(),
+                )
+                .unwrap();
+            }
+        };
+        let (results, _) = crate::tss::testhub::run_batched(
+            &ids,
+            t,
+            Some(&tamper),
+            |params| Keygen::new(params).unwrap(),
+            Keygen::try_result,
+        );
+
+        // The forgery is complete: the chosen shares verify and the joint key
+        // would be a·G.
+        let vs = forged.lock().unwrap().clone().expect("attack ran");
+        for i in 0..2 {
+            assert!(vss::verify::<C>(&ids[i].key, &shares[i], t, &vs));
+        }
+        let joint = honest_v0
+            .lock()
+            .unwrap()
+            .iter()
+            .fold(vs[0], |acc, v| C::add(&acc, v));
+        assert!(C::eq(&joint, &C::mul_base(&a)));
+
+        // ...and the honest parties refuse it.
+        for (i, r) in results.iter().take(2).enumerate() {
+            let err = r
+                .as_ref()
+                .expect("honest parties finish")
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("honest party {i} accepted"));
+            assert!(err.to_string().contains("PoK"), "party {i}: {err}");
+        }
+    }
 }

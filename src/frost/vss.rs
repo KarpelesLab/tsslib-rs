@@ -127,6 +127,40 @@ fn eval(poly: &[Scalar], x: &Scalar) -> Scalar {
     result
 }
 
+/// The rogue-key forgery for a 3-party, threshold-2 committee: commitments
+/// (in the exponent) to the polynomial through `(0, a·G − Σ honest)`,
+/// `(xs[0], shares[0]·G)` and `(xs[1], shares[1]·G)`. A dealer that moves last
+/// can build them without knowing the constant term's discrete log; only a
+/// proof of knowledge of that constant term stops it.
+#[cfg(test)]
+pub(crate) fn forge_rogue_commitments<C: Ciphersuite>(
+    a: &Scalar,
+    xs: &[Scalar; 2],
+    shares: &[Scalar; 2],
+    honest: &[C::Point],
+) -> Vec<C::Point> {
+    let p0 = honest
+        .iter()
+        .fold(C::mul_base(a), |acc, v| C::add(&acc, &C::negate(v)));
+    let nodes = [Scalar::ZERO, xs[0].clone(), xs[1].clone()];
+    let ys = [p0, C::mul_base(&shares[0]), C::mul_base(&shares[1])];
+    let mut vs = vec![C::identity(); 3];
+    for m in 0..3 {
+        let (u, w) = match m {
+            0 => (&nodes[1], &nodes[2]),
+            1 => (&nodes[0], &nodes[2]),
+            _ => (&nodes[0], &nodes[1]),
+        };
+        // Lagrange basis polynomial ℓ_m(x) = (x − u)(x − w) / d.
+        let d_inv = nodes[m].sub(u).mul(&nodes[m].sub(w)).invert();
+        let coeffs = [u.mul(w).mul(&d_inv), u.add(w).negate().mul(&d_inv), d_inv];
+        for (k, c) in coeffs.iter().enumerate() {
+            vs[k] = C::add(&vs[k], &C::scalar_mul(&ys[m], c));
+        }
+    }
+    vs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
