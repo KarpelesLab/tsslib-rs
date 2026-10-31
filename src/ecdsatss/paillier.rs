@@ -157,6 +157,10 @@ pub(crate) fn verify_proof(
     if pi.len() != PROOF_ITERS {
         return false;
     }
+    // Honest pi are reduced mod N; wider ones are only a way to burn CPU.
+    if pi.iter().any(|y| y.is_zero() || !y.lt(n)) {
+        return false;
+    }
     // N must have no prime factor below 1000.
     for &p in PRIMES_BELOW_1000 {
         if bn::mod_small(n, p) == 0 {
@@ -296,6 +300,11 @@ mod tests {
         let mut bad = pi.clone();
         bad[0] = bn::add(&bad[0], &bn::one());
         assert!(!verify_proof(&n, &k, &sx, &sy, &bad));
+
+        // An oversized pi (>= N) is rejected outright.
+        let mut big = pi.clone();
+        big[3] = bn::add(&big[3], &n);
+        assert!(!verify_proof(&n, &k, &sx, &sy, &big));
     }
 
     /// A modulus of bit length ≡ 1 (mod 256) makes almost every challenge

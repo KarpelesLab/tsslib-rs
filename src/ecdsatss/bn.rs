@@ -87,6 +87,18 @@ pub(crate) fn gt(a: &BoxedUint, b: &BoxedUint) -> bool {
     cmp(a, b) == Ordering::Greater
 }
 
+/// Slack (in bits) allowed above a value's honest maximum by [`within_bound`].
+pub(crate) const BOUND_SLACK_BITS: usize = 64;
+
+/// Whether a peer-supplied `v` is no wider than `honest_max` plus
+/// [`BOUND_SLACK_BITS`]. Used on proof responses that are fed to modular
+/// exponentiation as exponents: an honest value is below `honest_max`, while an
+/// oversized one only serves to burn the verifier's CPU (exponentiation cost is
+/// linear in the exponent's width).
+pub(crate) fn within_bound(v: &BoxedUint, honest_max: &BoxedUint) -> bool {
+    v.bit_len() <= honest_max.bit_len() + BOUND_SLACK_BITS
+}
+
 /// Low 64 bits of `n` (for small-modulus checks).
 fn low_u64(n: &BoxedUint) -> u64 {
     n.as_limbs().first().copied().unwrap_or(0)

@@ -128,6 +128,12 @@ pub(crate) fn verify_range_alice(
     if bn::gt(&pf.s1, &q3) {
         return false;
     }
+    // s2 = e·ρ + γ with ρ < q·Ñ, γ < q³·Ñ, so s2 < 2q³·Ñ; it is used as an
+    // exponent, so an oversized one would only burn verifier CPU.
+    let q3nt = bn::mul(&q3, ntilde);
+    if !bn::within_bound(&pf.s2, &bn::add(&q3nt, &q3nt)) {
+        return false;
+    }
 
     let e = rejection_sample(RANGE_TAG, &[&pk.n, &pk.gamma(), c, &pf.z, &pf.u, &pf.w]);
 
@@ -382,6 +388,13 @@ pub(crate) fn verify_bob(
         return false;
     }
     if bn::gt(&pf.s1, &q3) || bn::gt(&pf.t1, &q7) {
+        return false;
+    }
+    // s2 = e·ρ + ρ' and t2 = e·σ + τ, with ρ, σ < q·Ñ and ρ', τ < q³·Ñ, so both
+    // are < 2q³·Ñ; they are used as exponents, so bound them.
+    let q3nt = bn::mul(&q3, ntilde);
+    let two_q3nt = bn::add(&q3nt, &q3nt);
+    if !bn::within_bound(&pf.s2, &two_q3nt) || !bn::within_bound(&pf.t2, &two_q3nt) {
         return false;
     }
 
@@ -709,6 +722,48 @@ mod tests {
             &cb,
             &reparsed,
             Some(&x_point)
+        ));
+    }
+
+    /// Proof responses used as exponents (Alice's `s2`, Bob's `s2`/`t2`) that
+    /// exceed their honest maximum are rejected before any exponentiation.
+    #[test]
+    fn oversized_exponents_rejected() {
+        let mut rng = crate::rng::SystemRng;
+        let session = b"mta-oversized";
+        let p = bn::generate_safe_prime(128, &mut rng);
+        let q = bn::generate_safe_prime(128, &mut rng);
+        let sk = PrivateKey::from_primes(p, q);
+        let pk = sk.pk.clone();
+        let nt = pk.n.clone();
+        let h1 = bn::rand_unit(&nt, &mut rng);
+        let h2 = bn::rand_unit(&nt, &mut rng);
+        // 1 MiB: an honest response is a few hundred bytes at this size.
+        let huge = bn::from_be(&vec![0xffu8; 1 << 20]);
+
+        let m = bn::u64(424242);
+        let (c, r) = pk.encrypt(&m, &mut rng).unwrap();
+        let mut pf = prove_range_alice(&pk, &c, &nt, &h1, &h2, &m, &r, &mut rng);
+        assert!(verify_range_alice(&pk, &nt, &h1, &h2, &c, &pf));
+        pf.s2 = huge.clone();
+        assert!(!verify_range_alice(&pk, &nt, &h1, &h2, &c, &pf));
+
+        let (x, y) = (bn::u64(42), bn::u64(5));
+        let (ca, _) = pk.encrypt(&bn::u64(7), &mut rng).unwrap();
+        let (cy, r) = pk.encrypt(&y, &mut rng).unwrap();
+        let cb = pk.homo_add(&pk.homo_mult(&x, &ca), &cy);
+        let mut pf = prove_bob(
+            session, &pk, &nt, &h1, &h2, &ca, &cb, &x, &y, &r, None, &mut rng,
+        );
+        assert!(verify_bob(session, &pk, &nt, &h1, &h2, &ca, &cb, &pf, None));
+        let s2 = core::mem::replace(&mut pf.s2, huge.clone());
+        assert!(!verify_bob(
+            session, &pk, &nt, &h1, &h2, &ca, &cb, &pf, None
+        ));
+        pf.s2 = s2;
+        pf.t2 = huge;
+        assert!(!verify_bob(
+            session, &pk, &nt, &h1, &h2, &ca, &cb, &pf, None
         ));
     }
 

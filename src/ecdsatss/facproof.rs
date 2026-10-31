@@ -166,7 +166,7 @@ pub(crate) fn verify(
     t: &BoxedUint,
     pf: &ProofFac,
 ) -> bool {
-    if n0.is_zero() {
+    if n0.is_zero() || !ncap.is_odd() {
         return false;
     }
     let q = bn::secp256k1_order();
@@ -175,6 +175,26 @@ pub(crate) fn verify(
 
     // Range checks: 0 ≤ z1,z2 < q³·√N0.
     if !pf.z1.lt(&q3sqrtn0) || !pf.z2.lt(&q3sqrtn0) {
+        return false;
+    }
+    // The commitments are elements of Z*_Ñ (the prover reduces them mod Ñ).
+    for v in [&pf.p, &pf.q, &pf.a, &pf.b, &pf.t] {
+        if v.is_zero() || !v.lt(ncap) || !bn::is_one(&bn::gcd(v, ncap)) {
+            return false;
+        }
+    }
+    // The remaining responses are used as exponents; bound each by its honest
+    // maximum (see `prove`) so an oversized one cannot burn verifier CPU:
+    //   σ < q·N0·Ñ;  w1, w2 = e·μ + x < q²·Ñ + q³·Ñ < 2q³·Ñ;
+    //   v = |r + e·σ − e·ν·N0p| < q³·N0·Ñ + q²·N0·Ñ < 2q³·N0·Ñ.
+    let qn0ncap = bn::mul(&bn::mul(&q, n0), ncap);
+    let two_q3ncap = bn::add(&bn::mul(&q3, ncap), &bn::mul(&q3, ncap));
+    let two_q3n0ncap = bn::mul(&two_q3ncap, n0);
+    if !bn::within_bound(&pf.sigma, &qn0ncap)
+        || !bn::within_bound(&pf.w1, &two_q3ncap)
+        || !bn::within_bound(&pf.w2, &two_q3ncap)
+        || !bn::within_bound(&pf.v, &two_q3n0ncap)
+    {
         return false;
     }
     let e = challenge(session, &q, n0, ncap, s, t, pf);
@@ -237,6 +257,55 @@ mod tests {
         let mut bad = pf;
         bad.z1 = bn::add(&bad.z1, &bn::one());
         assert!(!verify(session, &n0, &ncap, &s, &t, &bad));
+    }
+
+    #[test]
+    fn oversized_fields_rejected() {
+        let f = fixtures();
+        let fp = &f["facproof"];
+        let session = fp["session"].as_str().unwrap().as_bytes();
+        let (n0, ncap, s, t) = (
+            dec(&fp["n0"]),
+            dec(&fp["ncap"]),
+            dec(&fp["s"]),
+            dec(&fp["t"]),
+        );
+        let load = || ProofFac {
+            p: dec(&fp["P"]),
+            q: dec(&fp["Q"]),
+            a: dec(&fp["A"]),
+            b: dec(&fp["B"]),
+            t: dec(&fp["T"]),
+            sigma: dec(&fp["Sigma"]),
+            z1: dec(&fp["Z1"]),
+            z2: dec(&fp["Z2"]),
+            w1: dec(&fp["W1"]),
+            w2: dec(&fp["W2"]),
+            v: dec(&fp["V"]),
+        };
+        // A 64 KiB value: far wider than any honest field.
+        let huge = bn::from_be(&vec![0xffu8; 1 << 16]);
+        type Field = fn(&mut ProofFac) -> &mut BoxedUint;
+        let fields: [Field; 9] = [
+            |p| &mut p.p,
+            |p| &mut p.q,
+            |p| &mut p.a,
+            |p| &mut p.b,
+            |p| &mut p.t,
+            |p| &mut p.sigma,
+            |p| &mut p.w1,
+            |p| &mut p.w2,
+            |p| &mut p.v,
+        ];
+        for field in fields {
+            let mut pf = load();
+            *field(&mut pf) = huge.clone();
+            assert!(!verify(session, &n0, &ncap, &s, &t, &pf));
+        }
+        // Commitments must be nonzero.
+        let mut pf = load();
+        pf.a = bn::u64(0);
+        assert!(!verify(session, &n0, &ncap, &s, &t, &pf));
     }
 
     #[test]
