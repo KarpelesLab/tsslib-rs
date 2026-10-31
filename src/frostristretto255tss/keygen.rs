@@ -1,6 +1,14 @@
 //! FROST(ristretto255) Pedersen DKG, broker-driven. Mirrors frosttss keygen
 //! over the Ristretto255 group, with a Schnorr-over-encoded-points PoK and no
 //! chain code (this variant has no HD derivation).
+//!
+//! Round-1 broadcasts are not echoed in an extra round. Instead every party
+//! hashes all parties' round-1 payloads (in committee order) into a
+//! transcript and binds it into the associated data of every round-2 share
+//! envelope. A dealer that sends different round-1 payloads (for instance
+//! different higher-degree commitments) to different parties leaves them with
+//! different transcripts, so their round-2 envelopes fail to open and keygen
+//! aborts instead of producing inconsistent keys.
 
 use super::Error;
 use super::key::Key;
@@ -20,14 +28,16 @@ use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::ec::ristretto255::RistrettoPoint;
+use purecrypto::hash::sha256;
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
 
-const ROUND1_TYPE: &str = "frost:ristretto255:keygen:round1";
-const ROUND2_TYPE: &str = "frost:ristretto255:keygen:round2";
+const ROUND1_TYPE: &str = "frost:ristretto255:keygen:v2:round1";
+const ROUND2_TYPE: &str = "frost:ristretto255:keygen:v2:round2";
 const SESSION_NONCE_LEN: usize = 16;
 const COMMITMENT_BYTES: usize = 32;
-const AD_PREFIX: &[u8] = b"frostristretto255tss/keygen/r2/v1|";
+const AD_PREFIX: &[u8] = b"frostristretto255tss/keygen/r2/v2|";
+const TRANSCRIPT_TAG: &[u8] = b"frostristretto255tss/keygen/r1-transcript/v1";
 const POK_TAG: &[u8] = b"dkg-pok";
 
 #[derive(Serialize, Deserialize)]
@@ -72,6 +82,10 @@ struct State {
     peer_eph_pubs: VecMap<Vec<u8>, [u8; 32]>,
     peer_session_nonces: VecMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
     peer_vs: VecMap<Vec<u8>, Vec<RistrettoPoint>>,
+    /// This party's round-1 payload, as hashed into the transcript.
+    my_r1_part: Vec<u8>,
+    /// Hash of every party's round-1 payload, bound into the round-2 AD.
+    transcript: [u8; 32],
 }
 
 /// The X25519 private key opens the share envelopes; wiped with the session.
@@ -100,6 +114,8 @@ impl Keygen {
                 peer_eph_pubs: VecMap::new(),
                 peer_session_nonces: VecMap::new(),
                 peer_vs: VecMap::new(),
+                my_r1_part: Vec::new(),
+                transcript: [0u8; 32],
             }),
             result_tx: Mutex::new(Some(tx)),
         });
@@ -177,6 +193,7 @@ impl Shared {
             st.eph_pub = eph_pub;
             st.my_session_nonce = session_nonce;
             st.ks = ks;
+            st.my_r1_part = round1_part(&r1);
         }
 
         if let Err(e) = self.broadcast(ROUND1_TYPE, &r1) {
@@ -197,6 +214,7 @@ impl Shared {
         let threshold = self.params.threshold();
         let mut rng = SystemRng;
 
+        let mut parts: VecMap<Vec<u8>, Vec<u8>> = VecMap::new();
         for (pid, msg) in others.iter().zip(r1msgs.iter()) {
             let r1: KeygenRound1Msg = match decode(msg) {
                 Ok(v) => v,
@@ -207,6 +225,7 @@ impl Shared {
                 Err(e) => return self.deliver(Err(e)),
             };
             let key = strip(&pid.key).to_vec();
+            parts.insert(key.clone(), round1_part(&r1));
             let mut st = self.state.lock();
             st.peer_eph_pubs.insert(key.clone(), to_arr32(&r1.eph_pub));
             st.peer_session_nonces
@@ -214,13 +233,17 @@ impl Shared {
             st.peer_vs.insert(key, vsj);
         }
 
-        let (eph_priv, eph_pub, my_nonce, shares) = {
-            let st = self.state.lock();
+        let (eph_priv, eph_pub, my_nonce, shares, transcript) = {
+            let mut st = self.state.lock();
+            let me = strip(&self.params.party_id().key);
+            parts.insert(me.to_vec(), core::mem::take(&mut st.my_r1_part));
+            st.transcript = round1_transcript(&self.params, &parts);
             (
                 st.eph_priv,
                 st.eph_pub,
                 st.my_session_nonce,
                 st.shares.clone(),
+                st.transcript,
             )
         };
         for pid in others {
@@ -237,7 +260,7 @@ impl Shared {
                     .get(strip(&pid.key))
                     .expect("peer eph pub present")
             };
-            let ad = keygen_round2_ad(&my_nonce, &eph_pub, &recipient_pub);
+            let ad = keygen_round2_ad(&transcript, &my_nonce, &eph_pub, &recipient_pub);
             let ct = match aead::seal_share(
                 &mut rng,
                 &eph_priv,
@@ -339,7 +362,7 @@ impl Shared {
             };
             let sender_nonce = st.peer_session_nonces.get(key).expect("peer nonce present");
             let sender_pub = st.peer_eph_pubs.get(key).expect("peer eph pub present");
-            let ad = keygen_round2_ad(sender_nonce, sender_pub, &st.eph_pub);
+            let ad = keygen_round2_ad(&st.transcript, sender_nonce, sender_pub, &st.eph_pub);
             let share_bytes = match aead::open_share(&st.eph_priv, sender_pub, &ad, &r2.ciphertext)
             {
                 Ok(b) => b,
@@ -439,9 +462,16 @@ fn build_keygen_session(party_key: &[u8], session_nonce: &[u8]) -> Vec<u8> {
     out
 }
 
-fn keygen_round2_ad(sender_nonce: &[u8], sender_pub: &[u8], recipient_pub: &[u8]) -> Vec<u8> {
+/// The round-2 AD binds the round-1 transcript, so parties holding different
+/// views of the round-1 broadcasts cannot open each other's shares.
+fn keygen_round2_ad(
+    transcript: &[u8; 32],
+    sender_nonce: &[u8],
+    sender_pub: &[u8],
+    recipient_pub: &[u8],
+) -> Vec<u8> {
     let mut ad = Vec::with_capacity(
-        AD_PREFIX.len() + sender_nonce.len() + sender_pub.len() + recipient_pub.len() + 2,
+        AD_PREFIX.len() + sender_nonce.len() + sender_pub.len() + recipient_pub.len() + 35,
     );
     ad.extend_from_slice(AD_PREFIX);
     ad.extend_from_slice(sender_nonce);
@@ -449,7 +479,43 @@ fn keygen_round2_ad(sender_nonce: &[u8], sender_pub: &[u8], recipient_pub: &[u8]
     ad.extend_from_slice(sender_pub);
     ad.push(b'|');
     ad.extend_from_slice(recipient_pub);
+    ad.push(b'|');
+    ad.extend_from_slice(transcript);
     ad
+}
+
+/// A round-1 payload in length-prefixed form, for the transcript.
+fn round1_part(r1: &KeygenRound1Msg) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(r1.poly_commitments.len() as u32).to_be_bytes());
+    for c in &r1.poly_commitments {
+        lp(&mut buf, &c.0);
+    }
+    for f in [&r1.session_nonce, &r1.eph_pub, &r1.schnorr_r, &r1.schnorr_t] {
+        lp(&mut buf, f);
+    }
+    buf
+}
+
+/// Hash of every party's round-1 payload (`parts`, keyed by stripped party
+/// key), in committee order and domain-separated.
+fn round1_transcript(params: &Parameters, parts: &VecMap<Vec<u8>, Vec<u8>>) -> [u8; 32] {
+    let mut buf = Vec::new();
+    lp(&mut buf, TRANSCRIPT_TAG);
+    buf.extend_from_slice(&(params.threshold() as u32).to_be_bytes());
+    buf.extend_from_slice(&(params.party_count() as u32).to_be_bytes());
+    for p in params.parties() {
+        let key = strip(&p.key);
+        lp(&mut buf, key);
+        lp(&mut buf, parts.get(key).map_or(&[][..], |v| v.as_slice()));
+    }
+    sha256(&buf)
+}
+
+/// Appends `b` with a 4-byte big-endian length prefix.
+fn lp(buf: &mut Vec<u8>, b: &[u8]) {
+    buf.extend_from_slice(&(b.len() as u32).to_be_bytes());
+    buf.extend_from_slice(b);
 }
 
 fn strip(b: &[u8]) -> &[u8] {
@@ -495,6 +561,44 @@ mod tests {
         kgs.iter()
             .map(|kg| kg.wait().expect("keygen succeeds"))
             .collect()
+    }
+
+    /// A dealer that sends one party a different higher-degree commitment
+    /// than the others (the PoK only covers the constant term, so round 1
+    /// verifies everywhere) must make keygen fail for every party, not just
+    /// the one it lied to.
+    #[test]
+    fn round1_equivocation_aborts_everyone() {
+        use crate::tss::testhub::BatchHub;
+        let ids = party_ids(3);
+        let hub = BatchHub::new(&ids);
+        let sessions: Vec<Keygen> = (0..ids.len())
+            .map(|i| Keygen::new(Parameters::new(ids.to_vec(), &ids[i], 1, hub.broker(i))).unwrap())
+            .collect();
+        // Party 0 tells party 1 that its degree-1 coefficient is a1 + 1.
+        let tamper = |from: usize, to: usize, msg: &mut Message| {
+            if from != 0 || to != 1 || msg.typ != ROUND1_TYPE {
+                return;
+            }
+            let mut r1: KeygenRound1Msg = decode(msg).unwrap();
+            let arr: [u8; 32] = r1.poly_commitments[1].0.as_slice().try_into().unwrap();
+            let c1 = Ristretto255::decode_point(&arr).unwrap();
+            let shifted = Ristretto255::add(&c1, &Ristretto255::generator());
+            r1.poly_commitments[1] = B64Bytes(Ristretto255::encode_point(&shifted).to_vec());
+            *msg = encode(
+                msg.format(),
+                &msg.typ,
+                &r1,
+                msg.from.clone(),
+                msg.to.clone(),
+            )
+            .unwrap();
+        };
+        while hub.flush(Some(&tamper)) > 0 {}
+        for (i, s) in sessions.iter().enumerate() {
+            let r = s.try_result().expect("keygen finished");
+            assert!(r.is_err(), "party {i} accepted an equivocated keygen");
+        }
     }
 
     #[test]
