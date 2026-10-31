@@ -278,18 +278,36 @@ impl Modulus {
         self.mont.sub_mod(&self.reduce(a), &self.reduce(b))
     }
 
-    /// `base^exp mod m`. Sized to the exponent's bit length, so not constant time
-    /// in the exponent's length (this module is best-effort-CT;
-    /// see the `ecdsatss` warning). A modulus-width CT exponentiation over a
-    /// 4096-bit `N²` would be ~5× slower for the typical GG18 exponents.
-    pub(crate) fn pow(&self, base: &BoxedUint, exp: &BoxedUint) -> BoxedUint {
+    /// `base^exp mod m` for a **public** exponent (faster; do not use for secret
+    /// exponents). `BoxedMontModulus::pow_public` is variable time: it skips
+    /// zero windows and indexes its table by exponent bits. The base may be
+    /// secret.
+    pub(crate) fn pow_pub(&self, base: &BoxedUint, exp: &BoxedUint) -> BoxedUint {
         self.mont.pow_public(&self.reduce(base), exp)
     }
 
-    /// `base^exp mod m` for a **public** exponent (faster; do not use for secret
-    /// exponents).
-    pub(crate) fn pow_pub(&self, base: &BoxedUint, exp: &BoxedUint) -> BoxedUint {
-        self.mont.pow_public(&self.reduce(base), exp)
+    /// `base^exp mod m` for a **secret** exponent below `2^bits`, where `bits`
+    /// is a **public** bound (the width of the range the exponent was sampled
+    /// from, never the exponent's own bit length). Constant time via
+    /// `BoxedMontModulus::pow_bits`: a fixed-window ladder of `⌈bits/4⌉`
+    /// windows with constant-time table selection, so the cost depends only on
+    /// `bits` and the modulus width. Prefer this over [`pow_secret`] when the
+    /// exponent's bound is much narrower than the modulus (e.g. a 768-bit
+    /// nonce mod a 4096-bit `N²`).
+    ///
+    /// If the precondition `exp < 2^bits` does not hold, the bound is widened to
+    /// the exponent's length so the result stays correct (that path is not
+    /// constant time, but honest callers never take it).
+    ///
+    /// [`pow_secret`]: Self::pow_secret
+    pub(crate) fn pow_secret_bits(
+        &self,
+        base: &BoxedUint,
+        exp: &BoxedUint,
+        bits: usize,
+    ) -> BoxedUint {
+        let bits = bits.max(exp.bit_len());
+        self.mont.pow_bits(&self.reduce(base), exp, bits)
     }
 
     /// `base^exp mod m` for a **secret** exponent — constant-time ladder.
@@ -557,7 +575,21 @@ mod tests {
     fn modular_ops() {
         let m = Modulus::new(&u64(97));
         assert_eq!(to_be(&m.mul(&u64(20), &u64(20))), vec![12]); // 400 mod 97 = 12
-        assert_eq!(to_be(&m.pow(&u64(5), &u64(3))), vec![125 % 97]); // 28
+        assert_eq!(to_be(&m.pow_pub(&u64(5), &u64(3))), vec![125 % 97]); // 28
+        assert_eq!(to_be(&m.pow_secret(&u64(5), &u64(3))), vec![125 % 97]);
+        assert_eq!(
+            to_be(&m.pow_secret_bits(&u64(5), &u64(3), 8)),
+            vec![125 % 97]
+        );
+        // A bound narrower than the exponent still yields the right result.
+        assert_eq!(
+            to_be(&m.pow_secret_bits(&u64(5), &u64(3), 1)),
+            vec![125 % 97]
+        );
+        // Agreement with the variable-time path on a wider exponent.
+        let e = from_be(&[0xa5; 40]);
+        assert_eq!(m.pow_secret_bits(&u64(5), &e, 320), m.pow_pub(&u64(5), &e));
+        assert_eq!(m.pow_secret(&u64(5), &e), m.pow_pub(&u64(5), &e));
         let inv = m.inv(&u64(5)).unwrap();
         assert_eq!(to_be(&m.mul(&u64(5), &inv)), vec![1]);
     }

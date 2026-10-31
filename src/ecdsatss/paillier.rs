@@ -45,6 +45,18 @@ impl PublicKey {
         bn::add(&self.n, &bn::one())
     }
 
+    /// `(N+1)^m mod N²`, computed as `1 + (m mod N)·N` (binomial theorem: all
+    /// higher terms are multiples of `N²`). No exponentiation, so no
+    /// exponent-dependent timing, and much faster than a ladder.
+    pub(crate) fn gamma_pow(&self, m: &BoxedUint) -> BoxedUint {
+        let m = if m.lt(&self.n) {
+            m.clone()
+        } else {
+            bn::rem(m, &self.n)
+        };
+        bn::add(&bn::mul(&m, &self.n), &bn::one())
+    }
+
     /// `N²` (the ciphertext modulus).
     pub(crate) fn nsquare(&self) -> BoxedUint {
         bn::mul(&self.n, &self.n)
@@ -57,7 +69,8 @@ impl PublicKey {
             return Err(Error::Validation("paillier: message >= N".into()));
         }
         let n2 = Modulus::new(&self.nsquare());
-        let gm = n2.pow(&self.gamma(), m);
+        let gm = self.gamma_pow(m);
+        // N is a public exponent (the base x is secret, which pow_pub allows).
         let xn = n2.pow_pub(x, &self.n);
         Ok(n2.mul(&gm, &xn))
     }
@@ -78,9 +91,11 @@ impl PublicKey {
         Modulus::new(&self.nsquare()).mul(c1, c2)
     }
 
-    /// `Enc(m·plaintext(c₁))` from a plaintext scalar `m`: `c₁^m mod N²`.
-    pub(crate) fn homo_mult(&self, m: &BoxedUint, c1: &BoxedUint) -> BoxedUint {
-        Modulus::new(&self.nsquare()).pow(c1, m)
+    /// `Enc(m·plaintext(c₁))` from a secret plaintext scalar `m < 2^m_bits`
+    /// (`m_bits` a public bound, e.g. the curve order's width): `c₁^m mod N²`,
+    /// computed in constant time.
+    pub(crate) fn homo_mult(&self, m: &BoxedUint, m_bits: usize, c1: &BoxedUint) -> BoxedUint {
+        Modulus::new(&self.nsquare()).pow_secret_bits(c1, m, m_bits)
     }
 }
 

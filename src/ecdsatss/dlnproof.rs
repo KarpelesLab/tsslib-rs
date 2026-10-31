@@ -73,11 +73,12 @@ pub(crate) fn prove<R: RngCore>(
     let modn = Modulus::new(ntilde);
     let modpq = Modulus::new(&pq);
 
+    let pqb = pq.bit_len();
     let mut a = Vec::with_capacity(ITERATIONS);
     let mut alpha = Vec::with_capacity(ITERATIONS);
     for _ in 0..ITERATIONS {
         let ai = bn::rand_below(&pq, rng);
-        alpha.push(modn.pow(h1, &ai));
+        alpha.push(modn.pow_secret_bits(h1, &ai, pqb));
         a.push(ai);
     }
     let c = challenge(h1, h2, ntilde, &alpha);
@@ -215,7 +216,7 @@ mod tests {
         let f = bn::rand_below(&ntilde, &mut rng);
         let h1 = modn.mul(&f, &f); // a quadratic residue
         let x = bn::rand_below(&ord, &mut rng);
-        let h2 = modn.pow(&h1, &x);
+        let h2 = modn.pow_secret(&h1, &x);
         let proof = prove(&h1, &h2, &x, &p, &q, &ntilde, &mut rng);
         assert!(verify(&proof, &h1, &h2, &ntilde));
         // Wrong h2 must fail.

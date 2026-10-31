@@ -93,7 +93,8 @@ impl LocalPreParams {
             }
         };
         let h1i = modn.mul(&f1, &f1);
-        let h2i = modn.pow(&h1i, &alpha);
+        // alpha (the DLN witness) is secret and below Ñ.
+        let h2i = modn.pow_secret_bits(&h1i, &alpha, ntilde_i.bit_len());
 
         LocalPreParams {
             paillier_sk,

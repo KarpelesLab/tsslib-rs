@@ -86,15 +86,24 @@ pub(crate) fn prove_range_alice<R: RngCore>(
     let gamma = bn::rand_below(&q3nt, rng);
     let rho = bn::rand_below(&qnt, rng);
 
+    // Secret exponents go through the constant-time ladder, each with the
+    // public bound of the range it was sampled from (m is a scalar < q).
+    let (qb, qntb, q3b, q3ntb) = (q.bit_len(), qnt.bit_len(), q3.bit_len(), q3nt.bit_len());
     let mnt = Modulus::new(ntilde);
     let mns = Modulus::new(&pk.nsquare());
-    let z = mnt.mul(&mnt.pow(h1, m), &mnt.pow(h2, &rho));
-    let u = mns.mul(&mns.pow(&pk.gamma(), &alpha), &mns.pow(&beta, &pk.n));
-    let w = mnt.mul(&mnt.pow(h1, &alpha), &mnt.pow(h2, &gamma));
+    let z = mnt.mul(
+        &mnt.pow_secret_bits(h1, m, qb),
+        &mnt.pow_secret_bits(h2, &rho, qntb),
+    );
+    let u = mns.mul(&pk.gamma_pow(&alpha), &mns.pow_pub(&beta, &pk.n));
+    let w = mnt.mul(
+        &mnt.pow_secret_bits(h1, &alpha, q3b),
+        &mnt.pow_secret_bits(h2, &gamma, q3ntb),
+    );
 
     let e = rejection_sample(RANGE_TAG, &[&pk.n, &pk.gamma(), c, &z, &u, &w]);
     let mn = Modulus::new(&pk.n);
-    let s = mn.mul(&mn.pow(r, &e), &beta);
+    let s = mn.mul(&mn.pow_pub(r, &e), &beta);
     let s1 = bn::add(&bn::mul(&e, m), &alpha);
     let s2 = bn::add(&bn::mul(&e, &rho), &gamma);
     RangeProofAlice { z, u, w, s, s1, s2 }
@@ -143,10 +152,7 @@ pub(crate) fn verify_range_alice(
         return false;
     };
     let products = mns.mul(
-        &mns.mul(
-            &mns.pow_pub(&pk.gamma(), &pf.s1),
-            &mns.pow_pub(&pf.s, &pk.n),
-        ),
+        &mns.mul(&pk.gamma_pow(&pf.s1), &mns.pow_pub(&pf.s, &pk.n)),
         &mns.pow_pub(&c_inv, &e),
     );
     if pf.u != products {
@@ -259,16 +265,34 @@ pub(crate) fn prove_bob<R: RngCore>(
 
     let u = x_point.map(|_| secp::mul_base(&alpha));
 
+    // Secret exponents go through the constant-time ladder, each with the
+    // public bound of the range it was sampled from (x is a scalar < q, y is
+    // MtA's β' < q⁵).
+    let q5 = bn::mul(&bn::mul(&q3, &q), &q);
+    let (qb, q3b, q5b, q7b) = (q.bit_len(), q3.bit_len(), q5.bit_len(), q7.bit_len());
+    let (qntb, q3ntb) = (qnt.bit_len(), q3nt.bit_len());
     let mnt = Modulus::new(ntilde);
     let mns = Modulus::new(&pk.nsquare());
-    let z = mnt.mul(&mnt.pow(h1, x), &mnt.pow(h2, &rho));
-    let zprm = mnt.mul(&mnt.pow(h1, &alpha), &mnt.pow(h2, &rhoprm));
-    let t = mnt.mul(&mnt.pow(h1, y), &mnt.pow(h2, &sigma));
-    let v = mns.mul(
-        &mns.mul(&mns.pow(c1, &alpha), &mns.pow(&pk.gamma(), &gamma)),
-        &mns.pow(&beta, &pk.n),
+    let z = mnt.mul(
+        &mnt.pow_secret_bits(h1, x, qb),
+        &mnt.pow_secret_bits(h2, &rho, qntb),
     );
-    let w = mnt.mul(&mnt.pow(h1, &gamma), &mnt.pow(h2, &tau));
+    let zprm = mnt.mul(
+        &mnt.pow_secret_bits(h1, &alpha, q3b),
+        &mnt.pow_secret_bits(h2, &rhoprm, q3ntb),
+    );
+    let t = mnt.mul(
+        &mnt.pow_secret_bits(h1, y, q5b),
+        &mnt.pow_secret_bits(h2, &sigma, qntb),
+    );
+    let v = mns.mul(
+        &mns.mul(&mns.pow_secret_bits(c1, &alpha, q3b), &pk.gamma_pow(&gamma)),
+        &mns.pow_pub(&beta, &pk.n),
+    );
+    let w = mnt.mul(
+        &mnt.pow_secret_bits(h1, &gamma, q7b),
+        &mnt.pow_secret_bits(h2, &tau, q3ntb),
+    );
 
     let e = bob_challenge(
         session,
@@ -285,7 +309,7 @@ pub(crate) fn prove_bob<R: RngCore>(
     );
 
     let mn = Modulus::new(&pk.n);
-    let s = mn.mul(&mn.pow(r, &e), &beta);
+    let s = mn.mul(&mn.pow_pub(r, &e), &beta);
     let s1 = bn::add(&bn::mul(&e, x), &alpha);
     let s2 = bn::add(&bn::mul(&e, &rho), &rhoprm);
     let t1 = bn::add(&bn::mul(&e, y), &gamma);
@@ -438,7 +462,7 @@ pub(crate) fn verify_bob(
     let mns = Modulus::new(&n2);
     let left = mns.mul(
         &mns.mul(&mns.pow_pub(c1, &pf.s1), &mns.pow_pub(&pf.s, &pk.n)),
-        &mns.pow_pub(&pk.gamma(), &pf.t1),
+        &pk.gamma_pow(&pf.t1),
     );
     let right = mns.mul(&mns.pow_pub(c2, &e), &pf.v);
     left == right
@@ -538,7 +562,8 @@ fn bob_mid_inner<R: RngCore>(
     let q5 = bn::mul(&bn::mul(&bn::mul(&q, &q), &bn::mul(&q, &q)), &q);
     let betaprm = bn::rand_below(&q5, rng);
     let (c_betaprm, c_rand) = pk.encrypt(&betaprm, rng)?;
-    let cb = pk.homo_add(&pk.homo_mult(b, ca), &c_betaprm);
+    // b is a secret scalar < q.
+    let cb = pk.homo_add(&pk.homo_mult(b, q.bit_len(), ca), &c_betaprm);
     let beta = Modulus::new(&q).sub(&bn::u64(0), &betaprm); // (−β') mod q
     let pi = prove_bob(
         session, pk, ntilde_a, h1a, h2a, ca, &cb, b, &betaprm, &c_rand, b_point, rng,
@@ -684,7 +709,7 @@ mod tests {
         let y = bn::u64(5);
         let (ca, _) = pk.encrypt(&bn::u64(7), &mut rng).unwrap();
         let (cy, r) = pk.encrypt(&y, &mut rng).unwrap();
-        let cb = pk.homo_add(&pk.homo_mult(&x, &ca), &cy);
+        let cb = pk.homo_add(&pk.homo_mult(&x, 256, &ca), &cy);
         let pf = prove_bob(
             session, &pk, &nt, &h1, &h2, &ca, &cb, &x, &y, &r, None, &mut rng,
         );
@@ -751,7 +776,7 @@ mod tests {
         let (x, y) = (bn::u64(42), bn::u64(5));
         let (ca, _) = pk.encrypt(&bn::u64(7), &mut rng).unwrap();
         let (cy, r) = pk.encrypt(&y, &mut rng).unwrap();
-        let cb = pk.homo_add(&pk.homo_mult(&x, &ca), &cy);
+        let cb = pk.homo_add(&pk.homo_mult(&x, 256, &ca), &cy);
         let mut pf = prove_bob(
             session, &pk, &nt, &h1, &h2, &ca, &cb, &x, &y, &r, None, &mut rng,
         );

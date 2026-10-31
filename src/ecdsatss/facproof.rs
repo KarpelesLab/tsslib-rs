@@ -120,12 +120,33 @@ pub(crate) fn prove<R: RngCore>(
     let x = bn::rand_below(&q3ncap, rng);
     let y = bn::rand_below(&q3ncap, rng);
 
+    // Every exponent here is secret: use the constant-time ladder with the
+    // public bound of each one's range (the factors of a balanced N0 have
+    // about half its bits; pow_secret_bits stays correct if not).
+    let pb = n0.bit_len().div_ceil(2) + 1;
+    let (qncapb, q3sqrtn0b) = (qncap.bit_len(), q3sqrtn0.bit_len());
+    let (q3ncapb, q3n0ncapb) = (q3ncap.bit_len(), q3n0ncap.bit_len());
     let m = Modulus::new(ncap);
-    let pp = m.mul(&m.pow(s, n0p), &m.pow(t, &mu));
-    let qq = m.mul(&m.pow(s, n0q), &m.pow(t, &nu));
-    let a = m.mul(&m.pow(s, &alpha), &m.pow(t, &x));
-    let b = m.mul(&m.pow(s, &beta), &m.pow(t, &y));
-    let tt = m.mul(&m.pow(&qq, &alpha), &m.pow(t, &r));
+    let pp = m.mul(
+        &m.pow_secret_bits(s, n0p, pb),
+        &m.pow_secret_bits(t, &mu, qncapb),
+    );
+    let qq = m.mul(
+        &m.pow_secret_bits(s, n0q, pb),
+        &m.pow_secret_bits(t, &nu, qncapb),
+    );
+    let a = m.mul(
+        &m.pow_secret_bits(s, &alpha, q3sqrtn0b),
+        &m.pow_secret_bits(t, &x, q3ncapb),
+    );
+    let b = m.mul(
+        &m.pow_secret_bits(s, &beta, q3sqrtn0b),
+        &m.pow_secret_bits(t, &y, q3ncapb),
+    );
+    let tt = m.mul(
+        &m.pow_secret_bits(&qq, &alpha, q3sqrtn0b),
+        &m.pow_secret_bits(t, &r, q3n0ncapb),
+    );
 
     let mut pf = ProofFac {
         p: pp,
