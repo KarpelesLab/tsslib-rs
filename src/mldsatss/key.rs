@@ -4,6 +4,7 @@ use super::Error;
 use super::params::{MAX_PARTIES, ThresholdParams44, sharing_pattern};
 use crate::prelude::*;
 use alloc::collections::BTreeMap;
+use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{self, Poly};
 
 const K: usize = 4; // ML_DSA_44.k
@@ -106,6 +107,17 @@ impl Key44 {
     /// `A[i*L + j] = sample_ntt_poly(rho, j, i)` (FIPS 204 ExpandA).
     pub fn matrix(&self) -> Vec<Poly> {
         expand_matrix(&self.rho)
+    }
+
+    /// The group FIPS 204 public key `rho ‖ pack_t1(t1)` this key signs for.
+    pub fn public_key(&self) -> Result<MlDsa44PublicKey, Error> {
+        let mut pk_bytes = Vec::with_capacity(32 + K * 320);
+        pk_bytes.extend_from_slice(&self.rho);
+        for t1i in self.t1.iter() {
+            pk_bytes.extend_from_slice(&hazmat::pack_t1(t1i));
+        }
+        MlDsa44PublicKey::from_bytes(&pk_bytes)
+            .map_err(|e| Error::Validation(format!("public key assembly failed: {e:?}")))
     }
 
     /// Checks the key is well-formed: it holds at least one share, and every

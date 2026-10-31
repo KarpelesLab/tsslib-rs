@@ -20,7 +20,8 @@
 //! Trusted-dealer keygen ([`trusted_dealer_keygen44`]), the dealerless DKG
 //! ([`DkgParty44`], experimental and unreviewed — see its module notes), and
 //! threshold signing (synchronous [`sign44`], broker-driven
-//! [`SigningParty44`]) are implemented. Built on `purecrypto`'s
+//! [`SigningParty44`]) are implemented; both signers verify the assembled
+//! signature under the FIPS 204 public key before returning it. Built on `purecrypto`'s
 //! `mldsa::hazmat` lattice primitives; the hyperball rejection sampler and
 //! full-range `w` packing live in this module.
 

@@ -33,7 +33,9 @@ const MAX_ATTEMPTS: usize = 512;
 
 /// Produces a FIPS 204 ML-DSA-44 signature of `msg` (context `ctx`, ≤ 255 bytes)
 /// from the threshold signing set `signers` (exactly `params.t` distinct
-/// parties). The result verifies under the group [`MlDsa44PublicKey`].
+/// parties). The result verifies under the group [`MlDsa44PublicKey`]: the
+/// assembled signature is checked against the public key rebuilt from the
+/// first signer's `rho`/`t1` before it is returned.
 pub fn sign44(
     signers: &[&Key44],
     params: &ThresholdParams44,
@@ -61,6 +63,7 @@ pub fn sign44(
     let mu = compute_mu(&signers[0].tr, ctx, msg);
     let a = signers[0].matrix();
     let t1 = &signers[0].t1;
+    let pk = signers[0].public_key()?;
 
     let act = super::key::signing_set_mask(signers.iter().map(|k| k.id), params)?;
     let mut s1h: Vec<PolyVec<L>> = Vec::with_capacity(signers.len());
@@ -130,6 +133,11 @@ pub fn sign44(
                 }
             }
             if let Some(sig) = combine_try(&a, t1, &mu, wf, &zfinal) {
+                if !pk.verify(&sig, msg, ctx) {
+                    return Err(Error::Validation(
+                        "assembled threshold signature failed FIPS 204 verification".into(),
+                    ));
+                }
                 return Ok(sig);
             }
         }
@@ -408,6 +416,22 @@ mod tests {
         assert!(keys[0].recover_share(0b0000_0001, &params).is_err());
         assert!(keys[0].recover_share(0b0100_0001, &params).is_err());
         assert!(keys[0].recover_share(0b0000_0011, &params).is_ok());
+    }
+
+    /// Keys whose `tr` disagrees with their `(rho, t1)` still pass every
+    /// combine-side check (they all use the same wrong `mu`), but the result
+    /// would not verify; the final FIPS 204 check must refuse to return it.
+    #[test]
+    fn inconsistent_key_signature_is_not_returned() {
+        let params = get_threshold_params44(2, 2).unwrap();
+        let (_pk, mut keys) = trusted_dealer_keygen44(&[4u8; 32], &params).unwrap();
+        for k in keys.iter_mut() {
+            k.tr[0] ^= 1;
+        }
+        let signers: Vec<&Key44> = keys.iter().collect();
+        let mut rng = crate::rng::SystemRng;
+        let err = sign44(&signers, &params, b"m", b"", &mut rng).unwrap_err();
+        assert!(err.to_string().contains("FIPS 204 verification"), "{err}");
     }
 
     #[test]

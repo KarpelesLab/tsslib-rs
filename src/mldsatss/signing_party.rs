@@ -5,7 +5,8 @@
 //! [`MessageBroker`]. Round 1 broadcasts a hash commitment to this party's `k`
 //! parallel `w` vectors; round 2 reveals the packed `w`s (each verified against
 //! its commitment); round 3 broadcasts the packed responses; combine aggregates
-//! and emits a FIPS-204-verifiable signature. The per-phase lattice work is the
+//! and emits a FIPS-204-verifiable signature (verified under the group public
+//! key before it is delivered). The per-phase lattice work is the
 //! shared [`sample_w`]/[`compute_response`]/[`combine_try`] from
 //! [`signing`](super::signing). Round message types are
 //! `mldsa44:sign:round{1,2,3}#<attempt_id>`, where `attempt_id` (a u32, 0 by
@@ -30,6 +31,7 @@ use crate::tss::expect::JsonExpect;
 use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::hash::shake256;
+use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{ML_DSA_44, Poly, inf_norm, unpack_z};
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
@@ -62,6 +64,11 @@ struct Shared {
     act: u8,
     my_rank: usize,
     mu: [u8; 64],
+    /// Group public key plus the signed `(msg, ctx)`: combine verifies the
+    /// assembled signature against them before delivering it.
+    pk: MlDsa44PublicKey,
+    msg: Vec<u8>,
+    ctx: Vec<u8>,
     a: Vec<Poly>,
     kk: usize,
     th: ThresholdParams44,
@@ -146,6 +153,7 @@ impl SigningParty44 {
         let act = super::key::signing_set_mask(key_ids.iter().copied(), &th)?;
 
         let mu = compute_mu(&key.tr, ctx, msg);
+        let pk = key.public_key()?;
         let a = key.matrix();
         let kk = th.k as usize;
         let t = params.parties().len();
@@ -162,6 +170,9 @@ impl SigningParty44 {
             act,
             my_rank,
             mu,
+            pk,
+            msg: msg.to_vec(),
+            ctx: ctx.to_vec(),
             a,
             kk,
             th,
@@ -439,6 +450,13 @@ impl Shared {
         let t1 = &self.key.t1;
         for tri in 0..self.kk {
             if let Some(sig) = combine_try(&self.a, t1, &self.mu, &wfinal[tri], &zfinal[tri]) {
+                // Final FIPS 204 self-check: never hand out a signature that
+                // does not verify under the group key.
+                if !self.pk.verify(&sig, &self.msg, &self.ctx) {
+                    return self.deliver(Err(Error::Validation(
+                        "assembled threshold signature failed FIPS 204 verification".into(),
+                    )));
+                }
                 return self.deliver(Ok(sig));
             }
         }
@@ -707,6 +725,39 @@ mod tests {
         };
 
         assert!(pk.verify(&sig, msg, ctx), "broker signature must verify");
+    }
+
+    /// A signature that passes combine but not FIPS 204 verification (here:
+    /// keys whose `tr` disagrees with their public key) is never delivered.
+    #[test]
+    fn broker_refuses_unverifiable_signature() {
+        let params = get_threshold_params44(2, 2).unwrap();
+        let (_pk, mut keys) = trusted_dealer_keygen44(&[8u8; 32], &params).unwrap();
+        for k in keys.iter_mut() {
+            k.tr[0] ^= 1;
+        }
+        let committee = committee_ids(2);
+        let key_ids: Vec<u8> = committee.iter().map(|p| p.key[0] - 1).collect();
+        let mut saw_verify_failure = false;
+        for _ in 0..32 {
+            let hub = TestHub::new(&committee);
+            let parties: Vec<SigningParty44> = (0..2)
+                .map(|slot| {
+                    let prm =
+                        Parameters::new(committee.clone(), &committee[slot], 1, hub.broker(slot));
+                    let key = keys[key_ids[slot] as usize].clone();
+                    SigningParty44::new(prm, params, key, key_ids.clone(), b"m", b"").unwrap()
+                })
+                .collect();
+            for p in &parties {
+                let err = p.wait().expect_err("unverifiable signature delivered");
+                saw_verify_failure |= err.to_string().contains("FIPS 204 verification");
+            }
+            if saw_verify_failure {
+                break;
+            }
+        }
+        assert!(saw_verify_failure);
     }
 
     /// Round message types must carry the `#<attempt_id>` suffix, even at the
