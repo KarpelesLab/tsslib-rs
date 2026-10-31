@@ -13,6 +13,16 @@ use purecrypto::rng::RngCore;
 /// Number of iterations in the Paillier key-correctness proof (GG18).
 pub(crate) const PROOF_ITERS: usize = 13;
 
+/// Maximum number of rejected candidates [`generate_xs`] tolerates before
+/// giving up. Each candidate is built from `⌈bitlen(N)/256⌉` hash blocks, so
+/// for a modulus whose bit length is just above a multiple of 256 (e.g. 2049
+/// bits) almost every candidate exceeds `N`; without a cap a peer sending such
+/// an `N` would pin every verifier in an endless loop. An honest `N` has its
+/// top bit set and a bit length that is a multiple of 256 (2048 bits), so each
+/// candidate is accepted with probability ≥ 1/2 and the chance of 1000
+/// rejections before 13 acceptances is negligible.
+const MAX_XS_REJECTIONS: usize = 1000;
+
 /// A Paillier public key: the modulus `N`.
 #[derive(Clone)]
 pub struct PublicKey {
@@ -124,7 +134,9 @@ impl PrivateKey {
         ecdsa_x: &BoxedUint,
         ecdsa_y: &BoxedUint,
     ) -> Result<[BoxedUint; PROOF_ITERS], Error> {
-        let xs = generate_xs(PROOF_ITERS, k, &self.pk.n, ecdsa_x, ecdsa_y);
+        let xs = generate_xs(PROOF_ITERS, k, &self.pk.n, ecdsa_x, ecdsa_y).ok_or_else(|| {
+            Error::Validation("paillier: N unsuitable for the key-correctness proof".into())
+        })?;
         // M = N⁻¹ mod φ(N); φ(N) is even, so use the non-Montgomery inverse.
         let m = bn::mod_inv(&self.pk.n, &self.phi)
             .ok_or_else(|| Error::Validation("paillier: N not invertible mod φ(N)".into()))?;
@@ -151,7 +163,9 @@ pub(crate) fn verify_proof(
             return false;
         }
     }
-    let xs = generate_xs(PROOF_ITERS, k, n, ecdsa_x, ecdsa_y);
+    let Some(xs) = generate_xs(PROOF_ITERS, k, n, ecdsa_x, ecdsa_y) else {
+        return false;
+    };
     let modn = Modulus::new(n);
     for (xi, yi) in xs.iter().zip(pi.iter()) {
         // xi mod N == yi^N mod N
@@ -163,13 +177,14 @@ pub(crate) fn verify_proof(
 }
 
 /// GG18 `GenerateXs`: the deterministic challenge values for the Paillier proof.
+/// `None` if more than [`MAX_XS_REJECTIONS`] candidates are rejected.
 fn generate_xs(
     m: usize,
     k: &BoxedUint,
     n: &BoxedUint,
     sx: &BoxedUint,
     sy: &BoxedUint,
-) -> Vec<BoxedUint> {
+) -> Option<Vec<BoxedUint>> {
     let blocks = n.bit_len().div_ceil(256);
     let (kb, sxb, syb, nb) = (bn::to_be(k), bn::to_be(sx), bn::to_be(sy), bn::to_be(n));
     let mut ret = Vec::with_capacity(m);
@@ -190,9 +205,12 @@ fn generate_xs(
             i += 1;
         } else {
             nn += 1;
+            if nn > MAX_XS_REJECTIONS {
+                return None;
+            }
         }
     }
-    ret
+    Some(ret)
 }
 
 /// `1 ≤ v < n` and `gcd(v, n) = 1`.
@@ -278,6 +296,30 @@ mod tests {
         let mut bad = pi.clone();
         bad[0] = bn::add(&bad[0], &bn::one());
         assert!(!verify_proof(&n, &k, &sx, &sy, &bad));
+    }
+
+    /// A modulus of bit length ≡ 1 (mod 256) makes almost every challenge
+    /// candidate exceed `N`; generation and verification must give up rather
+    /// than loop forever.
+    #[test]
+    fn generate_xs_is_bounded() {
+        // 2^2048 + c: 2049 bits, odd, no prime factor below 1000 (so
+        // verify_proof gets past its trial division to generate_xs).
+        let base = bn::from_be(&{
+            let mut b = vec![0u8; 257];
+            b[0] = 1;
+            b
+        });
+        let n = (1u64..)
+            .step_by(2)
+            .map(|c| bn::add(&base, &bn::u64(c)))
+            .find(|n| PRIMES_BELOW_1000.iter().all(|&p| bn::mod_small(n, p) != 0))
+            .unwrap();
+        assert_eq!(n.bit_len(), 2049);
+        let (k, sx, sy) = (bn::u64(1), bn::u64(2), bn::u64(3));
+        assert!(generate_xs(PROOF_ITERS, &k, &n, &sx, &sy).is_none());
+        let pi: Vec<BoxedUint> = (0..PROOF_ITERS).map(|_| bn::one()).collect();
+        assert!(!verify_proof(&n, &k, &sx, &sy, &pi));
     }
 
     #[test]
