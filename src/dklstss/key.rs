@@ -52,7 +52,10 @@ impl Key {
     /// Validates basic internal consistency.
     pub fn validate_basic(&self) -> Result<(), super::Error> {
         use super::Error::Validation;
-        if self.n == 0 || self.t >= self.n {
+        // T = 0 is only legitimate for a 1-of-1 key (see `import_key`);
+        // keygen/reshare never produce it for N > 1, where a constant
+        // polynomial would hand every share-holder the whole secret.
+        if self.n == 0 || self.t >= self.n || (self.t == 0 && self.n > 1) {
             return Err(Validation(format!("invalid (N={}, T={})", self.n, self.t)));
         }
         if self.idx >= self.n {
@@ -61,6 +64,17 @@ impl Key {
         if self.party_ids.len() != self.n || self.big_xj.len() != self.n || self.ot.len() != self.n
         {
             return Err(Validation("inconsistent N-length fields".into()));
+        }
+        // Party ids are Shamir evaluation points: they must be distinct and
+        // nonzero mod n (an id ≡ 0 would be dealt the secret itself).
+        let ids: Vec<Scalar> = self
+            .party_ids
+            .iter()
+            .map(|p| super::secp::scalar_from_be_reduce(&p.key))
+            .collect();
+        super::resharing::check_indexes(&ids)?;
+        if self.ot[self.idx].is_some() {
+            return Err(Validation("OT state present for own slot".into()));
         }
         if bool::from(self.xi.is_zero()) {
             return Err(Validation("Xi is zero".into()));
@@ -182,6 +196,55 @@ mod tests {
     use super::super::{keygen, otext};
     use crate::prelude::*;
     use crate::rng::SystemRng;
+
+    fn sample_key() -> super::Key {
+        let ids = crate::tss::PartyId::sort(
+            (1..=3u8)
+                .map(|i| crate::tss::PartyId::new(i.to_string(), format!("P{i}"), vec![i]))
+                .collect(),
+            0,
+        );
+        let key = keygen(3, 1, &ids, &mut SystemRng).unwrap().remove(0);
+        key.validate_basic().unwrap();
+        key
+    }
+
+    #[test]
+    fn validate_basic_rejects_zero_threshold() {
+        let mut key = sample_key();
+        key.t = 0;
+        assert!(key.validate_basic().is_err());
+    }
+
+    #[test]
+    fn validate_basic_rejects_bad_party_ids() {
+        // Duplicate ids.
+        let mut key = sample_key();
+        key.party_ids[2].key = key.party_ids[1].key.clone();
+        assert!(key.validate_basic().is_err());
+
+        // An id equal to the group order is 0 mod n.
+        let mut key = sample_key();
+        key.party_ids[2].key =
+            hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+                .unwrap();
+        assert!(key.validate_basic().is_err());
+
+        // Distinct as bytes but equal mod n.
+        let mut key = sample_key();
+        key.party_ids[2].key =
+            hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364143")
+                .unwrap();
+        assert!(key.validate_basic().is_err());
+    }
+
+    #[test]
+    fn validate_basic_rejects_self_ot_slot() {
+        let mut key = sample_key();
+        let other = key.ot[1].clone();
+        key.ot[key.idx] = other;
+        assert!(key.validate_basic().is_err());
+    }
 
     #[test]
     fn zeroize_clears_share_and_ot_state() {
