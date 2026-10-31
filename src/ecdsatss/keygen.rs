@@ -225,6 +225,11 @@ impl Shared {
         let i = self.params.party_index();
         let pre = &self.pre;
 
+        // h1/h2 already used by another party (the list is seeded with ours).
+        // The DLN proofs are not session-bound, so a replayed (Ñ, h1, h2,
+        // proofs) tuple would otherwise be accepted.
+        let mut seen_h: Vec<Vec<u8>> = vec![bn::to_be(&pre.h1i), bn::to_be(&pre.h2i)];
+
         // Decode + verify each peer's round-1 message.
         for (k, m) in msgs.iter().enumerate() {
             let r1: R1Msg = match decode(m) {
@@ -245,6 +250,14 @@ impl Shared {
             }
             if bn::to_be(&h1jv) == bn::to_be(&h2jv) {
                 return self.deliver(Err(Error::Validation("keygen: H1j == H2j".into())));
+            }
+            for h in [bn::to_be(&h1jv), bn::to_be(&h2jv)] {
+                if seen_h.contains(&h) {
+                    return self.deliver(Err(Error::Validation(
+                        "keygen: H1j/H2j already used by another party".into(),
+                    )));
+                }
+                seen_h.push(h);
             }
             let (dln1, dln2) = match (
                 DlnProof::from_parts(&parts_bytes(&r1.dln1)),
