@@ -12,7 +12,7 @@
 use crate::prelude::*;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::hazmat::{N, Poly, Q};
-use zeroize::Zeroizing;
+use purecrypto::zeroize::Zeroizing;
 
 const L: usize = 4;
 const K: usize = 4;
@@ -211,7 +211,7 @@ impl FVec {
     /// hyperball mask `y` (or a masked response) during signing; it also runs
     /// on drop, so calling it early only shortens the secret's lifetime.
     pub fn zeroize(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.v);
+        purecrypto::zeroize::Zeroize::zeroize(&mut self.v);
     }
 
     /// Reports whether the ν-scaled L2 norm exceeds `r`. The first `L`

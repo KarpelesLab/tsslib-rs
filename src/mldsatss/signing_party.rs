@@ -34,8 +34,8 @@ use purecrypto::hash::shake256;
 use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{ML_DSA_44, Poly, inf_norm, unpack_z};
 use purecrypto::rng::RngCore;
+use purecrypto::zeroize::Zeroize;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
 
 const TYPE_R1: &str = "mldsa44:sign:round1";
 const TYPE_R2: &str = "mldsa44:sign:round2";

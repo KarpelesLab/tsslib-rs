@@ -83,7 +83,7 @@ pub struct AliceState {
 /// session.
 impl Drop for AliceState {
     fn drop(&mut self) {
-        use zeroize::Zeroize;
+        use purecrypto::zeroize::Zeroize;
         self.alpha_be.zeroize();
         for k in self.keys.iter_mut() {
             k.zeroize();
@@ -100,14 +100,14 @@ pub fn alice_step1(
     alpha: &Scalar,
 ) -> Result<(ExtendMsg1, AliceState), Error> {
     use purecrypto::rng::RngCore as _;
-    use zeroize::Zeroize;
+    use purecrypto::zeroize::Zeroize;
     let alpha_be = alpha.to_bytes_be();
     // Choice bits: `alpha` (one bit per entry), then the random pad — fresh
     // on every call, so repeated runs with the same `alpha` (retries, the two
     // Mul-then-check runs) never share pad bits.
-    let mut choice = zeroize::Zeroizing::new(vec![0u8; EXT_BITS / 8]);
+    let mut choice = purecrypto::zeroize::Zeroizing::new(vec![0u8; EXT_BITS / 8]);
     {
-        let alpha_bits = zeroize::Zeroizing::new(bits_le(&alpha_be));
+        let alpha_bits = purecrypto::zeroize::Zeroizing::new(bits_le(&alpha_be));
         choice[..SCALAR_BITS / 8].copy_from_slice(&alpha_bits);
     }
     SystemRng.fill_bytes(&mut choice[SCALAR_BITS / 8..]);
@@ -134,7 +134,10 @@ pub fn bob_step1(
     // Rows SCALAR_BITS.. carry Alice's random pad (they exist only to hide α
     // in the KOS check): they are ignored here and wiped with the rest.
     let (m0, m1) = ext_sender.extend(sid, alice_msg)?;
-    let (m0, m1) = (zeroize::Zeroizing::new(m0), zeroize::Zeroizing::new(m1));
+    let (m0, m1) = (
+        purecrypto::zeroize::Zeroizing::new(m0),
+        purecrypto::zeroize::Zeroizing::new(m1),
+    );
 
     let mut corrections = Vec::with_capacity(SCALAR_BITS);
     let mut u_b = Scalar::ZERO;

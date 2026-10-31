@@ -640,7 +640,7 @@ struct KeygenR1Unicast {
 // The share is secret: wipe it whenever a copy (sent or received) is dropped.
 impl Drop for KeygenR1Unicast {
     fn drop(&mut self) {
-        use zeroize::Zeroize;
+        use purecrypto::zeroize::Zeroize;
         self.share.0.zeroize();
     }
 }

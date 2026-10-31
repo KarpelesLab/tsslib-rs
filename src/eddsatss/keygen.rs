@@ -34,8 +34,8 @@ use crate::tss::hashing::{sha512_256i, sha512_256i_tagged};
 use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
+use purecrypto::zeroize::{Zeroize, Zeroizing};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
 
 // v2: round 1 carries an ephemeral X25519 key, round-2 shares are sealed, and
 // round 2 binds the round-1 transcript hash. v1 peers fail on the type string.

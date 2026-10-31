@@ -108,7 +108,7 @@ struct State {
 /// The X25519 private key opens the share envelopes; wiped with the session.
 impl Drop for State {
     fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.eph_priv);
+        purecrypto::zeroize::Zeroize::zeroize(&mut self.eph_priv);
     }
 }
 
@@ -304,7 +304,8 @@ impl Shared {
                             .get(strip(&pid.key))
                             .expect("peer eph pub present");
                         let ad = keygen_round2_ad(&my_nonce, &eph_pub, recipient_pub, &transcript);
-                        let plaintext = zeroize::Zeroizing::new(scalar_to_be(&share.value));
+                        let plaintext =
+                            purecrypto::zeroize::Zeroizing::new(scalar_to_be(&share.value));
                         aead::seal_share(&mut rng, &st.eph_priv, recipient_pub, &ad, &plaintext)
                             .map_err(|e| Error::Validation(format!("seal share to {pid}: {e}")))
                     }

@@ -29,7 +29,7 @@ use super::baseot;
 use crate::prelude::*;
 use purecrypto::cipher::{Aes128, Ctr};
 use purecrypto::hash::sha512_256;
-use zeroize::Zeroize;
+use purecrypto::zeroize::Zeroize;
 
 /// Computational security parameter (bits).
 pub const KAPPA: usize = 128;

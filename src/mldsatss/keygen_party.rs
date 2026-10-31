@@ -59,8 +59,8 @@ use purecrypto::hash::shake256;
 use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{self, ML_DSA_44, N, Poly, pack_t1, power2_round};
 use purecrypto::rng::RngCore;
+use purecrypto::zeroize::{Zeroize, Zeroizing};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
 
 const L: usize = 4;
 const K: usize = 4;

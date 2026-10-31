@@ -153,8 +153,8 @@ struct State {
 /// The X25519 private keys seal and open the share envelopes; wiped with the session.
 impl Drop for State {
     fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.eph_priv);
-        zeroize::Zeroize::zeroize(&mut self.my_eph_priv);
+        purecrypto::zeroize::Zeroize::zeroize(&mut self.eph_priv);
+        purecrypto::zeroize::Zeroize::zeroize(&mut self.my_eph_priv);
     }
 }
 
@@ -485,7 +485,8 @@ impl Shared {
                 ) {
                     (Some(share), Some(recipient_pub), Some(recipient_nonce)) => {
                         let ad = reshare_round3_ad(recipient_nonce, &eph_pub, recipient_pub);
-                        let plaintext = zeroize::Zeroizing::new(encode_scalar(&share.value));
+                        let plaintext =
+                            purecrypto::zeroize::Zeroizing::new(encode_scalar(&share.value));
                         aead::seal_share(&mut rng, &st.eph_priv, recipient_pub, &ad, &*plaintext)
                             .map_err(|e| {
                                 Error::Validation(format!("seal reshare share to {pj}: {e}"))
@@ -620,7 +621,7 @@ impl Shared {
             };
             let Some(share) = <[u8; 32]>::try_from(share_bytes.as_slice())
                 .ok()
-                .map(zeroize::Zeroizing::new)
+                .map(purecrypto::zeroize::Zeroizing::new)
                 .and_then(|a| decode_scalar(&a))
             else {
                 return self.deliver(Err(Error::Validation(format!(

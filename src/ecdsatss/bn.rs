@@ -43,7 +43,7 @@ pub(crate) fn to_be(n: &BoxedUint) -> Vec<u8> {
     let byte_len = n.bit_len().div_ceil(8);
     // `n` may be secret; wipe the scratch copy (the returned Vec is the
     // caller's to manage).
-    let b = zeroize::Zeroizing::new(n.to_be_bytes(byte_len));
+    let b = purecrypto::zeroize::Zeroizing::new(n.to_be_bytes(byte_len));
     let start = b.iter().position(|&x| x != 0).unwrap_or(b.len());
     b[start..].to_vec()
 }
@@ -64,7 +64,7 @@ pub(crate) fn from_dec(d: &BigUintDec) -> BoxedUint {
 /// `BoxedUint` → `BigUintDec`. The intermediate byte buffer is wiped, so this
 /// is safe for secret values.
 pub(crate) fn to_dec(n: &BoxedUint) -> BigUintDec {
-    BigUintDec::from_be_bytes(&zeroize::Zeroizing::new(to_be(n)))
+    BigUintDec::from_be_bytes(&purecrypto::zeroize::Zeroizing::new(to_be(n)))
 }
 
 // --- comparison ------------------------------------------------------------

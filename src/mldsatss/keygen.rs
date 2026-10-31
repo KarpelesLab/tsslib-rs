@@ -93,7 +93,7 @@ pub fn trusted_dealer_keygen44(
     }
     // The tail of `stream` holds every share's sSeed; wipe it now that all
     // shares are derived (best-effort).
-    zeroize::Zeroize::zeroize(&mut stream);
+    purecrypto::zeroize::Zeroize::zeroize(&mut stream);
 
     // t = A·s1 + s2 ; t1 = high bits of t (Power2Round).
     let mut t1 = zero_polys::<K>();
@@ -111,10 +111,10 @@ pub fn trusted_dealer_keygen44(
     }
     // Wipe the dealer's aggregate secret accumulators (best-effort).
     for p in s1h_total.iter_mut() {
-        zeroize::Zeroize::zeroize(&mut p.c);
+        purecrypto::zeroize::Zeroize::zeroize(&mut p.c);
     }
     for p in s2_total.iter_mut() {
-        zeroize::Zeroize::zeroize(&mut p.c);
+        purecrypto::zeroize::Zeroize::zeroize(&mut p.c);
     }
 
     // Pack the FIPS 204 public key: rho || pack_t1 per row.

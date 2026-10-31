@@ -33,8 +33,8 @@ use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::sha256;
 use purecrypto::rng::RngCore;
+use purecrypto::zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
 
 const ROUND1_TYPE: &str = "frost:secp256k1-tr:keygen:v2:round1";
 const ROUND2_TYPE: &str = "frost:secp256k1-tr:keygen:v2:round2";
@@ -94,7 +94,7 @@ struct State {
 /// The X25519 private key opens the share envelopes; wiped with the session.
 impl Drop for State {
     fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.eph_priv);
+        purecrypto::zeroize::Zeroize::zeroize(&mut self.eph_priv);
     }
 }
 

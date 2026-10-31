@@ -13,7 +13,7 @@ use purecrypto::ec::x25519::x25519;
 use purecrypto::hash::Sha256;
 use purecrypto::kdf::hkdf;
 use purecrypto::rng::RngCore;
-use zeroize::Zeroizing;
+use purecrypto::zeroize::Zeroizing;
 
 /// Length of an X25519 private/public key.
 pub const EPHEMERAL_KEY_BYTES: usize = 32;
@@ -161,10 +161,10 @@ mod tests {
         let (a_priv, a_pub) = new_ephemeral_key(&mut SystemRng);
         let (b_priv, b_pub) = new_ephemeral_key(&mut SystemRng);
         let ct = seal_share(&mut SystemRng, &a_priv, &b_pub, b"ad1", b"x").unwrap();
-        assert_eq!(
+        assert!(matches!(
             open_share(&b_priv, &a_pub, b"ad2", &ct),
             Err(AeadError::TagMismatch)
-        );
+        ));
     }
 
     #[test]
@@ -174,10 +174,10 @@ mod tests {
         let mut ct = seal_share(&mut SystemRng, &a_priv, &b_pub, b"ad", b"hello").unwrap();
         let last = ct.len() - 1;
         ct[last] ^= 0x01;
-        assert_eq!(
+        assert!(matches!(
             open_share(&b_priv, &a_pub, b"ad", &ct),
             Err(AeadError::TagMismatch)
-        );
+        ));
     }
 
     #[test]

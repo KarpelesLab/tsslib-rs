@@ -7,8 +7,8 @@
 use crate::prelude::*;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
+use purecrypto::zeroize::Zeroize;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
 
 /// The curve name stored for Edwards25519 points.
 pub(crate) const CURVE_NAME: &str = "ed25519";

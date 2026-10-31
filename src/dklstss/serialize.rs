@@ -15,8 +15,8 @@ use super::secp::{self, Scalar};
 use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
+use purecrypto::zeroize::{Zeroize, Zeroizing};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
 
 /// Save-format version.
 pub const KEY_VERSION: u32 = 4;

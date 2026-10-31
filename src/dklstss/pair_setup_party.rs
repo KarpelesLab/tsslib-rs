@@ -35,8 +35,8 @@ use crate::tss::{Message, Parameters, PartyId, TssError, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::hash::sha256;
 use purecrypto::rng::RngCore;
+use purecrypto::zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
 
 const TYPE_R1: &str = "dkls:pairsetup:r1";
 const TYPE_R2: &str = "dkls:pairsetup:r2";

@@ -91,7 +91,7 @@ struct State {
 /// The X25519 private key opens the share envelopes; wiped with the session.
 impl Drop for State {
     fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.eph_priv);
+        purecrypto::zeroize::Zeroize::zeroize(&mut self.eph_priv);
     }
 }
 
@@ -263,7 +263,7 @@ impl Shared {
                     &st.eph_priv,
                     recipient_pub,
                     &ad,
-                    &zeroize::Zeroizing::new(scalar_to_be(&share.value)),
+                    &purecrypto::zeroize::Zeroizing::new(scalar_to_be(&share.value)),
                 ) {
                     Ok(ciphertext) => outbox.push((pid, KeygenRound2Msg { ciphertext })),
                     Err(e) => {

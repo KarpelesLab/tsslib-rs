@@ -44,8 +44,8 @@ use crate::tss::{Message, PartyId, ReSharingParameters, decode, encode};
 use alloc::sync::Arc;
 use core::cmp::Ordering;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
+use purecrypto::zeroize::{Zeroize, Zeroizing};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
 
 // v2: round 2 carries the new party's ephemeral X25519 key, round-3 shares are
 // sealed, and the round-4 ACK carries a consistency digest. v1 peers fail on the

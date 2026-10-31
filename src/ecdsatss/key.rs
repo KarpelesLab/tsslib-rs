@@ -16,8 +16,8 @@ use crate::prelude::*;
 use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::bignum::BoxedUint;
+use purecrypto::zeroize::Zeroize;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
 
 /// A Paillier private key in the save format (the public `N` sits at top level).
 #[derive(Clone, Serialize, Deserialize)]

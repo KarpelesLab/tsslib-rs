@@ -94,7 +94,7 @@ pub fn sign44(
                 my_w.push(wi);
             }
             // The seed derives the secret masks (which wipe themselves on drop).
-            zeroize::Zeroize::zeroize(&mut rhop);
+            purecrypto::zeroize::Zeroize::zeroize(&mut rhop);
             stws.push(my_stws);
             w_by.push(my_w);
         }

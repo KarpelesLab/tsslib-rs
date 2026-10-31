@@ -11,8 +11,8 @@ use crate::tss::PartyId;
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::ristretto255::RistrettoPoint;
+use purecrypto::zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
 
 /// Schema version of a [`Key`].
 pub const KEY_VERSION: u32 = 1;
@@ -155,7 +155,7 @@ struct KeyWire {
 /// `xi` is a copy of the secret share; wiped when the wire form is dropped.
 impl Drop for KeyWire {
     fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.xi.0);
+        purecrypto::zeroize::Zeroize::zeroize(&mut self.xi.0);
     }
 }
 

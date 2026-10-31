@@ -22,7 +22,7 @@ default = ["std", "json", "error-messages", "frosttss", "frostristretto255tss", 
 # The crate is `#![no_std]` + `alloc`. `std` adds OS randomness (without it,
 # register one with `rng::set_entropy_source`), the blocking `wait()` on every
 # session, and OS-backed locks in place of spin locks.
-std = ["purecrypto/std", "serde/std", "serde_json?/std", "base64?/std", "zeroize/std"]
+std = ["purecrypto/std", "serde/std", "serde_json?/std", "base64?/std"]
 
 # JSON keys and messages (serde_json). Without it, keys and messages use only
 # the compact binary encoding in `tsslib::wire`, which needs neither std nor
@@ -71,7 +71,6 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 # as the save formats store them.
 serde_json = { version = "1", default-features = false, features = ["alloc", "arbitrary_precision"], optional = true }
 base64 = { version = "0.22", default-features = false, features = ["alloc"], optional = true }
-zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
 # no_std locks / lazy init (the `std` build uses OS locks for `Mutex`).
 spin = { version = "0.10", default-features = false, features = ["spin_mutex", "once"] }
 

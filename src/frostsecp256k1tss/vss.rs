@@ -17,7 +17,7 @@ pub(crate) fn random_scalar(rng: &mut impl RngCore) -> Scalar {
         let mut b = [0u8; 48];
         rng.fill_bytes(&mut b);
         let s = super::suite::scalar_from_be_reduce(&b);
-        zeroize::Zeroize::zeroize(&mut b);
+        purecrypto::zeroize::Zeroize::zeroize(&mut b);
         if !bool::from(s.is_zero()) {
             return s;
         }

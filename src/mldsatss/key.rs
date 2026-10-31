@@ -26,7 +26,7 @@ pub(crate) fn zero_polys<const N: usize>() -> PolyVec<N> {
 /// Best-effort wipe of secret polynomials.
 pub(crate) fn wipe_polys(ps: &mut [Poly]) {
     for p in ps {
-        zeroize::Zeroize::zeroize(&mut p.c);
+        purecrypto::zeroize::Zeroize::zeroize(&mut p.c);
     }
 }
 
@@ -47,10 +47,10 @@ impl Share44 {
     /// copies handed out before zeroizing are not affected.
     pub fn zeroize(&mut self) {
         for p in self.s1.iter_mut().chain(self.s1h.iter_mut()) {
-            zeroize::Zeroize::zeroize(&mut p.c);
+            purecrypto::zeroize::Zeroize::zeroize(&mut p.c);
         }
         for p in self.s2.iter_mut().chain(self.s2h.iter_mut()) {
-            zeroize::Zeroize::zeroize(&mut p.c);
+            purecrypto::zeroize::Zeroize::zeroize(&mut p.c);
         }
     }
 }
@@ -217,7 +217,7 @@ impl Key44 {
             let Some(share) = self.shares.get(&u_real) else {
                 // Wipe the partial sum of the shares accumulated so far.
                 for p in s1h.iter_mut().chain(s2h.iter_mut()) {
-                    zeroize::Zeroize::zeroize(&mut p.c);
+                    purecrypto::zeroize::Zeroize::zeroize(&mut p.c);
                 }
                 return Err(Error::Validation("missing share in sharing pattern".into()));
             };
