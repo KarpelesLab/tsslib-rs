@@ -89,6 +89,16 @@
 //! consistency check against a malicious OT-extension *receiver*, and the
 //! final verification gate (no invalid signature is ever released).
 //!
+//! The KOS check publishes linear equations in the OT receiver's choice bits;
+//! every ΠMul therefore pads Alice's secret bits with fresh random bits so the
+//! check value is independent of her nonce / key share (signing wire
+//! version 2 — the `dkls:sign2:*` / `dkls:csign2:*` message types; earlier
+//! peers, whose envelopes leaked the weighted key share over a few sessions,
+//! cannot interoperate). Conversely, a KOS check *failure* blamed on a peer
+//! may have leaked one bit of this party's OT-sender secret Δ per probe: stop
+//! signing with that peer over the existing pairwise OT state and rebuild it
+//! with [`PairSetupParty`] (or refresh) first.
+//!
 //! When the **default** (unchecked) path is used with untrusted peers,
 //! operators MUST:
 //! - treat **repeated signing failures with the same participant set as a

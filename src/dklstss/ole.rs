@@ -5,7 +5,8 @@
 //!
 //! These primitives are the *plain* Gilboa multiplier: Alice's OT choice bits
 //! are the raw bits of her secret `α` (no randomized encoding / gadget
-//! vector), and Bob's correction values `c_i` are used without any consistency
+//! vector) — followed by a fresh random pad so the KOS check value hides them
+//! (see [`PAD_BITS`]) — and Bob's correction values `c_i` are used without any consistency
 //! verification. On their own they implement no πMul input-consistency check,
 //! so a malicious counterparty can flip a chosen `m_1[i]`/correction such that
 //! the multiplication output is correct iff a specific bit of `α` has a guessed
@@ -40,9 +41,31 @@ use super::Error;
 use super::otext::{self, ExtReceiver, ExtSender, ExtendMsg1};
 use super::secp::Scalar;
 use crate::prelude::*;
+use crate::rng::SystemRng;
 
 /// Number of OT-extension rows consumed (secp256k1 scalar bit length).
 const SCALAR_BITS: usize = 256;
+
+/// Uniformly random choice bits appended to `α`'s bits on every extension.
+///
+/// The KOS consistency check makes Alice (the OT-extension receiver) reveal
+/// `x_h = <χ_h, c>` for σ = 80 challenges `χ_h` derived from public data
+/// (sid, U). If `c` were exactly the 256 bits of `α`, every envelope would
+/// hand anyone who sees it (the peer, or an eavesdropper on the p2p channel)
+/// 80 independent GF(2) linear equations in `α` — a handful of sessions with
+/// the same `α`-holder recovers the weighted key share `λ_i·x_i`. Standard
+/// KOS pads the choice vector: with `c = bits(α) || r`, `r` fresh and
+/// uniform, `x = χ_α·α ⊕ χ_r·r`. When the 80 × PAD sub-matrix `χ_r` has full
+/// row rank, `χ_r·r` is uniform on GF(2)^80 and `x` is statistically
+/// independent of `α`. For a uniform `χ_r` the rank-deficiency probability is
+/// below `2^(80 − PAD)`, so PAD = σ + 80 = 160 bounds it by ~2^-80 (and keeps
+/// `L` a multiple of 8).
+const PAD_BITS: usize = otext::SIGMA + 80;
+
+/// Total OT-extension length per ΠMul (the `l` Bob requires): `α`'s bits
+/// plus the random pad. Only the first [`SCALAR_BITS`] outputs feed the
+/// multiplication; the pad outputs are discarded (and wiped) on both sides.
+pub(crate) const EXT_BITS: usize = SCALAR_BITS + PAD_BITS;
 
 /// Bob's reply: one correction value per bit, each in `[0, n)`.
 pub struct BobMsg {
@@ -68,17 +91,32 @@ impl Drop for AliceState {
     }
 }
 
-/// Alice's first step: choice bits are the little-endian bits of `alpha`. Returns
-/// the OT-extension message for Bob and Alice's session state.
+/// Alice's first step: choice bits are the little-endian bits of `alpha`
+/// followed by [`PAD_BITS`] fresh random bits (see [`PAD_BITS`] for why).
+/// Returns the OT-extension message for Bob and Alice's session state.
 pub fn alice_step1(
     sid: &[u8],
     ext_receiver: &ExtReceiver,
     alpha: &Scalar,
 ) -> Result<(ExtendMsg1, AliceState), Error> {
+    use purecrypto::rng::RngCore as _;
+    use zeroize::Zeroize;
     let alpha_be = alpha.to_bytes_be();
-    // The choice bits are `alpha` again, one bit per entry.
-    let choice = zeroize::Zeroizing::new(bits_le(&alpha_be));
-    let (msg, keys) = ext_receiver.extend(sid, &choice, SCALAR_BITS)?;
+    // Choice bits: `alpha` (one bit per entry), then the random pad — fresh
+    // on every call, so repeated runs with the same `alpha` (retries, the two
+    // Mul-then-check runs) never share pad bits.
+    let mut choice = zeroize::Zeroizing::new(vec![0u8; EXT_BITS / 8]);
+    {
+        let alpha_bits = zeroize::Zeroizing::new(bits_le(&alpha_be));
+        choice[..SCALAR_BITS / 8].copy_from_slice(&alpha_bits);
+    }
+    SystemRng.fill_bytes(&mut choice[SCALAR_BITS / 8..]);
+    let (msg, mut keys) = ext_receiver.extend(sid, &choice, EXT_BITS)?;
+    // Only α's rows feed the multiplication; wipe and drop the pad outputs.
+    for k in keys[SCALAR_BITS..].iter_mut() {
+        k.zeroize();
+    }
+    keys.truncate(SCALAR_BITS);
     Ok((msg, AliceState { alpha_be, keys }))
 }
 
@@ -90,10 +128,13 @@ pub fn bob_step1(
     beta: &Scalar,
     alice_msg: &ExtendMsg1,
 ) -> Result<(BobMsg, Scalar), Error> {
-    if alice_msg.l != SCALAR_BITS {
+    if alice_msg.l != EXT_BITS {
         return Err(Error::Validation("ole: unexpected L".into()));
     }
+    // Rows SCALAR_BITS.. carry Alice's random pad (they exist only to hide α
+    // in the KOS check): they are ignored here and wiped with the rest.
     let (m0, m1) = ext_sender.extend(sid, alice_msg)?;
+    let (m0, m1) = (zeroize::Zeroizing::new(m0), zeroize::Zeroizing::new(m1));
 
     let mut corrections = Vec::with_capacity(SCALAR_BITS);
     let mut u_b = Scalar::ZERO;
@@ -141,7 +182,7 @@ fn bits_le(be: &[u8; 32]) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::baseot;
     use super::super::secp;
     use super::*;
@@ -197,5 +238,119 @@ mod tests {
         assert!(bool::from(
             ua.add(&ub).ct_eq(&secp::scalar_from_be_reduce(&[63]))
         )); // 7*9
+    }
+
+    #[test]
+    fn bob_rejects_unpadded_length() {
+        // A pre-fix peer extends with L = 256; that must fail cleanly.
+        let (ext_sender, ext_receiver) = ot_setup();
+        let sid = b"ole-3";
+        let beta = secp::random_scalar(&mut SystemRng);
+        let mut c = [0u8; SCALAR_BITS / 8];
+        SystemRng.fill_bytes(&mut c);
+        let (msg, _) = ext_receiver.extend(sid, &c, SCALAR_BITS).unwrap();
+        assert!(bob_step1(sid, &ext_sender, &beta, &msg).is_err());
+    }
+
+    /// `<χ_h restricted to the first 256 rows, α>` — the value the KOS check
+    /// bit would equal if the choice vector were not padded.
+    fn unpadded_x(chi: &[u8], alpha_le: &[u8]) -> u8 {
+        let mut x = 0u8;
+        for b in 0..SCALAR_BITS / 8 {
+            x ^= ((chi[b] & alpha_le[b]).count_ones() & 1) as u8;
+        }
+        x
+    }
+
+    /// Gaussian elimination over GF(2) on rows `(256-bit mask, rhs)`; returns
+    /// the unique solution if the system has full column rank.
+    pub(crate) fn solve_gf2(mut rows: Vec<([u64; 4], u8)>) -> Option<[u8; 32]> {
+        let mut piv = [usize::MAX; 256];
+        let mut r = 0;
+        for (col, piv_col) in piv.iter_mut().enumerate() {
+            let hit = |k: &([u64; 4], u8)| (k.0[col / 64] >> (col % 64)) & 1 == 1;
+            let Some(p) = (r..rows.len()).find(|&k| hit(&rows[k])) else {
+                continue;
+            };
+            rows.swap(r, p);
+            let (a, b) = rows[r];
+            for (k, row) in rows.iter_mut().enumerate() {
+                if k != r && hit(row) {
+                    for (dst, src) in row.0.iter_mut().zip(a) {
+                        *dst ^= src;
+                    }
+                    row.1 ^= b;
+                }
+            }
+            *piv_col = r;
+            r += 1;
+        }
+        if r < 256 {
+            return None;
+        }
+        let mut be = [0u8; 32];
+        for (i, &p) in piv.iter().enumerate() {
+            be[31 - i / 8] |= rows[p].1 << (i & 7);
+        }
+        Some(be)
+    }
+
+    /// Regression for the KOS-check leak: before padding, a passive observer
+    /// of four envelopes for the same `α` solved the 320 published check
+    /// equations for `α`. With the random pad the same attack must fail.
+    #[test]
+    fn x_check_does_not_leak_alpha() {
+        let (_, ext_receiver) = ot_setup();
+        let alpha = secp::random_scalar(&mut SystemRng);
+        let alpha_le = bits_le(&alpha.to_bytes_be());
+        let mut rows: Vec<([u64; 4], u8)> = Vec::new();
+        let mut mismatches = 0;
+        for sess in 0..6u8 {
+            let sid = [b's', b'e', b's', b's', sess];
+            let (msg, _st) = alice_step1(&sid, &ext_receiver, &alpha).unwrap();
+            assert_eq!(msg.l, EXT_BITS);
+            // Observer's view: sid, U, X.
+            let chi = otext::derive_challenges(&sid, &msg.u, msg.l);
+            for (h, chi_h) in chi.iter().enumerate() {
+                let mut m = [0u64; 4];
+                for i in 0..SCALAR_BITS {
+                    if (chi_h[i / 8] >> (i & 7)) & 1 == 1 {
+                        m[i / 64] |= 1 << (i % 64);
+                    }
+                }
+                let x = (msg.x[h / 8] >> (h & 7)) & 1;
+                if x != unpadded_x(chi_h, &alpha_le) {
+                    mismatches += 1;
+                }
+                rows.push((m, x));
+            }
+        }
+        // The pad contributes ~uniform noise to every check bit (expected
+        // mismatches: 240 of 480; all-equal has probability 2^-480).
+        assert!(
+            mismatches > 100,
+            "x_check tracks α: {mismatches} mismatches"
+        );
+        let solved = solve_gf2(rows);
+        assert_ne!(
+            solved,
+            Some(alpha.to_bytes_be()),
+            "α recovered from KOS check values"
+        );
+    }
+
+    /// Fixed `α` and sid: the check value must still vary run to run (fresh
+    /// pad bits per call, so the two Mul-then-check runs and any retry never
+    /// share a pad).
+    #[test]
+    fn pad_is_fresh_per_call() {
+        let (_, ext_receiver) = ot_setup();
+        let alpha = secp::random_scalar(&mut SystemRng);
+        let (m1, _) = alice_step1(b"same", &ext_receiver, &alpha).unwrap();
+        let (m2, _) = alice_step1(b"same", &ext_receiver, &alpha).unwrap();
+        // Same sid and α: U's α-columns coincide, the pad columns must not.
+        assert_eq!(m1.u[0][..SCALAR_BITS / 8], m2.u[0][..SCALAR_BITS / 8]);
+        assert_ne!(m1.u[0][SCALAR_BITS / 8..], m2.u[0][SCALAR_BITS / 8..]);
+        assert_ne!(m1.x, m2.x);
     }
 }

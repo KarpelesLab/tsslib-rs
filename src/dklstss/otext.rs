@@ -4,6 +4,25 @@
 //! receiver supplies L choice bits and learns `m_{c_i}` per row; the sender
 //! learns both `(m_0, m_1)`. A KOS-style consistency check (σ Fiat-Shamir
 //! challenges) guards against a malicious receiver before any output is used.
+//!
+//! # Choice-bit privacy
+//!
+//! The check publishes `x_h = <χ_h, c>` for σ challenges derived from public
+//! data, i.e. σ linear equations in the receiver's choice bits. Callers whose
+//! choice bits are secret MUST append fresh uniformly random pad bits to `c`
+//! (and discard the pad outputs), as [`super::ole`] does — otherwise every
+//! extension leaks σ bits of information about the secret.
+//!
+//! # Check failures
+//!
+//! A malicious receiver can craft `U`/`X`/`T` so that whether the check
+//! passes depends on a guessed bit of the sender's secret correlation Δ: each
+//! failed probe can leak up to one bit of Δ, and enough of them break the
+//! sender's side of this OT setup (and with it the secrecy of every later
+//! ΠMul input the sender contributes over it). [`ExtSender::extend`] returns
+//! an error naming the check failure; a caller that sees one blamed on the
+//! peer must stop using this pair's OT state and rebuild it with
+//! [`super::PairSetupParty`] before signing with that peer again.
 
 use super::Error;
 use super::baseot;
@@ -366,7 +385,7 @@ fn hash_row(sid: &[u8], i: usize, v: &[u8]) -> [u8; KEY_LEN] {
 }
 
 /// σ Fiat-Shamir challenge vectors χ_h ∈ {0,1}^L, bound to (sid, L, U).
-fn derive_challenges(sid: &[u8], u: &[Vec<u8>], l: usize) -> Vec<Vec<u8>> {
+pub(crate) fn derive_challenges(sid: &[u8], u: &[Vec<u8>], l: usize) -> Vec<Vec<u8>> {
     let tag = sha512_256(b"DKLS23-otext-coin-v1");
     let mut buf = Vec::new();
     buf.extend_from_slice(&tag);

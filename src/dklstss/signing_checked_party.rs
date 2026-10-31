@@ -44,12 +44,15 @@ use alloc::sync::Arc;
 use purecrypto::hash::sha256;
 use serde::{Deserialize, Serialize};
 
-const TYPE_R1: &str = "dkls:csign:r1";
-const TYPE_R1ECHO: &str = "dkls:csign:r1echo";
-const TYPE_R2: &str = "dkls:csign:r2";
-const TYPE_R3: &str = "dkls:csign:r3";
-const TYPE_R4: &str = "dkls:csign:r4";
-const TYPE_R4ECHO: &str = "dkls:csign:r4echo";
+// Wire version 2 (`csign2`): ΠMul envelopes carry a random-padded choice
+// vector (L = 416). Version-1 peers leak their secrets through the KOS check
+// and must not interoperate, so the message types differ.
+const TYPE_R1: &str = "dkls:csign2:r1";
+const TYPE_R1ECHO: &str = "dkls:csign2:r1echo";
+const TYPE_R2: &str = "dkls:csign2:r2";
+const TYPE_R3: &str = "dkls:csign2:r3";
+const TYPE_R4: &str = "dkls:csign2:r4";
+const TYPE_R4ECHO: &str = "dkls:csign2:r4echo";
 
 // Echo digest tags: checked signing reuses the unchecked sign-phase digest
 // tags, so these MUST stay the `-sign-` tags, not `-csign-` — they are part of
@@ -458,6 +461,9 @@ impl Shared {
             let sid_k = sign_mul_sid(&ssid, "checked-kxrho", &pid.key, &me.key);
             let sid_x = sign_mul_sid(&ssid, "checked-xxrho", &pid.key, &me.key);
 
+            // A failure here (notably the KOS check) is blamed on `pid`; it
+            // may have probed one bit of our Δ, so the caller must rebuild
+            // this pair's OT state (PairSetupParty) before reusing it.
             let (bmsg_k, u_bk) =
                 match ole_check::checked_bob_step1(&sid_k, bob_pair, &rho_i, &ext_k1, &ext_k2) {
                     Ok(v) => v,
@@ -954,7 +960,7 @@ fn decode_bob(in_: &[B64Bytes]) -> Result<super::ole::BobMsg, Error> {
 /// and unchecked sessions never share an ssid.
 fn sign_session(key: &Key, hash: &[u8], subset: &[PartyId]) -> Vec<u8> {
     let (px, py) = secp::affine_be(&key.ecdsa_pub);
-    let mut data = b"DKLS23-csign-party-v1-".to_vec();
+    let mut data = b"DKLS23-csign-party-v2-".to_vec();
     data.extend_from_slice(&px);
     data.extend_from_slice(&py);
     data.extend_from_slice(hash);

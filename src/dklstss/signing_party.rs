@@ -35,12 +35,15 @@ use alloc::sync::Arc;
 use purecrypto::hash::sha256;
 use serde::{Deserialize, Serialize};
 
-const TYPE_R1: &str = "dkls:sign:r1";
-const TYPE_R1ECHO: &str = "dkls:sign:r1echo";
-const TYPE_R2: &str = "dkls:sign:r2";
-const TYPE_R3: &str = "dkls:sign:r3";
-const TYPE_R4: &str = "dkls:sign:r4";
-const TYPE_R4ECHO: &str = "dkls:sign:r4echo";
+// Wire version 2 (`sign2`): ΠMul envelopes carry a random-padded choice
+// vector (L = 416). Version-1 peers leak their secrets through the KOS check
+// and must not interoperate, so the message types differ.
+const TYPE_R1: &str = "dkls:sign2:r1";
+const TYPE_R1ECHO: &str = "dkls:sign2:r1echo";
+const TYPE_R2: &str = "dkls:sign2:r2";
+const TYPE_R3: &str = "dkls:sign2:r3";
+const TYPE_R4: &str = "dkls:sign2:r4";
+const TYPE_R4ECHO: &str = "dkls:sign2:r4echo";
 
 const ECHO_TAG_SIGN: &str = "DKLS23-echo-sign-v1";
 const ECHO_TAG_SIGN_R4: &str = "DKLS23-echo-sign-r4-v1";
@@ -428,6 +431,9 @@ impl Shared {
             let sid_k = sign_mul_sid(&ssid, "kxrho", &pid.key, &me.key);
             let sid_x = sign_mul_sid(&ssid, "xxrho", &pid.key, &me.key);
 
+            // A failure here (notably the KOS check) is blamed on `pid`; it
+            // may have probed one bit of our Δ, so the caller must rebuild
+            // this pair's OT state (PairSetupParty) before reusing it.
             let (bmsg_k, u_bk) = match ole::bob_step1(&sid_k, bob_pair, &rho_i, &ext_k) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(peer_fail(pid, e))),
@@ -830,7 +836,7 @@ fn decode_bob(in_: &[B64Bytes]) -> Result<ole::BobMsg, Error> {
 /// sorted signing subset.
 fn sign_session(key: &Key, hash: &[u8], subset: &[PartyId]) -> Vec<u8> {
     let (px, py) = secp::affine_be(&key.ecdsa_pub);
-    let mut data = b"DKLS23-sign-party-v1-".to_vec();
+    let mut data = b"DKLS23-sign-party-v2-".to_vec();
     data.extend_from_slice(&px);
     data.extend_from_slice(&py);
     data.extend_from_slice(hash);
@@ -1089,5 +1095,79 @@ mod tests {
                 .unwrap_or_else(|| panic!("signer {i} produced a signature"));
             assert!(err.to_string().contains("echo"), "signer {i}: {err}");
         }
+    }
+
+    /// Regression for the KOS-check leak: an eavesdropper on the round-1
+    /// broadcasts and the P0→P1 round-2 stream of four 2-of-3 sessions used to
+    /// solve the published check bits for `λ_0·x_0`. With the padded choice
+    /// vector the same attack must fail.
+    #[test]
+    fn eavesdropper_cannot_recover_weighted_share() {
+        use std::sync::Mutex as StdMutex;
+        let keys = run_keygen(&party_ids(3), 1);
+        let pick = [0usize, 1];
+        let subset = PartyId::sort(
+            pick.iter()
+                .map(|&i| keys[i].party_ids[keys[i].idx].clone())
+                .collect(),
+            0,
+        );
+        let mut rows: Vec<([u64; 4], u8)> = Vec::new();
+        for sess in 0..4u8 {
+            let hash = purecrypto::hash::sha256(&[b'm', sess]);
+            let seen: Arc<StdMutex<Vec<(usize, usize, Message)>>> = Arc::default();
+            let seen2 = seen.clone();
+            let tap = move |from: usize, to: usize, msg: &mut Message| {
+                seen2.lock().unwrap().push((from, to, msg.clone()));
+            };
+            let (res, _) = run_batched_signing(&keys, &pick, &hash, Some(&tap));
+            for r in res {
+                r.unwrap();
+            }
+            let seen = seen.lock().unwrap().clone();
+            // Public: K_i from the round-1 broadcasts.
+            let mut ks: Vec<ProjectivePoint> = vec![secp::generator(); 2];
+            for (from, _, m) in &seen {
+                if m.typ == TYPE_R1 {
+                    let r1: SignR1 = m.decode().unwrap();
+                    ks[*from] = point_from_be_xy(&r1.k_i_x.0, &r1.k_i_y.0).unwrap();
+                }
+            }
+            let base = sign_session(&keys[0], &hash, &subset);
+            let mut pk = VecMap::new();
+            pk.insert(peer_key_str(&subset[1]), ks[1]);
+            let ssid = mix_round_one_ssid(&base, &subset[0], &ks[0], &subset[1..], &pk);
+            let sid_x = sign_mul_sid(&ssid, "xxrho", &subset[0].key, &subset[1].key);
+            let (_, _, m) = seen
+                .iter()
+                .find(|(f, t, m)| *f == 0 && *t == 1 && m.typ == TYPE_R2)
+                .unwrap();
+            let r2: SignR2 = m.decode().unwrap();
+            let ext = r2.alice_x.to_msg().unwrap();
+            let chi = otext::derive_challenges(&sid_x, &ext.u, ext.l);
+            for (h, chi_h) in chi.iter().enumerate() {
+                let mut mm = [0u64; 4];
+                for i in 0..256 {
+                    if (chi_h[i / 8] >> (i & 7)) & 1 == 1 {
+                        mm[i / 64] |= 1 << (i % 64);
+                    }
+                }
+                rows.push((mm, (ext.x[h / 8] >> (h & 7)) & 1));
+            }
+        }
+        let ids: Vec<Scalar> = subset
+            .iter()
+            .map(|p| secp::scalar_from_be_reduce(&p.key))
+            .collect();
+        let k0 = keys
+            .iter()
+            .find(|k| k.party_ids[k.idx].cmp_key(&subset[0]) == core::cmp::Ordering::Equal)
+            .unwrap();
+        let sx0 = lagrange_coefficient(&ids, 0).unwrap().mul(&k0.xi);
+        assert_ne!(
+            super::super::ole::tests::solve_gf2(rows),
+            Some(sx0.to_bytes_be()),
+            "eavesdropper recovered λ_0·x_0"
+        );
     }
 }
