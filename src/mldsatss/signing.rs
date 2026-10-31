@@ -16,7 +16,7 @@
 
 use super::Error;
 use super::hyperball::{FVec, sample_hyperball};
-use super::key::{Key44, PolyVec, zero_polys};
+use super::key::{Key44, PolyVec, wipe_polys, zero_polys};
 use super::params::ThresholdParams44;
 use crate::prelude::*;
 use purecrypto::hash::shake256;
@@ -66,13 +66,17 @@ pub fn sign44(
     let pk = signers[0].public_key()?;
 
     let act = super::key::signing_set_mask(signers.iter().map(|k| k.id), params)?;
-    let mut s1h: Vec<PolyVec<L>> = Vec::with_capacity(signers.len());
-    let mut s2h: Vec<PolyVec<K>> = Vec::with_capacity(signers.len());
+    // The recovered per-signer secrets are wiped on drop, on every return path.
+    let mut rec = Recovered {
+        s1h: Vec::with_capacity(signers.len()),
+        s2h: Vec::with_capacity(signers.len()),
+    };
     for k in signers {
         let (a1, a2) = k.recover_share(act, params)?;
-        s1h.push(a1);
-        s2h.push(a2);
+        rec.s1h.push(a1);
+        rec.s2h.push(a2);
     }
+    let (s1h, s2h) = (&rec.s1h, &rec.s2h);
     let nsign = signers.len();
 
     for _attempt in 0..MAX_ATTEMPTS {
@@ -89,6 +93,8 @@ pub fn sign44(
                 my_stws.push(fv);
                 my_w.push(wi);
             }
+            // The seed derives the secret masks (which wipe themselves on drop).
+            zeroize::Zeroize::zeroize(&mut rhop);
             stws.push(my_stws);
             w_by.push(my_w);
         }
@@ -148,6 +154,23 @@ pub fn sign44(
     ))
 }
 
+/// The signing set's recovered NTT-domain shares, wiped on drop.
+struct Recovered {
+    s1h: Vec<PolyVec<L>>,
+    s2h: Vec<PolyVec<K>>,
+}
+
+impl Drop for Recovered {
+    fn drop(&mut self) {
+        for v in self.s1h.iter_mut() {
+            wipe_polys(&mut v[..]);
+        }
+        for v in self.s2h.iter_mut() {
+            wipe_polys(&mut v[..]);
+        }
+    }
+}
+
 /// Convenience wrapper that verifies the produced signature under `pk` before
 /// returning it (a self-check gate; returns an error if verification fails).
 pub fn sign44_checked(
@@ -201,6 +224,10 @@ pub(crate) fn sample_w(
         acc.inv_ntt();
         *wij = acc.add(&epoly[i]);
     }
+    // (r, e) is the rounded secret mask; only `w` and `fv` leave.
+    wipe_polys(&mut rpoly[..]);
+    wipe_polys(&mut epoly[..]);
+    wipe_polys(&mut rh[..]);
     (fv, wi)
 }
 
@@ -233,7 +260,11 @@ pub(crate) fn compute_response(
         p.inv_ntt();
         ypart[j] = p;
     }
+    // `zf` (an FVec) wipes itself on drop, including for rejected tries.
     let mut zf = FVec::from_polys(&zpart, &ypart);
+    // c·s1 and c·s2 are secret; wipe them once loaded into `zf`.
+    wipe_polys(&mut zpart[..]);
+    wipe_polys(&mut ypart[..]);
     zf.add_assign(stws_tri);
     if zf.excess(params.r, params.nu) {
         None
@@ -241,6 +272,8 @@ pub(crate) fn compute_response(
         let mut z2 = zero_polys::<L>();
         let mut yd = zero_polys::<K>();
         zf.round_into(&mut z2, &mut yd);
+        // Only z2 is sent; the K-part never leaves this party.
+        wipe_polys(&mut yd[..]);
         Some(z2)
     }
 }

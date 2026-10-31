@@ -12,6 +12,7 @@
 use crate::prelude::*;
 use purecrypto::hash::shake256;
 use purecrypto::mldsa::hazmat::{N, Poly, Q};
+use zeroize::Zeroizing;
 
 const L: usize = 4;
 const K: usize = 4;
@@ -207,8 +208,8 @@ impl FVec {
     }
 
     /// Best-effort wipe of every float lane. The vector holds the secret
-    /// hyperball mask `y` during signing; call this once the sample is no
-    /// longer needed.
+    /// hyperball mask `y` (or a masked response) during signing; it also runs
+    /// on drop, so calling it early only shortens the secret's lifetime.
     pub fn zeroize(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.v);
     }
@@ -237,6 +238,12 @@ impl FVec {
     }
 }
 
+impl Drop for FVec {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 /// Fills `p` with a point on the ν-scaled L2 hyperball of radius `r`,
 /// deterministically derived from `(rhop, nonce)` via SHAKE256. All
 /// secret-dependent steps (CDT sampling, `Σ z²`, integer sqrt) are constant
@@ -244,22 +251,24 @@ impl FVec {
 /// quantities recoverable from the public output norm.
 pub fn sample_hyperball(p: &mut FVec, r: f64, nu: f64, rhop: &[u8; 64], nonce: u16) {
     const TOTAL: usize = N * (K + L) + 2;
-    let mut input = Vec::with_capacity(1 + 64 + 2);
+    // Every buffer below is derived from the secret seed `rhop` and is wiped
+    // on drop (best-effort).
+    let mut input = Zeroizing::new(Vec::with_capacity(1 + 64 + 2));
     input.push(b'H'); // domain separator
     input.extend_from_slice(rhop);
     input.push(nonce as u8);
     input.push((nonce >> 8) as u8);
 
-    let mut buf = vec![0u8; TOTAL * HYPERBALL_BYTES_PER_SAMPLE];
+    let mut buf = Zeroizing::new(vec![0u8; TOTAL * HYPERBALL_BYTES_PER_SAMPLE]);
     shake256(&input, &mut buf);
 
-    let mut z = vec![0i32; TOTAL];
+    let mut z = Zeroizing::new(vec![0i32; TOTAL]);
     let mut sq: u64 = 0;
+    let mut mb = Zeroizing::new([0u8; 8]);
     for (i, zi) in z.iter_mut().enumerate() {
         let base = i * HYPERBALL_BYTES_PER_SAMPLE;
-        let mut mb = [0u8; 8];
         mb.copy_from_slice(&buf[base..base + 8]);
-        let mag_bytes = u64::from_le_bytes(mb);
+        let mag_bytes = u64::from_le_bytes(*mb);
         *zi = ct_sample_d_gaussian(mag_bytes, buf[base + 8]);
         let v = *zi as i64;
         sq += (v * v) as u64;

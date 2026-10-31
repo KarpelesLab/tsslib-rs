@@ -23,6 +23,13 @@ pub(crate) fn zero_polys<const N: usize>() -> PolyVec<N> {
     }
 }
 
+/// Best-effort wipe of secret polynomials.
+pub(crate) fn wipe_polys(ps: &mut [Poly]) {
+    for p in ps {
+        zeroize::Zeroize::zeroize(&mut p.c);
+    }
+}
+
 /// One `(s1, s2)` secret share, identified by the honest-signer subset mask it
 /// was drawn for. Holds both plain (`s1`, `s2`) and cached NTT (`s1h`, `s2h`)
 /// representations.
