@@ -17,6 +17,7 @@ use crate::tss::PartyId;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::bignum::BoxedUint;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 /// A Paillier private key in the save format (the public `N` sits at top level).
 #[derive(Clone, Serialize, Deserialize)]
@@ -89,6 +90,38 @@ pub struct Key {
     pub paillier_pks: Vec<PaillierPkJson>,
     #[serde(rename = "ECDSAPub")]
     pub ecdsa_pub: EcPointJson,
+}
+
+impl Zeroize for Key {
+    /// Wipes the secret fields in place: the share `Xi`, the Paillier secret
+    /// key (`LambdaN`, `PhiN`, `P`, `Q`) and the ring-Pedersen trapdoors
+    /// (`Alpha`, `Beta`, `P`, `Q`). The remaining fields are public. Only runs
+    /// on an owned, mutable key (normally via `Drop`).
+    fn zeroize(&mut self) {
+        for v in [
+            &mut self.xi,
+            &mut self.paillier_sk.lambda_n,
+            &mut self.paillier_sk.phi_n,
+            &mut self.paillier_sk.p,
+            &mut self.paillier_sk.q,
+            &mut self.alpha,
+            &mut self.beta,
+            &mut self.p,
+            &mut self.q,
+        ] {
+            v.0.zeroize();
+        }
+    }
+}
+
+impl Drop for Key {
+    /// Ensures the key's secrets do not linger in freed heap memory. Each
+    /// `Clone` owns its own buffers and wipes them independently. (The
+    /// `BoxedUint` values derived from a key — `PrivateKey`, `LocalPreParams`,
+    /// signing state — are wiped by `BoxedUint`'s own `Drop`.)
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 impl Key {
@@ -273,7 +306,7 @@ impl Key {
             .iter()
             .map(|p| ec_point(&secp::add(p, &delta_g)))
             .collect();
-        out.xi = BigUintDec::from_be_bytes(&bn::to_be(&modq.add(&d, &self.xi())));
+        out.xi = bn::to_dec(&modq.add(&d, &self.xi()));
         Ok(out)
     }
 
@@ -458,6 +491,27 @@ mod tests {
     fn load_key() -> Key {
         let f = fixtures();
         serde_json::from_value(f["signing_keys"][0].clone()).expect("load fixture signing key")
+    }
+
+    #[test]
+    fn zeroize_wipes_secrets_only() {
+        let mut key = load_key();
+        let pub_n = key.paillier_sk.n.clone();
+        key.zeroize();
+        for v in [
+            &key.xi,
+            &key.paillier_sk.lambda_n,
+            &key.paillier_sk.phi_n,
+            &key.paillier_sk.p,
+            &key.paillier_sk.q,
+            &key.alpha,
+            &key.beta,
+            &key.p,
+            &key.q,
+        ] {
+            assert!(v.0.is_empty());
+        }
+        assert_eq!(key.paillier_sk.n, pub_n);
     }
 
     #[test]

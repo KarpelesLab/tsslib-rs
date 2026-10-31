@@ -942,7 +942,7 @@ fn parts_bytes(parts: &[B64Bytes]) -> Vec<Vec<u8>> {
 }
 
 fn dec(n: &BoxedUint) -> BigUintDec {
-    BigUintDec::from_be_bytes(&bn::to_be(n))
+    bn::to_dec(n)
 }
 
 fn dec_be(be: &[u8]) -> BigUintDec {
