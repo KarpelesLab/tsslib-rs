@@ -68,6 +68,8 @@ impl<K: Ord, V> VecMap<K, V> {
         self.find(key).is_ok()
     }
 
+    // Kept for API completeness (exercised by the tests below).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
     }
@@ -84,6 +86,7 @@ impl<K: Ord, V> VecMap<K, V> {
         self.entries.iter().map(|(_, v)| v)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
         self.entries.iter_mut().map(|(_, v)| v)
     }
