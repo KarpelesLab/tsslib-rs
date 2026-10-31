@@ -335,6 +335,51 @@ impl Key {
     }
 }
 
+impl Key {
+    /// Sanity-checks every party's Paillier modulus `N_j` and ring-Pedersen
+    /// parameters `(Ñ_j, h1_j, h2_j)` stored in the key before they are used
+    /// for MtA: each modulus must have an accepted bit length, be odd and have
+    /// no prime factor below 1000; each `h` must be a non-trivial unit mod
+    /// `Ñ_j` (not 0, 1 or −1), and `h1_j ≠ h2_j`.
+    ///
+    /// Keygen and resharing verify these parameters (with ZK proofs) when they
+    /// are first received, but a saved key is just data: a legacy key produced
+    /// by an older generator (one predating the CVE-2023-33241 "BitForge"
+    /// fixes) may carry a malicious party's degenerate parameters, which would
+    /// let that party extract this party's secret share during signing. This
+    /// check rejects the cheaply detectable cases; it cannot prove a modulus has
+    /// only large factors, so keys of unknown provenance should be reshared
+    /// (see the module docs).
+    pub fn validate_peer_params(&self) -> Result<(), Error> {
+        self.validate_basic()?;
+        for j in 0..self.ks.len() {
+            let (ntilde, h1, h2, pk) = self.peer_params(j);
+            for (what, n) in [("Paillier modulus", &pk.n), ("NTilde", &ntilde)] {
+                super::prepare::check_peer_modulus(what, n)
+                    .map_err(|e| Error::Validation(format!("key: party {j}: {e}")))?;
+                if bn::has_small_factor(n) {
+                    return Err(Error::Validation(format!(
+                        "key: party {j}: peer {what} has a small prime factor"
+                    )));
+                }
+            }
+            let ntilde_m1 = bn::sub(&ntilde, &bn::one());
+            for h in [&h1, &h2] {
+                if !bn::gt(h, &bn::one()) || !h.lt(&ntilde_m1) || !bn::is_one(&bn::gcd(h, &ntilde))
+                {
+                    return Err(Error::Validation(format!(
+                        "key: party {j}: H1j/H2j is not a non-trivial unit mod NTildej"
+                    )));
+                }
+            }
+            if h1 == h2 {
+                return Err(Error::Validation(format!("key: party {j}: H1j == H2j")));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A secp256k1 point in the `EcPointJson` wire shape.
 fn ec_point(p: &secp::ProjectivePoint) -> EcPointJson {
     let (x, y) = secp::coords(p);
@@ -413,6 +458,52 @@ mod tests {
     fn load_key() -> Key {
         let f = fixtures();
         serde_json::from_value(f["signing_keys"][0].clone()).expect("load fixture signing key")
+    }
+
+    #[test]
+    fn peer_params_checks() {
+        let f = fixtures();
+        for v in f["signing_keys"].as_array().unwrap() {
+            let key: Key = serde_json::from_value(v.clone()).unwrap();
+            key.validate_peer_params()
+                .expect("fixture key params are sane");
+        }
+        let dec = |n: &BoxedUint| BigUintDec::from_be_bytes(&bn::to_be(n));
+        let base = load_key();
+
+        // Paillier N divisible by 3 (kept odd and full width).
+        let mut k = base.clone();
+        let n = bn::from_dec(&k.paillier_pks[1].n);
+        let mut n3 = bn::sub(&n, &bn::u64(bn::mod_small(&n, 3)));
+        if !n3.is_odd() {
+            n3 = bn::sub(&n3, &bn::u64(3));
+        }
+        k.paillier_pks[1].n = dec(&n3);
+        assert!(k.validate_peer_params().is_err());
+
+        // Even NTilde.
+        let mut k = base.clone();
+        let nt = bn::from_dec(&k.ntilde_j[0]);
+        k.ntilde_j[0] = dec(&bn::sub(&nt, &bn::one()));
+        assert!(k.validate_peer_params().is_err());
+
+        // Short Paillier N.
+        let mut k = base.clone();
+        k.paillier_pks[0].n = dec(&bn::u64(0xffff_fffb));
+        assert!(k.validate_peer_params().is_err());
+
+        // H1j == H2j.
+        let mut k = base.clone();
+        k.h2j[1] = k.h1j[1].clone();
+        assert!(k.validate_peer_params().is_err());
+
+        // Trivial h values: 1, Ñ−1, ≥ Ñ.
+        let nt = bn::from_dec(&base.ntilde_j[1]);
+        for h in [bn::one(), bn::sub(&nt, &bn::one()), nt.clone()] {
+            let mut k = base.clone();
+            k.h1j[1] = dec(&h);
+            assert!(k.validate_peer_params().is_err());
+        }
     }
 
     /// Party IDs whose `key` is the big-endian `Ks` value, in the given order.

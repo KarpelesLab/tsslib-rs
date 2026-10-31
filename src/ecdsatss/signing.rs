@@ -120,6 +120,13 @@ impl SigningParty {
             return Err(Error::Validation("signing: invalid message hash".into()));
         }
         let key = key.subset_for_parties(params.parties())?;
+        // The committee's Paillier / ring-Pedersen parameters come from saved
+        // data; reject degenerate ones before any MtA uses them. (A 1-party
+        // committee runs no MtA, and an imported 1-of-1 key carries zero
+        // placeholders here.)
+        if n > 1 {
+            key.validate_peer_params()?;
+        }
         let local_idx = params.party_index();
         let big_xj = key
             .big_xj_points()
@@ -1239,6 +1246,18 @@ mod tests {
             0,
         );
         (keys, ids)
+    }
+
+    /// A saved key carrying a degenerate peer ring-Pedersen setup is refused
+    /// before signing starts.
+    #[test]
+    fn new_rejects_degenerate_peer_params() {
+        let (keys, ids) = load_signing_keys();
+        let mut key = keys[0].clone();
+        key.h2j[1] = key.h1j[1].clone();
+        let shub = TestHub::new(&ids);
+        let params = Parameters::new(ids.to_vec(), &ids[0], 1, shub.broker(0));
+        assert!(SigningParty::new(params, key, &[0x11; 32]).is_err());
     }
 
     /// The fixture keys, reloaded from the binary key encoding, sign over a
