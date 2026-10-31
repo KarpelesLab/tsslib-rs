@@ -89,11 +89,7 @@ impl Key {
 
     /// Basic well-formedness: matching slice lengths and the `ed25519` curve.
     pub fn validate_basic(&self) -> Result<(), Error> {
-        if self.ks.len() != self.big_xj.len() {
-            return Err(Error::Validation(
-                "key: Ks and BigXj length mismatch".into(),
-            ));
-        }
+        self.check_lengths()?;
         for p in self.big_xj.iter().chain(core::iter::once(&self.eddsa_pub)) {
             if p.curve != ed::CURVE_NAME {
                 return Err(Error::Validation(format!(
@@ -104,6 +100,16 @@ impl Key {
         }
         if self.eddsa_pub_point().is_none() || self.big_xj_points().is_none() {
             return Err(Error::Validation("key: a point is off-curve".into()));
+        }
+        Ok(())
+    }
+
+    /// `Ks` and `BigXj` must be parallel slices.
+    fn check_lengths(&self) -> Result<(), Error> {
+        if self.ks.len() != self.big_xj.len() {
+            return Err(Error::Validation(
+                "key: Ks and BigXj length mismatch".into(),
+            ));
         }
         Ok(())
     }
@@ -132,6 +138,9 @@ impl Key {
     /// `Xi`, `ShareID`, and `EDDSAPub` are carried over unchanged; only `Ks`
     /// and `BigXj` are rebuilt.
     pub fn subset_for_parties(&self, sorted_ids: &[PartyId]) -> Result<Key, Error> {
+        // Saved keys are untrusted input: a `Ks`/`BigXj` length mismatch must
+        // be an error, not an out-of-bounds panic below.
+        self.check_lengths()?;
         let mut ks = Vec::with_capacity(sorted_ids.len());
         let mut big_xj = Vec::with_capacity(sorted_ids.len());
         for id in sorted_ids {
@@ -146,8 +155,12 @@ impl Key {
                         hex_lower(want)
                     ))
                 })?;
+            let bx = self
+                .big_xj
+                .get(saved)
+                .ok_or_else(|| Error::Validation("key: Ks and BigXj length mismatch".into()))?;
             ks.push(self.ks[saved].clone());
-            big_xj.push(self.big_xj[saved].clone());
+            big_xj.push(bx.clone());
         }
         Ok(Key {
             xi: self.xi.clone(),
@@ -169,6 +182,7 @@ impl Key {
     /// Consistency is preserved: as the Lagrange weights sum to 1,
     /// `Σ λ_j (X_j + delta·G) = EDDSAPub + delta·G`.
     pub fn with_kdd(&self, delta: &[u8]) -> Result<Key, Error> {
+        self.check_lengths()?;
         let d = ed::scalar_from_be(delta);
         let delta_g = ed::mul_base(&d);
         let pub_pt = self
@@ -302,6 +316,26 @@ mod tests {
             Err(e) => assert!(format!("{e}").contains("not found")),
             Ok(_) => panic!("expected unknown-party error"),
         }
+    }
+
+    /// Regression: a saved key whose `Ks` and `BigXj` lengths disagree must be
+    /// rejected with an error rather than panicking on an out-of-bounds index.
+    #[test]
+    fn mismatched_ks_bigxj_errors_instead_of_panicking() {
+        let mut key = load_key();
+        key.big_xj.truncate(1);
+        assert!(key.ks.len() > 1);
+        let ids = party_ids(&key, &[0, 1]);
+        assert!(key.validate_basic().is_err());
+        assert!(key.subset_for_parties(&ids).is_err());
+        assert!(key.with_kdd(&[1]).is_err());
+
+        // Through the signing entry point too (it narrows via subset_for_parties).
+        use crate::tss::Parameters;
+        use crate::tss::testhub::TestHub;
+        let hub = TestHub::new(&ids);
+        let params = Parameters::new(ids.clone(), &ids[0], 1, hub.broker(0));
+        assert!(crate::eddsatss::SigningParty::new(params, key, b"m").is_err());
     }
 
     #[test]
