@@ -24,6 +24,11 @@
 //! disagreeing SHA-256 digests abort with the offending dealer in
 //! [`crate::tss::TssError::culprits`].
 //!
+//! Peer **confidentiality** is also the transport's job: keygen, refresh and
+//! reshare send each party its VSS share in a point-to-point message without
+//! encrypting it, so those messages must travel over a confidential channel
+//! (TLS, Noise, ...). Anyone who reads them can rebuild the key.
+//!
 //! # Security: dealers that move last
 //!
 //! Keygen round 1 reveals each dealer's Feldman commitments directly (no

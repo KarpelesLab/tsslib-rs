@@ -15,6 +15,10 @@
 //! migration off the legacy protocol; new deployments should prefer the
 //! OT-based [`dklstss`](crate::dklstss), which avoids Paillier entirely.
 //!
+//! Keygen and resharing send VSS shares in point-to-point messages without
+//! encrypting them (as the legacy protocol does): the transport must be
+//! confidential (TLS, Noise, ...), or anyone reading it can rebuild the key.
+//!
 //! # Legacy keys of unknown provenance
 //!
 //! Signing trusts the other parties' Paillier moduli and ring-Pedersen

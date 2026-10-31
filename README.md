@@ -124,8 +124,16 @@ src/
 
 Peer **authentication** is out of scope: the broker is trusted to authenticate
 message origin (pin peer identities, sign transport messages, reject tampered
-bytes). Peer **equivocation** is caught cryptographically where the protocol
-provides an echo-broadcast phase (DKLs keygen/refresh/reshare). The `mldsatss`
+bytes). Peer **equivocation** is caught cryptographically: DKLs
+keygen/refresh/reshare run an echo-broadcast phase; the FROST and `eddsatss`
+keygens bind a hash of the whole round-1 transcript into round 2, their
+reshares confirm a digest of every dealer's commitments before old shares are
+retired, and the `mldsatss` DKG confirms a digest of its full transcript.
+Secret shares are sealed end to end (X25519 + ChaCha20-Poly1305) in the FROST,
+`eddsatss` and `mldsatss` keygens and reshares. **`dklstss` and `ecdsatss` send
+VSS shares in the clear**: their point-to-point messages must travel over a
+confidential channel (e.g. TLS or Noise between parties), or anyone reading
+the transport can rebuild the key. The `mldsatss`
 protocol is an academic-grade prototype and is **not** production-ready. The
 `ecdsatss` (GG18/GG20) port is **experimental and not independently audited** —
 the Paillier + MtA range-proof family has a history of catastrophic
