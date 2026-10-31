@@ -20,22 +20,12 @@
 //! supplied by the caller. The broker MUST provide confidentiality on
 //! per-recipient messages, authenticity on per-sender messages (peer
 //! authentication is out of scope here), and reliable ordered delivery within
-//! a single protocol instance. Round-2 DKG (keygen) shares are additionally
-//! encrypted at the application layer (X25519 + ChaCha20-Poly1305).
-//!
-//! ## Resharing shares rely on broker confidentiality
-//!
-//! Unlike keygen, [`Resharing`] transmits each new party's secret sub-share in
-//! **cleartext** (round 3), so its confidentiality depends *entirely* on the
-//! broker's per-recipient confidentiality guarantee above — there is no
-//! application-layer AEAD on the resharing path. An observer able to collect
-//! `new_threshold + 1` sub-shares for a single old dealer recovers that dealer's
-//! Lagrange-weighted share. (`frostristretto255tss` resharing does wrap shares
-//! in the same AEAD envelope.) Adding the envelope here would change the round-3
-//! wire format and break resharing with peers running earlier versions, so it is
-//! deferred to a protocol-version bump. Until then, deploy
-//! `frosttss` resharing only over a transport that actually enforces the
-//! per-recipient confidentiality the broker contract requires.
+//! a single protocol instance. Secret shares — round-2 DKG (keygen) shares and
+//! round-3 [`Resharing`] sub-shares — are additionally encrypted at the
+//! application layer (X25519 + HKDF-SHA256 + ChaCha20-Poly1305, under fresh
+//! per-run ephemeral keys), so a passive observer of the transport learns
+//! nothing about them; against an active attacker the broker's authenticity
+//! guarantee is still required.
 //!
 //! References:
 //! - RFC 9591: <https://www.rfc-editor.org/rfc/rfc9591.html>

@@ -5,6 +5,11 @@
 //! committee under a fresh polynomial, prove knowledge of `wi`, and commit to
 //! the polynomial; the new committee verifies, sums the received sub-shares into
 //! a fresh share, and reconstructs the same public key.
+//!
+//! The round-3 sub-shares travel sealed under the X25519+HKDF+ChaCha20-Poly1305
+//! envelope ([`crate::share_aead`]): each new member publishes a fresh
+//! ephemeral X25519 key and nonce in its round-2 ACK, and each old dealer seals
+//! every sub-share to that key with its own per-run ephemeral key.
 
 use super::Error;
 use super::key::Key;
@@ -12,7 +17,9 @@ use super::point::{point_from_affine_be, point_to_affine_be};
 use super::schnorr::ZkProof;
 use crate::frost::binding::lagrange_coefficient;
 use crate::frost::commitments;
-use crate::frost::{Ciphersuite, Ed25519, Scalar, scalar_from_be_mod_l, scalar_to_be, vss};
+use crate::frost::{
+    Ciphersuite, Ed25519, Scalar, aead, decode_scalar, encode_scalar, scalar_from_be_mod_l, vss,
+};
 use crate::prelude::*;
 use crate::rng::SystemRng;
 use crate::sync::{Mutex, Receiver, Sender, channel};
@@ -20,19 +27,23 @@ use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
 use crate::tss::{Message, PartyId, ReSharingParameters, decode, encode};
+use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
 
-const ROUND1: &str = "frost:ed25519:reshare:round1";
-const ROUND2: &str = "frost:ed25519:reshare:round2";
-const ROUND3_1: &str = "frost:ed25519:reshare:round3-1";
-const ROUND3_2: &str = "frost:ed25519:reshare:round3-2";
-const ROUND4: &str = "frost:ed25519:reshare:round4";
+// `v2`: round-3 sub-shares are sealed and the round-4 ACK carries a
+// consistency digest (wire change; v1 peers fail cleanly on the unknown type).
+const ROUND1: &str = "frost:ed25519:reshare:v2:round1";
+const ROUND2: &str = "frost:ed25519:reshare:v2:round2";
+const ROUND3_1: &str = "frost:ed25519:reshare:v2:round3-1";
+const ROUND3_2: &str = "frost:ed25519:reshare:v2:round3-2";
+const ROUND4: &str = "frost:ed25519:reshare:v2:round4";
 const SESSION_NONCE_LEN: usize = 16;
 const COMMITMENT_BYTES: usize = 32;
 const POK_TAG: &[u8] = b"reshare-wi-pok";
+const AD_PREFIX: &[u8] = b"frosttss/reshare/r3/v2|";
 
 #[derive(Serialize, Deserialize)]
 struct Round1Msg {
@@ -52,19 +63,24 @@ struct Round1Msg {
     v_commitment: Vec<u8>,
 }
 
+/// Round-2 ACK from a new member: its ephemeral X25519 key and nonce, so the
+/// old dealers can seal its sub-shares.
 #[derive(Serialize, Deserialize)]
-struct Round2Msg {}
+struct Round2Msg {
+    #[serde(rename = "eph_pub", with = "crate::tss::b64::vec")]
+    eph_pub: Vec<u8>,
+    #[serde(rename = "session_nonce", with = "crate::tss::b64::vec")]
+    session_nonce: Vec<u8>,
+}
 
-/// Round-3 sub-share message. The share is sent in **cleartext** and relies on
-/// the broker's per-recipient confidentiality (see the `frosttss` module docs);
-/// it is *not* wrapped in the X25519+ChaCha20-Poly1305 envelope that keygen and
-/// the `frostristretto255tss` resharing use. Encrypting it would change the wire
-/// format (breaking resharing with earlier versions) and is deferred to a
-/// protocol-version bump.
+/// Round-3 sub-share message: the dealer's ephemeral X25519 key and the
+/// sub-share (32-byte little-endian scalar) sealed to the recipient.
 #[derive(Serialize, Deserialize)]
 struct Round3Msg1 {
-    #[serde(rename = "share", with = "crate::tss::b64::vec")]
-    share: Vec<u8>,
+    #[serde(rename = "eph_pub", with = "crate::tss::b64::vec")]
+    eph_pub: Vec<u8>,
+    #[serde(rename = "ciphertext", with = "crate::tss::b64::vec")]
+    ciphertext: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -99,8 +115,15 @@ struct State {
     // old side
     new_shares: Vec<vss::Share>,
     v_d: Vec<Vec<u8>>,
+    eph_priv: [u8; 32],
+    eph_pub: [u8; 32],
+    new_eph_pubs: VecMap<Vec<u8>, [u8; 32]>,
+    new_session_nonces: VecMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
     // new side
     group_pub_key: Option<EdwardsPoint>,
+    my_eph_priv: [u8; 32],
+    my_eph_pub: [u8; 32],
+    my_session_nonce: [u8; SESSION_NONCE_LEN],
     r1: Option<Vec<Message>>,
     r3m1: Option<Vec<Message>>,
     r3m2: Option<Vec<Message>>,
@@ -110,6 +133,14 @@ struct State {
     round5_new_key: Option<Key>,
     /// Dual (old+new) members: the other new parties' ROUND4 ACKs are all in.
     acks_done: bool,
+}
+
+/// The X25519 private keys seal and open the share envelopes; wiped with the session.
+impl Drop for State {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.eph_priv);
+        zeroize::Zeroize::zeroize(&mut self.my_eph_priv);
+    }
 }
 
 impl Resharing {
@@ -127,6 +158,25 @@ impl Resharing {
             state: Mutex::new(State::default()),
             result_tx: Mutex::new(Some(tx)),
         });
+        if shared.params.is_new_committee() {
+            // This new party's ephemeral key + nonce, so dealers can seal our
+            // share. Sampled before any old-side round runs: a dual member's
+            // `round3_old` seals to its own entry and may fire before
+            // `round2_new` does.
+            let mut rng = SystemRng;
+            let (my_eph_priv, my_eph_pub) = aead::new_ephemeral_key(&mut rng);
+            let mut my_nonce = [0u8; SESSION_NONCE_LEN];
+            rng.fill_bytes(&mut my_nonce);
+            let mut st = shared.state.lock();
+            st.my_eph_priv = my_eph_priv;
+            st.my_eph_pub = my_eph_pub;
+            st.my_session_nonce = my_nonce;
+            if shared.params.is_old_committee() {
+                let key = strip(&shared.params.party_id().key).to_vec();
+                st.new_eph_pubs.insert(key.clone(), my_eph_pub);
+                st.new_session_nonces.insert(key, my_nonce);
+            }
+        }
         if shared.params.is_old_committee() {
             let key = input.ok_or_else(|| {
                 Error::Validation("old-committee party requires its existing key".into())
@@ -200,6 +250,7 @@ impl Shared {
         // Commit to the flattened polynomial points; decommitment follows in round 3.
         let flat = flatten(&vi);
         let (v_commitment, v_d) = commitments::commit(&mut rng, &flat);
+        let (eph_priv, eph_pub) = aead::new_ephemeral_key(&mut rng);
 
         // Schnorr PoK of wi bound to vi[0].
         let mut session_nonce = [0u8; SESSION_NONCE_LEN];
@@ -222,6 +273,8 @@ impl Shared {
             let mut st = self.state.lock();
             st.new_shares = new_shares;
             st.v_d = v_d;
+            st.eph_priv = eph_priv;
+            st.eph_pub = eph_pub;
         }
 
         // Send round 1 to every new party (and to self if dual-membership).
@@ -246,8 +299,38 @@ impl Shared {
             self.round3_old();
         } else {
             let me2 = Arc::clone(self);
-            let expect = JsonExpect::new(ROUND2, new_others, Box::new(move |_| me2.round3_old()));
+            let others = new_others.clone();
+            let expect = JsonExpect::new(
+                ROUND2,
+                new_others,
+                Box::new(move |msgs| {
+                    if let Err(e) = me2.harvest_new_eph_keys(&others, &msgs) {
+                        return me2.deliver(Err(e));
+                    }
+                    me2.round3_old();
+                }),
+            );
             self.params.broker().connect(ROUND2, Arc::new(expect));
+        }
+        Ok(())
+    }
+
+    /// Records each new party's round-2 ephemeral key and nonce.
+    fn harvest_new_eph_keys(&self, others: &[PartyId], msgs: &[Message]) -> Result<(), Error> {
+        let mut st = self.state.lock();
+        for (pid, msg) in others.iter().zip(msgs.iter()) {
+            let r2: Round2Msg = decode(msg)?;
+            if r2.eph_pub.len() != aead::EPHEMERAL_KEY_BYTES
+                || r2.session_nonce.len() != SESSION_NONCE_LEN
+            {
+                return Err(Error::Validation(format!(
+                    "new party {pid} sent malformed round-2 keys"
+                )));
+            }
+            let key = strip(&pid.key).to_vec();
+            st.new_eph_pubs.insert(key.clone(), to_arr32(&r2.eph_pub));
+            st.new_session_nonces
+                .insert(key, to_arr16(&r2.session_nonce));
         }
         Ok(())
     }
@@ -277,14 +360,17 @@ impl Shared {
                 return self.deliver(Err(e));
             }
         }
-        {
+        // ACK every old party (except self if dual) with the ephemeral key +
+        // nonce sampled in `Resharing::new`.
+        let ack = {
             let mut st = self.state.lock();
             st.group_pub_key = group_pub;
             st.r1 = Some(r1msgs);
-        }
-
-        // ACK every old party (except self if dual).
-        let ack = Round2Msg {};
+            Round2Msg {
+                eph_pub: st.my_eph_pub.to_vec(),
+                session_nonce: st.my_session_nonce.to_vec(),
+            }
+        };
         for pj in self.params.old_parties() {
             if pj.cmp_key(&me) != core::cmp::Ordering::Equal
                 && let Err(e) = self.send_to(ROUND2, &ack, pj)
@@ -363,15 +449,44 @@ impl Shared {
         self.params.broker().connect(ROUND3_2, Arc::new(e2));
     }
 
-    /// Round 3 (old): send each new party its sub-share and the VSS decommitment.
+    /// Round 3 (old): send each new party its sealed sub-share and the VSS
+    /// decommitment.
     fn round3_old(self: &Arc<Self>) {
-        let (new_shares, v_d) = {
+        let mut rng = SystemRng;
+        let (v_d, eph_pub) = {
             let st = self.state.lock();
-            (st.new_shares.clone(), st.v_d.clone())
+            (st.v_d.clone(), st.eph_pub)
         };
-        for (pj, share) in self.params.new_parties().iter().zip(new_shares.iter()) {
-            let m = Round3Msg1 {
-                share: scalar_to_be(&share.value),
+        for (n, pj) in self.params.new_parties().iter().enumerate() {
+            // Seal under the lock so neither the sub-share nor the X25519
+            // private key is copied out of the session state.
+            let sealed = {
+                let st = self.state.lock();
+                let key = strip(&pj.key);
+                match (
+                    st.new_shares.get(n),
+                    st.new_eph_pubs.get(key),
+                    st.new_session_nonces.get(key),
+                ) {
+                    (Some(share), Some(recipient_pub), Some(recipient_nonce)) => {
+                        let ad = reshare_round3_ad(recipient_nonce, &eph_pub, recipient_pub);
+                        let plaintext = zeroize::Zeroizing::new(encode_scalar(&share.value));
+                        aead::seal_share(&mut rng, &st.eph_priv, recipient_pub, &ad, &*plaintext)
+                            .map_err(|e| {
+                                Error::Validation(format!("seal reshare share to {pj}: {e}"))
+                            })
+                    }
+                    _ => Err(Error::Validation(format!(
+                        "missing new-party share or eph key for {pj}"
+                    ))),
+                }
+            };
+            let m = match sealed {
+                Ok(ciphertext) => Round3Msg1 {
+                    eph_pub: eph_pub.to_vec(),
+                    ciphertext,
+                },
+                Err(e) => return self.deliver(Err(e)),
             };
             if let Err(e) = self.send_to(ROUND3_1, &m, pj) {
                 return self.deliver(Err(e));
@@ -426,13 +541,15 @@ impl Shared {
         let new_threshold = self.params.new_threshold();
         let old_parties = self.params.old_parties().to_vec();
 
-        let (r1msgs, r3m1, r3m2, group_pub) = {
+        let (r1msgs, r3m1, r3m2, group_pub, my_eph_pub, my_nonce) = {
             let mut st = self.state.lock();
             (
                 st.r1.take().unwrap(),
                 st.r3m1.take().unwrap(),
                 st.r3m2.take().unwrap(),
                 st.group_pub_key.unwrap(),
+                st.my_eph_pub,
+                st.my_session_nonce,
             )
         };
 
@@ -484,8 +601,37 @@ impl Shared {
                 ))));
             }
 
+            // Open the sealed sub-share (a 32-byte little-endian scalar).
+            if r3a.eph_pub.len() != aead::EPHEMERAL_KEY_BYTES {
+                return self.deliver(Err(Error::Validation(format!(
+                    "old party {pid} malformed eph pub"
+                ))));
+            }
+            let sender_pub = to_arr32(&r3a.eph_pub);
+            let ad = reshare_round3_ad(&my_nonce, &sender_pub, &my_eph_pub);
+            let opened = {
+                let st = self.state.lock();
+                aead::open_share(&st.my_eph_priv, &sender_pub, &ad, &r3a.ciphertext)
+            };
+            let share_bytes = match opened {
+                Ok(b) => b,
+                Err(e) => {
+                    return self.deliver(Err(Error::Validation(format!(
+                        "old party {pid} share failed to open: {e}"
+                    ))));
+                }
+            };
+            let Some(share) = <[u8; 32]>::try_from(share_bytes.as_slice())
+                .ok()
+                .map(zeroize::Zeroizing::new)
+                .and_then(|a| decode_scalar(&a))
+            else {
+                return self.deliver(Err(Error::Validation(format!(
+                    "old party {pid} sent a malformed share scalar"
+                ))));
+            };
+
             // Verify this party's sub-share against the dealer's commitments.
-            let share = scalar_from_be_mod_l(&r3a.share);
             if !vss::verify::<Ed25519>(&me.key, &share, new_threshold, &vj) {
                 return self.deliver(Err(Error::Validation(format!(
                     "VSS share verification failed for old party {pid}"
@@ -622,6 +768,21 @@ fn build_reshare_session(party_key: &[u8], session_nonce: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Associated data for a sealed round-3 sub-share:
+/// `"frosttss/reshare/r3/v2|" || recipientNonce || "|" || senderPub || "|" || recipientPub`.
+fn reshare_round3_ad(recipient_nonce: &[u8], sender_pub: &[u8], recipient_pub: &[u8]) -> Vec<u8> {
+    let mut ad = Vec::with_capacity(
+        AD_PREFIX.len() + recipient_nonce.len() + sender_pub.len() + recipient_pub.len() + 2,
+    );
+    ad.extend_from_slice(AD_PREFIX);
+    ad.extend_from_slice(recipient_nonce);
+    ad.push(b'|');
+    ad.extend_from_slice(sender_pub);
+    ad.push(b'|');
+    ad.extend_from_slice(recipient_pub);
+    ad
+}
+
 /// Flattens points to `[x0, y0, x1, y1, …]` big-endian affine coordinates.
 fn flatten(points: &[EdwardsPoint]) -> Vec<Vec<u8>> {
     let mut out = Vec::with_capacity(points.len() * 2);
@@ -633,13 +794,18 @@ fn flatten(points: &[EdwardsPoint]) -> Vec<Vec<u8>> {
     out
 }
 
-/// Inverse of [`flatten`]: rebuilds points from coordinate pairs.
+/// Inverse of [`flatten`]: rebuilds points from coordinate pairs, projecting
+/// each into the prime-order subgroup like every other peer-supplied point
+/// ([`Ciphersuite::decode_point`]); a no-op for honestly generated points.
 fn unflatten(flat: &[Vec<u8>]) -> Option<Vec<EdwardsPoint>> {
     if !flat.len().is_multiple_of(2) {
         return None;
     }
     flat.chunks(2)
-        .map(|c| point_from_affine_be(&c[0], &c[1]).ok())
+        .map(|c| {
+            let p = point_from_affine_be(&c[0], &c[1]).ok()?;
+            Ed25519::decode_point(&Ed25519::encode_point(&p))
+        })
         .collect()
 }
 
@@ -651,6 +817,18 @@ fn decode_point(b: &[u8]) -> Option<EdwardsPoint> {
 fn strip(b: &[u8]) -> &[u8] {
     let start = b.iter().position(|&x| x != 0).unwrap_or(b.len());
     &b[start..]
+}
+
+fn to_arr32(b: &[u8]) -> [u8; 32] {
+    let mut a = [0u8; 32];
+    a.copy_from_slice(b);
+    a
+}
+
+fn to_arr16(b: &[u8]) -> [u8; SESSION_NONCE_LEN] {
+    let mut a = [0u8; SESSION_NONCE_LEN];
+    a.copy_from_slice(b);
+    a
 }
 
 #[cfg(test)]
