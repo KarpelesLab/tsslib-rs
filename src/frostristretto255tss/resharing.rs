@@ -391,47 +391,49 @@ impl Shared {
 
     fn round3_old(self: &Arc<Self>) {
         let mut rng = SystemRng;
-        let (new_shares, v_decommit, eph_priv, eph_pub, new_eph_pubs, new_nonces) = {
+        // Seal under the lock (borrowing the private key and shares instead
+        // of copying them out), send after releasing it: a synchronous broker
+        // may run this party's handlers from inside `send_to`.
+        let mut sealed = Vec::with_capacity(self.params.new_party_count());
+        let v_decommit = {
             let st = self.state.lock();
-            (
-                st.new_shares.clone(),
-                st.v_decommit.clone(),
-                st.eph_priv,
-                st.eph_pub,
-                st.new_eph_pubs.clone(),
-                st.new_session_nonces.clone(),
-            )
-        };
-
-        for (pj, share) in self.params.new_parties().iter().zip(new_shares.iter()) {
-            let key = strip(&pj.key);
-            let (Some(recipient_pub), Some(recipient_nonce)) =
-                (new_eph_pubs.get(key), new_nonces.get(key))
-            else {
-                return self.deliver(Err(Error::Validation(format!(
-                    "missing new-party eph key for {pj}"
-                ))));
-            };
-            let ad = reshare_round3_ad(recipient_nonce, &eph_pub, recipient_pub);
-            let ct = match aead::seal_share(
-                &mut rng,
-                &eph_priv,
-                recipient_pub,
-                &ad,
-                &*zeroize::Zeroizing::new(encode_scalar(&share.value)),
-            ) {
-                Ok(ct) => ct,
-                Err(e) => {
+            for (pj, share) in self.params.new_parties().iter().zip(&st.new_shares) {
+                let key = strip(&pj.key);
+                let (Some(recipient_pub), Some(recipient_nonce)) =
+                    (st.new_eph_pubs.get(key), st.new_session_nonces.get(key))
+                else {
+                    drop(st);
                     return self.deliver(Err(Error::Validation(format!(
-                        "seal reshare share to {pj}: {e}"
+                        "missing new-party eph key for {pj}"
                     ))));
+                };
+                let ad = reshare_round3_ad(recipient_nonce, &st.eph_pub, recipient_pub);
+                match aead::seal_share(
+                    &mut rng,
+                    &st.eph_priv,
+                    recipient_pub,
+                    &ad,
+                    &*zeroize::Zeroizing::new(encode_scalar(&share.value)),
+                ) {
+                    Ok(ciphertext) => sealed.push((
+                        pj,
+                        Round3Msg1 {
+                            eph_pub: st.eph_pub.to_vec(),
+                            ciphertext,
+                        },
+                    )),
+                    Err(e) => {
+                        drop(st);
+                        return self.deliver(Err(Error::Validation(format!(
+                            "seal reshare share to {pj}: {e}"
+                        ))));
+                    }
                 }
-            };
-            let r3m1 = Round3Msg1 {
-                eph_pub: eph_pub.to_vec(),
-                ciphertext: ct,
-            };
-            if let Err(e) = self.send_to(ROUND3_1, &r3m1, pj) {
+            }
+            st.v_decommit.clone()
+        };
+        for (pj, r3m1) in &sealed {
+            if let Err(e) = self.send_to(ROUND3_1, r3m1, pj) {
                 return self.deliver(Err(e));
             }
         }
@@ -487,7 +489,7 @@ impl Shared {
                 st.r3m1.take().unwrap(),
                 st.r3m2.take().unwrap(),
                 st.group_pub_key.unwrap(),
-                st.my_eph_priv,
+                zeroize::Zeroizing::new(st.my_eph_priv),
                 st.my_eph_pub,
                 st.my_session_nonce,
             )

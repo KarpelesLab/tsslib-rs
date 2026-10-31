@@ -12,6 +12,7 @@ use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use purecrypto::ec::ristretto255::RistrettoPoint;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// Schema version of a [`Key`].
 pub const KEY_VERSION: u32 = 1;
@@ -103,7 +104,7 @@ impl Key {
     /// Parses a key from JSON (without validating).
     #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
-        KeyWire::deserialize_str(s)?.into_key()
+        KeyWire::deserialize_str(s)?.to_key()
     }
 
     /// Overwrites the secret share with zero.
@@ -114,7 +115,7 @@ impl Key {
 
 crate::wire::key_codec!(Key, Error, KeyWire,
     to_wire: |k| Ok::<_, Error>(KeyWire::from_key(k)),
-    from_wire: |w| w.into_key(),
+    from_wire: |w| w.to_key(),
 );
 
 #[derive(Serialize, Deserialize)]
@@ -129,6 +130,13 @@ struct KeyWire {
     big_xj: Vec<B64Bytes>,
     #[serde(rename = "GroupPublicKey")]
     group_public_key: B64Bytes,
+}
+
+/// `xi` is a copy of the secret share; wiped when the wire form is dropped.
+impl Drop for KeyWire {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.xi.0);
+    }
 }
 
 impl KeyWire {
@@ -151,7 +159,7 @@ impl KeyWire {
         }
     }
 
-    fn into_key(self) -> Result<Key, Error> {
+    fn to_key(&self) -> Result<Key, Error> {
         let big_xj = self
             .big_xj
             .iter()
@@ -159,8 +167,8 @@ impl KeyWire {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Key {
             xi: biguint_to_scalar(&self.xi)?,
-            share_id: self.share_id,
-            ks: self.ks,
+            share_id: self.share_id.clone(),
+            ks: self.ks.clone(),
             big_xj,
             group_public_key: decode_point(&self.group_public_key.0)?,
         })
@@ -176,17 +184,17 @@ fn decode_point(b: &[u8]) -> Result<RistrettoPoint, Error> {
 }
 
 fn scalar_to_biguint(s: &Scalar) -> BigUintDec {
-    let le = s.to_bytes();
-    let mut be = [0u8; 32];
+    let le = Zeroizing::new(s.to_bytes());
+    let mut be = Zeroizing::new([0u8; 32]);
     for (i, &b) in le.iter().rev().enumerate() {
         be[i] = b;
     }
-    BigUintDec::from_be_bytes(&be)
+    BigUintDec::from_be_bytes(&*be)
 }
 
 fn biguint_to_scalar(v: &BigUintDec) -> Result<Scalar, Error> {
-    let be = v.to_be_bytes_padded(32);
-    let mut le = [0u8; 32];
+    let be = Zeroizing::new(v.to_be_bytes_padded(32));
+    let mut le = Zeroizing::new([0u8; 32]);
     for (i, &b) in be.iter().rev().enumerate() {
         le[i] = b;
     }

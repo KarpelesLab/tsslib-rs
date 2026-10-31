@@ -43,7 +43,6 @@ use crate::vecmap::VecMap;
 use alloc::sync::Arc;
 use purecrypto::hash::sha256;
 use purecrypto::rng::RngCore;
-
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 

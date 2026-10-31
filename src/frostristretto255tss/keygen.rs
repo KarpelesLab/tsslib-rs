@@ -233,49 +233,49 @@ impl Shared {
             st.peer_vs.insert(key, vsj);
         }
 
-        let (eph_priv, eph_pub, my_nonce, shares, transcript) = {
+        // Seal under the lock (borrowing the private key and shares instead
+        // of copying them out), send after releasing it: a synchronous broker
+        // may run this party's handlers from inside `send_to`.
+        let mut outbox = Vec::with_capacity(others.len());
+        {
             let mut st = self.state.lock();
             let me = strip(&self.params.party_id().key);
             parts.insert(me.to_vec(), core::mem::take(&mut st.my_r1_part));
             st.transcript = round1_transcript(&self.params, &parts);
-            (
-                st.eph_priv,
-                st.eph_pub,
-                st.my_session_nonce,
-                st.shares.clone(),
-                st.transcript,
-            )
-        };
-        for pid in others {
-            let share = match shares.iter().find(|s| cmp_eq(&s.id, &pid.key)) {
-                Some(s) => s,
-                None => {
+            for pid in others {
+                let Some(share) = st.shares.iter().find(|s| cmp_eq(&s.id, &pid.key)) else {
+                    drop(st);
                     return self
                         .deliver(Err(Error::Validation(format!("missing share for {pid}"))));
-                }
-            };
-            let recipient_pub = {
-                let st = self.state.lock();
-                *st.peer_eph_pubs
+                };
+                let recipient_pub = st
+                    .peer_eph_pubs
                     .get(strip(&pid.key))
-                    .expect("peer eph pub present")
-            };
-            let ad = keygen_round2_ad(&transcript, &my_nonce, &eph_pub, &recipient_pub);
-            let ct = match aead::seal_share(
-                &mut rng,
-                &eph_priv,
-                &recipient_pub,
-                &ad,
-                &zeroize::Zeroizing::new(scalar_to_be(&share.value)),
-            ) {
-                Ok(ct) => ct,
-                Err(e) => {
-                    return self
-                        .deliver(Err(Error::Validation(format!("seal share to {pid}: {e}"))));
+                    .expect("peer eph pub present");
+                let ad = keygen_round2_ad(
+                    &st.transcript,
+                    &st.my_session_nonce,
+                    &st.eph_pub,
+                    recipient_pub,
+                );
+                match aead::seal_share(
+                    &mut rng,
+                    &st.eph_priv,
+                    recipient_pub,
+                    &ad,
+                    &zeroize::Zeroizing::new(scalar_to_be(&share.value)),
+                ) {
+                    Ok(ciphertext) => outbox.push((pid, KeygenRound2Msg { ciphertext })),
+                    Err(e) => {
+                        drop(st);
+                        return self
+                            .deliver(Err(Error::Validation(format!("seal share to {pid}: {e}"))));
+                    }
                 }
-            };
-            let r2 = KeygenRound2Msg { ciphertext: ct };
-            if let Err(e) = self.send_to(ROUND2_TYPE, &r2, pid) {
+            }
+        }
+        for (pid, r2) in &outbox {
+            if let Err(e) = self.send_to(ROUND2_TYPE, r2, pid) {
                 return self.deliver(Err(e));
             }
         }

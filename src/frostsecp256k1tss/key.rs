@@ -13,6 +13,7 @@ use crate::tss::PartyId;
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// Schema version of a [`Key`].
 pub const KEY_VERSION: u32 = 1;
@@ -121,7 +122,7 @@ impl Key {
     /// Parses and validates a key from JSON.
     #[cfg(feature = "json")]
     pub fn from_json(s: &str) -> Result<Key, Error> {
-        let key = serde_json::from_str::<KeyWire>(s)?.into_key()?;
+        let key = serde_json::from_str::<KeyWire>(s)?.to_key()?;
         key.validate_basic()?;
         Ok(key)
     }
@@ -135,7 +136,7 @@ impl Key {
 crate::wire::key_codec!(Key, Error, KeyWire,
     to_wire: |k| Ok::<_, Error>(KeyWire::from_key(k)),
     from_wire: |w| {
-        let key = w.into_key()?;
+        let key = w.to_key()?;
         key.validate_basic()?;
         Ok(key)
     },
@@ -157,11 +158,18 @@ struct KeyWire {
     chain_code: B64Bytes,
 }
 
+/// `xi` is a copy of the secret share; wiped when the wire form is dropped.
+impl Drop for KeyWire {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.xi.0);
+    }
+}
+
 impl KeyWire {
     fn from_key(k: &Key) -> Self {
         let enc = |p: &Point| B64Bytes(encode_point(p).map(|b| b.to_vec()).unwrap_or_default());
         KeyWire {
-            xi: BigUintDec::from_be_bytes(&k.xi.to_bytes_be()),
+            xi: BigUintDec::from_be_bytes(&*Zeroizing::new(k.xi.to_bytes_be())),
             share_id: k.share_id.clone(),
             ks: k.ks.clone(),
             big_xj: k.big_xj.iter().map(enc).collect(),
@@ -170,23 +178,26 @@ impl KeyWire {
         }
     }
 
-    fn into_key(self) -> Result<Key, Error> {
+    fn to_key(&self) -> Result<Key, Error> {
         let dec = |b: &B64Bytes| {
             decode_point(&b.0).ok_or_else(|| Error::Validation("invalid group element".into()))
         };
         if self.xi.as_be_bytes().len() > 32 {
             return Err(Error::Validation("Xi >= n".into()));
         }
-        let xi_be: [u8; 32] = self.xi.to_be_bytes_padded(32).try_into().unwrap();
+        let padded = Zeroizing::new(self.xi.to_be_bytes_padded(32));
+        let mut xi_be = Zeroizing::new([0u8; 32]);
+        xi_be.copy_from_slice(&padded);
         Ok(Key {
             xi: Scalar::from_bytes_be(&xi_be).map_err(|_| Error::Validation("Xi >= n".into()))?,
-            share_id: self.share_id,
-            ks: self.ks,
+            share_id: self.share_id.clone(),
+            ks: self.ks.clone(),
             big_xj: self.big_xj.iter().map(dec).collect::<Result<_, _>>()?,
             group_public_key: dec(&self.group_public_key)?,
             chain_code: self
                 .chain_code
                 .0
+                .as_slice()
                 .try_into()
                 .map_err(|_| Error::Validation("ChainCode must be 32 bytes".into()))?,
         })
