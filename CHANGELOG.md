@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.16...v0.2.17) - 2026-10-31
+
+### Fixed
+
+- *(frost)* keep compute_binding_factors' signature; add the RFC form separately
+- *(mldsatss)* confirm the whole DKG transcript in round 3
+- *(mldsatss)* seal DKG secret shares and wipe DKG plaintext buffers
+- *(mldsatss)* wipe signing and hyperball secret intermediates
+- *(mldsatss)* verify threshold signatures under FIPS 204 before returning them
+- *(mldsatss)* validate ThresholdParams44, branch-free hyperball reductions, fix stale docs
+- *(frostristretto255tss)* validate keys on load, reject bad ids and oversized Xi
+- *(frostristretto255tss,frostsecp256k1tss)* wipe secret copies
+- *(frostristretto255tss)* reject identity nonce commitments and PoK R
+- *(frostristretto255tss)* bind round-1 transcript into keygen share AD
+- *(frostsecp256k1tss)* bind round-1 transcript into keygen share AD
+- *(frostristretto255tss)* detect old-dealer equivocation in resharing
+- *(frostsecp256k1tss)* detect old-dealer equivocation in resharing
+- *(eddsatss)* reshare digest ACK, sealed shares, wipe retired share
+- *(eddsatss)* seal keygen shares and bind the round-1 transcript
+- *(eddsatss)* require canonical affine coordinates; bound keygen decommitment
+- *(eddsatss)* reject Ks/BigXj length mismatch instead of panicking
+- *(frost)* include the group public key in FROST binding factors
+- *(frosttss)* confirm a resharing view digest in the round-4 ACK
+- *(frosttss)* seal resharing round-3 sub-shares
+- *(frosttss)* reject oversize and non-canonical key/point integers
+- *(frosttss)* bind keygen round-1 transcript into share AEAD
+- *(ecdsatss)* wipe Key secrets on drop
+- *(ecdsatss)* constant-time modexp for secret exponents
+- *(ecdsatss)* reject reused ring-Pedersen h1/h2 in keygen round 2
+- *(ecdsatss)* sanity-check saved peer Paillier/ring-Pedersen params before signing
+- *(ecdsatss)* bound peer-supplied proof exponents
+- *(ecdsatss)* bound the Paillier proof challenge-generation loop
+- *(dklstss)* pad OT-extension choice bits so the KOS check hides the secret (CRITICAL)
+- *(dklstss)* reject oversized integers when loading a key
+- *(dklstss)* wipe received VSS shares after use
+- *(dklstss)* tighten Key::validate_basic
+- *(dklstss)* validate thresholds before dealing in broker keygen/reshare
+- *(wire)* cap serde size hints so counts can't force preallocation
+- *(vecmap)* decode maps in O(n log n) instead of O(n²)
+
+### Other
+
+- *(frost)* pin that the last dealer cannot choose the key (n <= 2t)
+- state which protocols catch equivocation and need a confidential transport
+- drop the zeroize dependency for purecrypto::zeroize
+- allow test-only VecMap helpers no longer used by mldsatss
+- *(tss)* note Parameters don't validate and PartyId Eq/Ord differ
+
 ## [0.2.16](https://github.com/KarpelesLab/tsslib-rs/compare/v0.2.15...v0.2.16) - 2026-10-18
 
 ### Other
