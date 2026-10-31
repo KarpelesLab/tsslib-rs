@@ -326,9 +326,11 @@ impl Shared {
     }
 }
 
+/// Decodes a peer's nonce commitment, rejecting the identity (RFC 9591
+/// §4.1: commitments must be non-identity elements).
 fn decode_point(b: &[u8]) -> Option<RistrettoPoint> {
     let arr: [u8; 32] = b.try_into().ok()?;
-    Ristretto255::decode_point(&arr)
+    Ristretto255::decode_point(&arr).filter(|p| !Ristretto255::is_identity(p))
 }
 
 fn decode_scalar(b: &[u8]) -> Option<Scalar> {
@@ -347,6 +349,14 @@ mod tests {
     use crate::frost::scalar_from_be_mod_l;
     use crate::tss::bigint::BigUintDec;
     use crate::tss::testhub::TestHub;
+
+    #[test]
+    fn nonce_commitment_rejects_identity() {
+        let id = Ristretto255::encode_point(&Ristretto255::identity());
+        assert!(decode_point(&id).is_none());
+        let g = Ristretto255::encode_point(&Ristretto255::generator());
+        assert!(decode_point(&g).is_some());
+    }
 
     fn rand_scalar() -> Scalar {
         let mut b = [0u8; 64];

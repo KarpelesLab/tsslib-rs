@@ -710,6 +710,7 @@ fn verify_old_round1(
     group_pub: &mut Option<RistrettoPoint>,
 ) -> Result<(), Error> {
     let candidate = decode_point(&r1.group_public_key)
+        .filter(|p| !Ristretto255::is_identity(p))
         .ok_or_else(|| Error::Validation(format!("party {pid} sent invalid GroupPublicKey")))?;
     match group_pub {
         None => *group_pub = Some(candidate),

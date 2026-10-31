@@ -49,12 +49,13 @@ impl ZkProof {
         )
     }
 
-    /// Decodes a proof from its wire form.
+    /// Decodes a proof from its wire form, rejecting an identity `R`.
     pub fn from_wire(r_bytes: &[u8], t_bytes: &[u8]) -> Result<Self, Error> {
         let arr: [u8; 32] = r_bytes
             .try_into()
             .map_err(|_| Error::Validation("Schnorr R must be 32 bytes".into()))?;
         let r = Ristretto255::decode_point(&arr)
+            .filter(|r| !Ristretto255::is_identity(r))
             .ok_or_else(|| Error::Validation("invalid Schnorr R".into()))?;
         Ok(ZkProof {
             r,
@@ -77,6 +78,12 @@ fn challenge(session: &[u8], x_pub: &RistrettoPoint, r: &RistrettoPoint) -> Scal
 mod tests {
     use super::*;
     use crate::rng::SystemRng;
+
+    #[test]
+    fn from_wire_rejects_identity_r() {
+        let id = Ristretto255::encode_point(&Ristretto255::identity());
+        assert!(ZkProof::from_wire(&id, &[1]).is_err());
+    }
 
     fn rand_scalar() -> Scalar {
         let mut b = [0u8; 64];
