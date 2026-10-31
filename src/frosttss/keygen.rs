@@ -5,6 +5,19 @@
 //! sends each peer their secret share, sealed under the X25519+ChaCha20-Poly1305
 //! envelope. Finalize verifies each share against its dealer's commitments and
 //! aggregates into this party's [`Key`].
+//!
+//! # Broadcast consistency
+//!
+//! Round 1 is a broadcast, but the broker only promises per-sender
+//! authenticity, not that every recipient saw the *same* message. A dealer that
+//! keeps its constant term (so its PoK and the group key still check out) but
+//! sends each peer a different higher-degree polynomial plus a matching share
+//! would otherwise leave every party with the same address and mutually
+//! inconsistent shares. To rule that out without an extra echo round, every
+//! party hashes the full round-1 transcript it received (all parties' payloads,
+//! its own included, in committee order) and binds that digest into the
+//! associated data of every round-2 share envelope. Two honest parties whose
+//! round-1 views differ cannot open each other's shares, so the session aborts.
 
 use super::Error;
 use super::key::Key;
@@ -27,16 +40,20 @@ use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
 
-const ROUND1_TYPE: &str = "frost:ed25519:keygen:round1";
-const ROUND2_TYPE: &str = "frost:ed25519:keygen:round2";
+// `v2`: round-2 envelopes bind the round-1 transcript digest (wire change;
+// v1 peers fail cleanly on the unknown message type).
+const ROUND1_TYPE: &str = "frost:ed25519:keygen:v2:round1";
+const ROUND2_TYPE: &str = "frost:ed25519:keygen:v2:round2";
 const SESSION_NONCE_LEN: usize = 16;
 const COMMITMENT_BYTES: usize = 32;
 const SCALAR_BYTES: usize = 32;
-const AD_PREFIX: &[u8] = b"frosttss/keygen/r2/v1|";
+const AD_PREFIX: &[u8] = b"frosttss/keygen/r2/v2|";
+/// Domain tag of the round-1 transcript digest bound into the round-2 AD.
+const TRANSCRIPT_TAG: &[u8] = b"frosttss/keygen/r1-transcript/v2";
 const POK_TAG: &[u8] = b"dkg-pok";
 
 /// Round-1 broadcast. Byte fields are base64.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct KeygenRound1Msg {
     #[serde(rename = "poly_commitments")]
     poly_commitments: Vec<B64Bytes>,
@@ -78,6 +95,10 @@ struct State {
     eph_priv: [u8; 32],
     eph_pub: [u8; 32],
     my_session_nonce: [u8; SESSION_NONCE_LEN],
+    /// Our own round-1 payload, hashed into the round-1 transcript.
+    my_r1: Option<KeygenRound1Msg>,
+    /// Digest of every party's round-1 payload, bound into the round-2 AD.
+    transcript: [u8; 32],
     ks: Vec<Vec<u8>>,
     peer_eph_pubs: VecMap<Vec<u8>, [u8; 32]>,
     peer_session_nonces: VecMap<Vec<u8>, [u8; SESSION_NONCE_LEN]>,
@@ -107,6 +128,8 @@ impl Keygen {
                 eph_priv: [0u8; 32],
                 eph_pub: [0u8; 32],
                 my_session_nonce: [0u8; SESSION_NONCE_LEN],
+                my_r1: None,
+                transcript: [0u8; 32],
                 ks: Vec::new(),
                 peer_eph_pubs: VecMap::new(),
                 peer_session_nonces: VecMap::new(),
@@ -193,6 +216,7 @@ impl Shared {
             st.eph_priv = eph_priv;
             st.eph_pub = eph_pub;
             st.my_session_nonce = session_nonce;
+            st.my_r1 = Some(r1.clone());
             st.ks = ks;
         }
 
@@ -217,7 +241,15 @@ impl Shared {
         let mut rng = SystemRng;
 
         // Decode and verify every peer's round-1 message.
+        let mut peer_r1s: Vec<KeygenRound1Msg> = Vec::with_capacity(others.len());
         for (pid, msg) in others.iter().zip(r1msgs.iter()) {
+            // Round 1 is a broadcast: a copy addressed to us alone means the
+            // sender (or the transport) is not broadcasting, so refuse it.
+            if msg.to.is_some() {
+                return self.deliver(Err(Error::Validation(format!(
+                    "party {pid} sent its round-1 broadcast point-to-point"
+                ))));
+            }
             let r1: KeygenRound1Msg = match decode(msg) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
@@ -232,40 +264,55 @@ impl Shared {
             st.peer_session_nonces
                 .insert(key.clone(), to_arr16(&r1.session_nonce));
             st.peer_vs.insert(key, vsj);
+            drop(st);
+            peer_r1s.push(r1);
         }
 
-        // Seal and send each peer their P2P share.
-        let (eph_priv, eph_pub, my_nonce, shares) = {
+        // Digest our view of the whole round-1 broadcast, in committee order.
+        let transcript = {
+            let mut st = self.state.lock();
+            let mine = st.my_r1.take().expect("round 1 ran");
+            let me = self.params.party_id();
+            let mut entries: Vec<(&[u8], &KeygenRound1Msg)> = Vec::new();
+            let mut peers = others.iter().zip(peer_r1s.iter());
+            for p in self.params.parties() {
+                if p.cmp_key(me) == core::cmp::Ordering::Equal {
+                    entries.push((&me.key, &mine));
+                } else if let Some((pid, r1)) = peers.next() {
+                    entries.push((&pid.key, r1));
+                }
+            }
+            let t = keygen_transcript(threshold, &entries);
+            st.transcript = t;
+            t
+        };
+
+        // Seal and send each peer their P2P share. The X25519 private key is
+        // used in place under the lock, so no unwiped copy of it is made.
+        let (eph_pub, my_nonce) = {
             let st = self.state.lock();
-            (
-                st.eph_priv,
-                st.eph_pub,
-                st.my_session_nonce,
-                st.shares.clone(),
-            )
+            (st.eph_pub, st.my_session_nonce)
         };
         for pid in others {
-            let share = match shares.iter().find(|s| cmp_eq(&s.id, &pid.key)) {
-                Some(s) => s,
-                None => {
-                    return self
-                        .deliver(Err(Error::Validation(format!("missing share for {pid}"))));
-                }
-            };
-            let recipient_pub = {
+            let sealed = {
                 let st = self.state.lock();
-                *st.peer_eph_pubs
-                    .get(strip(&pid.key))
-                    .expect("peer eph pub present")
-            };
-            let ad = keygen_round2_ad(&my_nonce, &eph_pub, &recipient_pub);
-            let plaintext = zeroize::Zeroizing::new(scalar_to_be(&share.value));
-            let ct = match aead::seal_share(&mut rng, &eph_priv, &recipient_pub, &ad, &plaintext) {
-                Ok(ct) => ct,
-                Err(e) => {
-                    return self
-                        .deliver(Err(Error::Validation(format!("seal share to {pid}: {e}"))));
+                match st.shares.iter().find(|s| cmp_eq(&s.id, &pid.key)) {
+                    None => Err(Error::Validation(format!("missing share for {pid}"))),
+                    Some(share) => {
+                        let recipient_pub = st
+                            .peer_eph_pubs
+                            .get(strip(&pid.key))
+                            .expect("peer eph pub present");
+                        let ad = keygen_round2_ad(&my_nonce, &eph_pub, recipient_pub, &transcript);
+                        let plaintext = zeroize::Zeroizing::new(scalar_to_be(&share.value));
+                        aead::seal_share(&mut rng, &st.eph_priv, recipient_pub, &ad, &plaintext)
+                            .map_err(|e| Error::Validation(format!("seal share to {pid}: {e}")))
+                    }
                 }
+            };
+            let ct = match sealed {
+                Ok(ct) => ct,
+                Err(e) => return self.deliver(Err(e)),
             };
             let r2 = KeygenRound2Msg { ciphertext: ct };
             if let Err(e) = self.send_to(ROUND2_TYPE, &r2, pid) {
@@ -375,7 +422,7 @@ impl Shared {
             };
             let sender_nonce = st.peer_session_nonces.get(key).expect("peer nonce present");
             let sender_pub = st.peer_eph_pubs.get(key).expect("peer eph pub present");
-            let ad = keygen_round2_ad(sender_nonce, sender_pub, &st.eph_pub);
+            let ad = keygen_round2_ad(sender_nonce, sender_pub, &st.eph_pub, &st.transcript);
             let share_bytes = match aead::open_share(&st.eph_priv, sender_pub, &ad, &r2.ciphertext)
             {
                 Ok(b) => b,
@@ -482,10 +529,22 @@ fn build_keygen_session(party_key: &[u8], session_nonce: &[u8]) -> Vec<u8> {
 }
 
 /// Associated data for the sealed round-2 share:
-/// `"frosttss/keygen/r2/v1|" || senderNonce || "|" || senderPub || "|" || recipientPub`.
-fn keygen_round2_ad(sender_nonce: &[u8], sender_pub: &[u8], recipient_pub: &[u8]) -> Vec<u8> {
+/// `"frosttss/keygen/r2/v2|" || senderNonce || "|" || senderPub || "|" ||
+/// recipientPub || "|" || transcript`, where `transcript` is
+/// [`keygen_transcript`] over the round-1 broadcast as this party saw it.
+fn keygen_round2_ad(
+    sender_nonce: &[u8],
+    sender_pub: &[u8],
+    recipient_pub: &[u8],
+    transcript: &[u8; 32],
+) -> Vec<u8> {
     let mut ad = Vec::with_capacity(
-        AD_PREFIX.len() + sender_nonce.len() + sender_pub.len() + recipient_pub.len() + 2,
+        AD_PREFIX.len()
+            + sender_nonce.len()
+            + sender_pub.len()
+            + recipient_pub.len()
+            + transcript.len()
+            + 3,
     );
     ad.extend_from_slice(AD_PREFIX);
     ad.extend_from_slice(sender_nonce);
@@ -493,7 +552,35 @@ fn keygen_round2_ad(sender_nonce: &[u8], sender_pub: &[u8], recipient_pub: &[u8]
     ad.extend_from_slice(sender_pub);
     ad.push(b'|');
     ad.extend_from_slice(recipient_pub);
+    ad.push(b'|');
+    ad.extend_from_slice(transcript);
     ad
+}
+
+/// Digest of the whole round-1 broadcast as one party received it: a
+/// length-framed SHA-512/256 (`sha512_256_parts`) over the domain tag, the
+/// threshold, the committee size, then for every party in committee order its
+/// identifier followed by each round-1 field (commitment count, commitments,
+/// session nonce, ephemeral key, PoK).
+fn keygen_transcript(threshold: usize, entries: &[(&[u8], &KeygenRound1Msg)]) -> [u8; 32] {
+    let t = (threshold as u64).to_le_bytes();
+    let n = (entries.len() as u64).to_le_bytes();
+    let counts: Vec<[u8; 8]> = entries
+        .iter()
+        .map(|(_, r1)| (r1.poly_commitments.len() as u64).to_le_bytes())
+        .collect();
+    let mut parts: Vec<&[u8]> = vec![TRANSCRIPT_TAG, &t, &n];
+    for ((key, r1), count) in entries.iter().zip(counts.iter()) {
+        parts.push(strip(key));
+        parts.push(count);
+        parts.extend(r1.poly_commitments.iter().map(|c| c.0.as_slice()));
+        parts.push(&r1.session_nonce);
+        parts.push(&r1.eph_pub);
+        parts.push(&r1.schnorr_proof_alpha_x);
+        parts.push(&r1.schnorr_proof_alpha_y);
+        parts.push(&r1.schnorr_proof_t);
+    }
+    crate::tss::hashing::sha512_256_parts(&parts)
 }
 
 fn strip(b: &[u8]) -> &[u8] {
@@ -544,6 +631,144 @@ mod tests {
             .iter()
             .map(|kg| kg.wait().expect("keygen succeeds"))
             .collect()
+    }
+
+    /// Records every message handed to it.
+    struct Capture(std::sync::Mutex<Vec<Message>>);
+
+    impl crate::tss::MessageReceiver for Capture {
+        fn receive(&self, msg: &Message) -> crate::tss::BrokerResult {
+            self.0.lock().unwrap().push(msg.clone());
+            Ok(())
+        }
+    }
+
+    /// Runs a 2-of-3 keygen whose party 0 is a hand-driven dealer. With
+    /// `equivocate`, the dealer keeps one constant term (so its PoK and the
+    /// group key are the same for everyone) but gives each honest party a
+    /// different higher-degree polynomial with a matching share, sealing each
+    /// share under the AD that recipient's own round-1 view yields. With
+    /// `addressed`, its round-1 messages are sent point-to-point. Returns the
+    /// two honest parties' results.
+    fn run_with_dealer(equivocate: bool, addressed: bool) -> Vec<Result<Key, Error>> {
+        let t = 1;
+        let ids = party_ids(3);
+        let hub = TestHub::new(&ids);
+        let capture = Arc::new(Capture(std::sync::Mutex::new(Vec::new())));
+        hub.broker(0).connect(ROUND1_TYPE, capture.clone());
+        let honest: Vec<Keygen> = (1..3)
+            .map(|i| Keygen::new(Parameters::new(ids.clone(), &ids[i], t, hub.broker(i))).unwrap())
+            .collect();
+        let honest_r1: Vec<KeygenRound1Msg> = capture
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|m| decode(m).unwrap())
+            .collect();
+        assert_eq!(honest_r1.len(), 2);
+        let wire = Parameters::new(ids.clone(), &ids[0], t, hub.broker(0)).wire_format();
+
+        let mut rng = SystemRng;
+        let ks: Vec<Vec<u8>> = ids.iter().map(|p| p.key.clone()).collect();
+        let a0 = random_scalar(&mut rng);
+        let mut nonce = [0u8; SESSION_NONCE_LEN];
+        rng.fill_bytes(&mut nonce);
+        let (eph_priv, eph_pub) = aead::new_ephemeral_key(&mut rng);
+        let common = vss::create::<Ed25519>(t, &a0, &ks, &mut rng).unwrap();
+        let pok = ZkProof::prove(
+            &build_keygen_session(&ks[0], &nonce),
+            &a0,
+            &common.0[0],
+            &mut rng,
+        );
+        let (ax, ay, tt) = pok.to_wire();
+
+        for j in 1..3 {
+            let (vs, shares) = if equivocate {
+                vss::create::<Ed25519>(t, &a0, &ks, &mut rng).unwrap()
+            } else {
+                (common.0.clone(), common.1.clone())
+            };
+            let r1 = KeygenRound1Msg {
+                poly_commitments: vs
+                    .iter()
+                    .map(|p| B64Bytes(Ed25519::encode_point(p).to_vec()))
+                    .collect(),
+                session_nonce: nonce.to_vec(),
+                eph_pub: eph_pub.to_vec(),
+                schnorr_proof_alpha_x: ax.clone(),
+                schnorr_proof_alpha_y: ay.clone(),
+                schnorr_proof_t: tt.clone(),
+            };
+            let to = addressed.then(|| ids[j].clone());
+            let m = encode(wire, ROUND1_TYPE, &r1, Some(ids[0].clone()), to).unwrap();
+            let _ = hub.broker(j).receive(&m);
+
+            // Seal party j's share exactly as party j will try to open it.
+            let entries = [
+                (ids[0].key.as_slice(), &r1),
+                (ids[1].key.as_slice(), &honest_r1[0]),
+                (ids[2].key.as_slice(), &honest_r1[1]),
+            ];
+            let transcript = keygen_transcript(t, &entries);
+            let recipient_pub = to_arr32(&honest_r1[j - 1].eph_pub);
+            let ad = keygen_round2_ad(&nonce, &eph_pub, &recipient_pub, &transcript);
+            let ct = aead::seal_share(
+                &mut rng,
+                &eph_priv,
+                &recipient_pub,
+                &ad,
+                &scalar_to_be(&shares[j].value),
+            )
+            .unwrap();
+            let r2 = KeygenRound2Msg { ciphertext: ct };
+            let m = encode(
+                wire,
+                ROUND2_TYPE,
+                &r2,
+                Some(ids[0].clone()),
+                Some(ids[j].clone()),
+            )
+            .unwrap();
+            let _ = hub.broker(j).receive(&m);
+        }
+        honest
+            .iter()
+            .map(|kg| kg.try_result().expect("keygen finished"))
+            .collect()
+    }
+
+    #[test]
+    fn hand_driven_honest_dealer_succeeds() {
+        // Control for the tests below: the hand-driven dealer itself is sound.
+        let keys: Vec<Key> = run_with_dealer(false, false)
+            .into_iter()
+            .map(|r| r.expect("honest dealer"))
+            .collect();
+        assert!(Ed25519::eq(
+            &keys[0].group_public_key,
+            &keys[1].group_public_key
+        ));
+        for (a, b) in keys[0].big_xj.iter().zip(keys[1].big_xj.iter()) {
+            assert!(Ed25519::eq(a, b));
+        }
+    }
+
+    #[test]
+    fn equivocating_dealer_is_detected() {
+        for r in run_with_dealer(true, false) {
+            let e = r.err().expect("equivocation must abort keygen");
+            assert!(format!("{e}").contains("failed to open"), "{e}");
+        }
+    }
+
+    #[test]
+    fn addressed_round1_broadcast_is_rejected() {
+        for r in run_with_dealer(false, true) {
+            let e = r.err().expect("point-to-point round 1 must abort keygen");
+            assert!(format!("{e}").contains("point-to-point"), "{e}");
+        }
     }
 
     #[test]
