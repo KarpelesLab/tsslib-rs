@@ -23,9 +23,10 @@
 //! | tuple, tuple struct, struct        | the fields in order (no count, no names)      |
 //! | enum                               | varint variant index, then its content        |
 //!
-//! Lengths and counts are capped at [`MAX_LEN`], and buffers grow as bytes
-//! arrive rather than being sized from an untrusted length, so a corrupt or
-//! hostile length cannot force a large allocation.
+//! Lengths and counts are capped at [`MAX_LEN`], and buffers and collections
+//! grow as bytes and elements arrive rather than being sized from an untrusted
+//! length or count (serde is given a size hint of at most a few elements), so
+//! a corrupt or hostile length cannot force a large allocation.
 //!
 //! The crate's byte-string and big-integer fields serialize as raw bytes here
 //! (and as base64 / decimal in JSON); they check serde's `is_human_readable`.
@@ -39,6 +40,13 @@ pub const MAX_LEN: usize = 1 << 24;
 
 /// Chunk size used while reading a length-prefixed value.
 const READ_CHUNK: usize = 4096;
+
+/// Largest element count reported to serde as a size hint. serde pre-reserves
+/// up to 1 MiB of elements from the hint before reading any, so passing the
+/// (untrusted) count through would let a 2-byte prefix force a
+/// several-hundred-KiB allocation, which aborts on a small embedded heap.
+/// Keeping it small makes collections grow as elements actually arrive.
+const MAX_SIZE_HINT: usize = 16;
 
 /// A byte source.
 pub trait Read {
@@ -710,7 +718,7 @@ impl<'de, R: Read> de::SeqAccess<'de> for Counted<'_, R> {
         seed.deserialize(&mut *self.de).map(Some)
     }
     fn size_hint(&self) -> Option<usize> {
-        Some(self.left.min(READ_CHUNK))
+        Some(self.left.min(MAX_SIZE_HINT))
     }
 }
 
@@ -730,7 +738,7 @@ impl<'de, R: Read> de::MapAccess<'de> for Counted<'_, R> {
         seed.deserialize(&mut *self.de)
     }
     fn size_hint(&self) -> Option<usize> {
-        Some(self.left.min(READ_CHUNK))
+        Some(self.left.min(MAX_SIZE_HINT))
     }
 }
 
@@ -958,6 +966,48 @@ mod tests {
         let mut big = Vec::new();
         write_varint(&mut big, (MAX_LEN - 1) as u128).unwrap();
         assert_eq!(from_slice::<Vec<u8>>(&big), Err(Error::UnexpectedEof));
+    }
+
+    /// Records the size hint serde would use to pre-reserve a collection.
+    struct Hint(Option<usize>);
+
+    impl<'de> Deserialize<'de> for Hint {
+        fn deserialize<D: de::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> Visitor<'de> for V {
+                type Value = Hint;
+                fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    f.write_str("a sequence")
+                }
+                fn visit_seq<A: de::SeqAccess<'de>>(self, a: A) -> Result<Hint, A::Error> {
+                    Ok(Hint(a.size_hint()))
+                }
+            }
+            d.deserialize_seq(V)
+        }
+    }
+
+    #[test]
+    fn untrusted_counts_do_not_drive_preallocation() {
+        // A 2-byte prefix claiming 4096 elements with nothing behind it.
+        let prefix = [0x80, 0x20];
+        let mut r = &prefix[..];
+        let mut de = Deserializer { r: &mut r };
+        let Hint(hint) = Hint::deserialize(&mut de).unwrap();
+        assert!(hint.unwrap_or(0) <= MAX_SIZE_HINT, "hint {hint:?}");
+        // Real collections fail cleanly on the missing elements.
+        assert_eq!(
+            from_slice::<Vec<[u8; 32]>>(&prefix),
+            Err(Error::UnexpectedEof)
+        );
+        assert_eq!(
+            from_slice::<Vec<String>>(&prefix),
+            Err(Error::UnexpectedEof)
+        );
+        assert_eq!(
+            from_slice::<crate::vecmap::VecMap<String, u8>>(&prefix).err(),
+            Some(Error::UnexpectedEof)
+        );
     }
 
     #[test]
