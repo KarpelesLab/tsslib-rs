@@ -19,6 +19,16 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// JSON shape: the protobuf `MessageWrapper_PartyID` fields at the top level,
 /// `key` standard-base64 encoded, and `id` / `moniker` / `key` omitted when
 /// empty. `index` is always present.
+///
+/// # Equality vs. ordering
+///
+/// `==` compares every field (`id`, `moniker`, `key` and `index`), while
+/// [`Ord`] compares `key` only. Two values for the same party can therefore be
+/// unequal yet compare as [`Ordering::Equal`] (for instance before and after
+/// [`PartyId::sort`] assigns `index`). To ask "is this the same party?", use
+/// [`PartyId::cmp_key`] (as the crate itself does), not `==`; and avoid
+/// mixing `==` with `Ord`-based lookups such as `binary_search` or a
+/// `BTreeSet`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyId {
     /// Unique string representation of `key`.

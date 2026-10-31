@@ -37,6 +37,12 @@ impl Parameters {
     /// larger sorted set (e.g. signers 0 and 2 of 3) would otherwise carry
     /// stale indices that run past the end of that state.
     ///
+    /// This constructor does not check that `parties` is sorted, that keys
+    /// are unique, or that `threshold` fits the party count; it only reindexes
+    /// and locates `self_id`. Those checks belong to the protocol that consumes
+    /// the parameters (each validates what it needs when it is constructed or
+    /// started); do not rely on this constructor to catch a malformed set.
+    ///
     /// # Panics
     /// If `self_id` is not present in `parties`.
     pub fn new(
@@ -132,6 +138,10 @@ impl ReSharingParameters {
     /// Builds resharing parameters. Both committees must be sorted; `self_id`
     /// must belong to at least one of them. As in [`Parameters::new`], each
     /// party's `index` is reset to its position within its own committee.
+    ///
+    /// Like [`Parameters::new`], this performs no validation: sortedness,
+    /// key uniqueness, the thresholds and `self_id`'s membership are left to
+    /// the resharing protocol that consumes the parameters.
     pub fn new(
         mut old_parties: Vec<PartyId>,
         mut new_parties: Vec<PartyId>,
