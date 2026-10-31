@@ -12,6 +12,14 @@ use serde::{Deserialize, Serialize};
 /// The curve name stored for Edwards25519 points.
 const CURVE_NAME: &str = "ed25519";
 
+/// The field prime `p = 2^255 - 19`, big-endian.
+const FIELD_P_BE: [u8; 32] = {
+    let mut p = [0xffu8; 32];
+    p[0] = 0x7f;
+    p[31] = 0xed;
+    p
+};
+
 /// JSON shape of a `crypto.ECPoint`.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct EcPointJson {
@@ -67,7 +75,16 @@ pub(crate) fn point_to_affine_be(p: &EdwardsPoint) -> (Vec<u8>, Vec<u8>) {
 /// decompress, and confirm the recovered `x` matches.
 pub(crate) fn point_from_affine_be(x_be: &[u8], y_be: &[u8]) -> Result<EdwardsPoint, PointError> {
     let y = BigUintDec::from_be_bytes(y_be);
+    // Only a canonical field element `y < p` is accepted: a wider value would be
+    // truncated by `to_be_bytes_padded`, and `y >= p` (or a set bit 255, which
+    // collides with the sign bit) would alias another point's encoding.
+    if y.as_be_bytes().len() > 32 {
+        return Err(PointError("Y coordinate wider than 32 bytes".to_string()));
+    }
     let y_be32 = y.to_be_bytes_padded(32);
+    if y_be32.as_slice() >= FIELD_P_BE.as_slice() {
+        return Err(PointError("Y coordinate is not reduced mod p".to_string()));
+    }
     let mut compressed = [0u8; 32];
     for (i, &b) in y_be32.iter().rev().enumerate() {
         compressed[i] = b;
@@ -113,6 +130,22 @@ mod tests {
         let mut b = [0u8; 32];
         b[0] = n;
         Scalar::from_bytes_canonical(&b).unwrap()
+    }
+
+    #[test]
+    fn rejects_non_canonical_or_oversize_y() {
+        // (0, 1) is the identity and decodes.
+        assert!(point_from_affine_be(&[], &[1]).is_ok());
+        // p + 1 aliases y = 1.
+        let mut p_plus_1 = FIELD_P_BE;
+        p_plus_1[31] += 1;
+        assert!(point_from_affine_be(&[], &p_plus_1).is_err());
+        assert!(point_from_affine_be(&[], &FIELD_P_BE).is_err());
+        // 2^256 + 1 used to be truncated to 1.
+        let mut wide = vec![0u8; 33];
+        wide[0] = 1;
+        wide[32] = 1;
+        assert!(point_from_affine_be(&[], &wide).is_err());
     }
 
     #[test]

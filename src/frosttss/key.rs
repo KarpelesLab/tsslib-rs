@@ -195,6 +195,10 @@ fn scalar_to_biguint(s: &Scalar) -> BigUintDec {
 
 /// Decodes an integer into a canonical scalar in `[0, L)`.
 fn biguint_to_scalar(v: &BigUintDec) -> Result<Scalar, Error> {
+    // `to_be_bytes_padded` would silently drop the high bytes of a wider value.
+    if strip_leading_zeros(v.as_be_bytes()).len() > 32 {
+        return Err(Error::Validation("scalar wider than 32 bytes".into()));
+    }
     let be = v.to_be_bytes_padded(32);
     let mut le = [0u8; 32];
     for (i, &b) in be.iter().rev().enumerate() {
@@ -226,6 +230,18 @@ mod tests {
             group_public_key: pk,
             chain_code,
         }
+    }
+
+    #[test]
+    fn biguint_to_scalar_rejects_oversize_values() {
+        // 2^256 + 7 used to be truncated to 7.
+        let mut wide = vec![0u8; 33];
+        wide[0] = 1;
+        wide[32] = 7;
+        assert!(biguint_to_scalar(&BigUintDec::from_be_bytes(&wide)).is_err());
+        let mut padded = vec![0u8; 40];
+        padded[39] = 7;
+        assert!(biguint_to_scalar(&BigUintDec(padded)).is_ok());
     }
 
     #[test]
