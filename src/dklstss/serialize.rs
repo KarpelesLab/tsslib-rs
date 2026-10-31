@@ -383,12 +383,12 @@ fn ecjson_to_point(j: &EcPointJson) -> Result<secp::ProjectivePoint, Error> {
     if !j.curve.is_empty() && j.curve != CURVE_NAME {
         return Err(Error::Validation(format!("unexpected curve {:?}", j.curve)));
     }
-    let x = j.coords[0].to_be_bytes_padded(32);
-    let y = j.coords[1].to_be_bytes_padded(32);
+    let x = fixed32(&j.coords[0], "point coordinate")?;
+    let y = fixed32(&j.coords[1], "point coordinate")?;
     let mut sec1 = [0u8; 65];
     sec1[0] = 0x04;
-    sec1[1..33].copy_from_slice(&x);
-    sec1[33..65].copy_from_slice(&y);
+    sec1[1..33].copy_from_slice(&x[..]);
+    sec1[33..65].copy_from_slice(&y[..]);
     secp::from_sec1(&sec1).ok_or_else(|| Error::Validation("invalid curve point".into()))
 }
 
@@ -412,10 +412,22 @@ fn scalar_to_biguint(s: &Scalar) -> BigUintDec {
     BigUintDec::from_be_bytes(&s.to_bytes_be())
 }
 
-fn biguint_to_scalar(v: &BigUintDec) -> Result<Scalar, Error> {
-    let be = Zeroizing::new(v.to_be_bytes_padded(32));
+/// Left-pads `v` to exactly 32 big-endian bytes, rejecting wider values.
+/// (`BigUintDec::to_be_bytes_padded` would silently keep only the low 32
+/// bytes, letting an oversized value alias a canonical one.)
+fn fixed32(v: &BigUintDec, what: &str) -> Result<Zeroizing<[u8; 32]>, Error> {
+    let b = v.as_be_bytes();
+    let b = &b[b.iter().position(|&x| x != 0).unwrap_or(b.len())..];
+    if b.len() > 32 {
+        return Err(Error::Validation(format!("{what} wider than 32 bytes")));
+    }
     let mut arr = Zeroizing::new([0u8; 32]);
-    arr.copy_from_slice(&be);
+    arr[32 - b.len()..].copy_from_slice(b);
+    Ok(arr)
+}
+
+fn biguint_to_scalar(v: &BigUintDec) -> Result<Scalar, Error> {
+    let arr = fixed32(v, "Xi")?;
     Scalar::from_bytes_be(&arr).map_err(|_| Error::Validation("Xi >= n".into()))
 }
 
@@ -725,6 +737,28 @@ mod split_tests {
 
         let all = vec![loaded, keys[1].clone(), keys[2].clone()];
         assert_signs(&all, &[0, 2], b"split reload sign");
+    }
+
+    /// A value wider than 32 bytes must not be truncated to its low bytes.
+    #[test]
+    fn oversized_scalars_and_coords_rejected() {
+        let mut wide = vec![1u8];
+        wide.extend_from_slice(&[0u8; 31]);
+        wide.push(5);
+        assert!(biguint_to_scalar(&BigUintDec(wide[1..].to_vec())).is_ok());
+        assert!(biguint_to_scalar(&BigUintDec(wide.clone())).is_err());
+        // Leading zeros don't count towards the width.
+        let mut padded = vec![0u8; 4];
+        padded.extend_from_slice(&wide[1..]);
+        assert!(biguint_to_scalar(&BigUintDec(padded)).is_ok());
+
+        let keys = keygen(2, 1, &party_ids(2), &mut SystemRng).unwrap();
+        let mut j = point_to_ecjson(&keys[0].ecdsa_pub).unwrap();
+        assert!(ecjson_to_point(&j).is_ok());
+        let mut x = vec![1u8];
+        x.extend_from_slice(&j.coords[0].to_be_bytes_padded(32));
+        j.coords[0] = BigUintDec(x);
+        assert!(ecjson_to_point(&j).is_err());
     }
 
     #[test]
