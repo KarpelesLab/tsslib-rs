@@ -70,3 +70,28 @@ impl From<serde_json::Error> for Error {
         Error::Serde(e.into())
     }
 }
+
+/// Test helper: decodes `msg`'s payload as `T`, applies `f`, and re-encodes it
+/// in the same wire format (simulates a message rewritten in flight).
+#[cfg(test)]
+pub(crate) fn rewrite_msg<T>(msg: &mut crate::tss::Message, f: impl FnOnce(&mut T))
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    use crate::tss::{Payload, WireFormat};
+    let format = match msg.data {
+        #[cfg(feature = "json")]
+        Payload::Json(_) => WireFormat::Json,
+        Payload::Binary(_) => WireFormat::Binary,
+    };
+    let mut body: T = msg.decode().expect("decode in-flight message");
+    f(&mut body);
+    *msg = crate::tss::Message::encode(
+        format,
+        msg.typ.clone(),
+        &body,
+        msg.from.clone(),
+        msg.to.clone(),
+    )
+    .expect("re-encode in-flight message");
+}

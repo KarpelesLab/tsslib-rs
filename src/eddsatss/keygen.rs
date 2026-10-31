@@ -1,10 +1,19 @@
 //! Threshold-EdDSA distributed key generation over a `MessageBroker` (3 rounds).
 //!
 //! Round 1 broadcasts a hash commitment to the
-//! dealer's Feldman-VSS commitment points; round 2 unicasts each peer its Shamir
-//! share and broadcasts the commitment opening plus a Schnorr proof of knowledge
-//! of `u_i` (the secret behind `vs[0]`); the final step verifies every peer's
-//! opening, proof, and share, then assembles this party's [`Key`].
+//! dealer's Feldman-VSS commitment points plus a fresh ephemeral X25519 key;
+//! round 2 unicasts each peer its Shamir share sealed under the pairwise
+//! X25519/ChaCha20-Poly1305 envelope and broadcasts the commitment opening plus a
+//! Schnorr proof of knowledge of `u_i` (the secret behind `vs[0]`); the final
+//! step verifies every peer's opening, proof, and share, then assembles this
+//! party's [`Key`].
+//!
+//! The round-1 "broadcasts" are point-to-point sends with no echo, so a corrupt
+//! dealer could show different commitments to different peers. Every party
+//! therefore hashes the full round-1 transcript (all parties' commitments and
+//! ephemeral keys, in party order) and binds it into round 2: it is carried in
+//! the round-2 broadcast and is part of the share envelope's associated data. Any
+//! two honest parties that saw different round-1 messages abort.
 
 #![allow(dead_code)]
 
@@ -16,20 +25,27 @@ use super::vss;
 use super::{Error, ed::EcPointJson};
 use crate::prelude::*;
 use crate::rng::SystemRng;
+use crate::share_aead as aead;
 use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
-use crate::tss::hashing::sha512_256i;
+use crate::tss::hashing::{sha512_256i, sha512_256i_tagged};
 use crate::tss::{Message, Parameters, PartyId, decode, encode};
 use alloc::sync::Arc;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
-const TYPE_R1: &str = "eddsa:keygen:round1";
-const TYPE_R2_1: &str = "eddsa:keygen:round2-1";
-const TYPE_R2_2: &str = "eddsa:keygen:round2-2";
+// v2: round 1 carries an ephemeral X25519 key, round-2 shares are sealed, and
+// round 2 binds the round-1 transcript hash. v1 peers fail on the type string.
+const TYPE_R1: &str = "eddsa:keygen:v2:round1";
+const TYPE_R2_1: &str = "eddsa:keygen:v2:round2-1";
+const TYPE_R2_2: &str = "eddsa:keygen:v2:round2-2";
+/// Domain tag for the round-1 transcript hash.
+const TRANSCRIPT_TAG: &[u8] = b"eddsatss/keygen/r1-transcript/v2";
+/// Associated-data prefix for the sealed round-2 shares.
+const AD_PREFIX: &[u8] = b"eddsatss/keygen/r2/v2|";
 
 /// A running threshold-EdDSA keygen session.
 pub struct KeygenParty {
@@ -52,11 +68,25 @@ struct State {
 
     kgcs: Vec<Option<Vec<u8>>>, // commitment C per party index
 
+    eph_priv: [u8; 32],
+    eph_pub: [u8; 32],
+    peer_eph: Vec<Option<[u8; 32]>>, // ephemeral X25519 pub per party index
+    /// Hash of the full round-1 transcript, as seen by this party.
+    transcript: Vec<u8>,
+
     r2m1: Vec<R2Msg1>,
     r2m1_from: Vec<PartyId>,
     r2m2: Vec<R2Msg2>,
     r2m2_from: Vec<PartyId>,
     r2_join: u8,
+}
+
+/// The X25519 private key opens and seals the share envelopes; wiped with the
+/// session.
+impl Drop for State {
+    fn drop(&mut self) {
+        self.eph_priv.zeroize();
+    }
 }
 
 impl KeygenParty {
@@ -74,6 +104,10 @@ impl KeygenParty {
                 shares: Vec::new(),
                 decommit: Vec::new(),
                 kgcs: (0..n).map(|_| None).collect(),
+                eph_priv: [0u8; 32],
+                eph_pub: [0u8; 32],
+                peer_eph: (0..n).map(|_| None).collect(),
+                transcript: Vec::new(),
                 r2m1: Vec::new(),
                 r2m1_from: Vec::new(),
                 r2m2: Vec::new(),
@@ -132,6 +166,8 @@ impl Shared {
             .map_err(|e| Error::Validation(format!("keygen committee: {e}")))?;
         let shares: Vec<Scalar> = share_objs.iter().map(|s| s.value.clone()).collect();
         let (c, d) = commit::commit(&flatten_points(&vs), &mut rng);
+        let (eph_priv, eph_pub) = aead::new_ephemeral_key(&mut rng);
+        let i = self.params.party_index();
 
         {
             let mut st = self.state.lock();
@@ -139,11 +175,16 @@ impl Shared {
             st.vs = vs;
             st.shares = shares;
             st.decommit = d;
+            st.kgcs[i] = Some(c.clone());
+            st.eph_priv = eph_priv;
+            st.eph_pub = eph_pub;
+            st.peer_eph[i] = Some(eph_pub);
         }
 
         let others = self.params.other_parties();
         let msg = R1Msg {
             commitment: B64Bytes(c),
+            eph_pub: B64Bytes(eph_pub.to_vec()),
         };
         for p in &others {
             self.send_to(TYPE_R1, &msg, p)?;
@@ -160,22 +201,62 @@ impl Shared {
         let mut rng = SystemRng;
         let i = self.params.party_index();
 
-        // Record peer commitments.
+        // Record peer commitments and ephemeral keys.
         for (k, m) in msgs.iter().enumerate() {
             let r1: R1Msg = match decode(m) {
                 Ok(v) => v,
                 Err(e) => return self.deliver(Err(e.into())),
             };
+            let eph: [u8; 32] = match r1.eph_pub.0.as_slice().try_into() {
+                Ok(a) => a,
+                Err(_) => return self.fail("keygen: malformed ephemeral key from peer"),
+            };
             let jidx = others[k].index as usize;
-            self.state.lock().kgcs[jidx] = Some(r1.commitment.0);
+            let mut st = self.state.lock();
+            st.kgcs[jidx] = Some(r1.commitment.0);
+            st.peer_eph[jidx] = Some(eph);
         }
 
-        // Unicast each peer its Shamir share.
-        let shares = self.state.lock().shares.clone();
+        // Hash the whole round-1 transcript (as this party saw it).
+        let transcript = {
+            let mut st = self.state.lock();
+            match round1_transcript(&self.ssid, self.params.parties(), &st) {
+                Some(t) => {
+                    st.transcript = t.clone();
+                    t
+                }
+                None => {
+                    drop(st);
+                    return self.fail("keygen: incomplete round-1 transcript");
+                }
+            }
+        };
+
+        // Unicast each peer its Shamir share, sealed to its ephemeral key.
+        let (shares, eph_priv, eph_pub, peer_eph) = {
+            let st = self.state.lock();
+            (
+                st.shares.clone(),
+                Zeroizing::new(st.eph_priv),
+                st.eph_pub,
+                st.peer_eph.clone(),
+            )
+        };
+        let me = self.params.party_id().clone();
         for p in others {
             let jidx = p.index as usize;
+            let recipient_pub = match peer_eph[jidx] {
+                Some(k) => k,
+                None => return self.fail("keygen: missing peer ephemeral key"),
+            };
+            let ad = keygen_round2_ad(&transcript, &me, p, &eph_pub, &recipient_pub);
+            let plaintext = Zeroizing::new(ed::scalar_to_be(&shares[jidx]));
+            let ct = match aead::seal_share(&mut rng, &eph_priv, &recipient_pub, &ad, &plaintext) {
+                Ok(c) => c,
+                Err(e) => return self.fail(format!("keygen: seal share: {e}")),
+            };
             let r2m1 = R2Msg1 {
-                share: B64Bytes(ed::scalar_to_be(&shares[jidx])),
+                ciphertext: B64Bytes(ct),
             };
             if let Err(e) = self.send_to(TYPE_R2_1, &r2m1, p) {
                 return self.deliver(Err(e));
@@ -195,6 +276,7 @@ impl Shared {
             schnorr_proof_alpha_x: B64Bytes(ax),
             schnorr_proof_alpha_y: B64Bytes(ay),
             schnorr_proof_t: B64Bytes(ed::scalar_to_be(&pf.t)),
+            transcript: B64Bytes(transcript),
         };
         for p in others {
             if let Err(e) = self.send_to(TYPE_R2_2, &r2m2, p) {
@@ -254,9 +336,9 @@ impl Shared {
         let me_id = ed::scalar_from_be(&self.params.party_id().key);
 
         let (r2m1, r2m1_from, r2m2, r2m2_from, vs, my_share) = {
-            let st = self.state.lock();
+            let mut st = self.state.lock();
             (
-                st.r2m1.clone(),
+                core::mem::take(&mut st.r2m1),
                 st.r2m1_from.clone(),
                 st.r2m2.clone(),
                 st.r2m2_from.clone(),
@@ -264,6 +346,24 @@ impl Shared {
                 st.shares[i].clone(),
             )
         };
+        let (transcript, eph_priv, eph_pub, peer_eph) = {
+            let st = self.state.lock();
+            (
+                st.transcript.clone(),
+                Zeroizing::new(st.eph_priv),
+                st.eph_pub,
+                st.peer_eph.clone(),
+            )
+        };
+        let me = self.params.party_id().clone();
+
+        // Every peer must have seen the same round-1 transcript as we did;
+        // otherwise some dealer equivocated in round 1.
+        for m in &r2m2 {
+            if m.transcript.0 != transcript {
+                return self.fail("keygen: round-1 transcript mismatch (equivocating dealer)");
+            }
+        }
 
         let mut peer_vs: Vec<Vec<EdwardsPoint>> = Vec::new();
         let mut xi = my_share;
@@ -309,8 +409,18 @@ impl Shared {
                 return self.fail("keygen: Schnorr proof verification failed");
             }
 
-            // VSS share dealt to me.
-            let share = ed::scalar_from_be(&r2m1[k].share.0);
+            // VSS share dealt to me, sealed under our pairwise envelope.
+            let sender_pub = match peer_eph[jidx] {
+                Some(k) => k,
+                None => return self.fail("keygen: missing peer ephemeral key"),
+            };
+            let ad = keygen_round2_ad(&transcript, oid, &me, &sender_pub, &eph_pub);
+            let share_be =
+                match aead::open_share(&eph_priv, &sender_pub, &ad, &r2m1[k].ciphertext.0) {
+                    Ok(b) => b,
+                    Err(e) => return self.fail(format!("keygen: open share: {e}")),
+                };
+            let share = ed::scalar_from_be(&share_be);
             if !vss::verify(&me_id, &share, t, &pjvs) {
                 return self.fail("keygen: VSS share verification failed");
             }
@@ -395,6 +505,42 @@ fn compute_ssid(params: &Parameters) -> Vec<u8> {
     sha512_256i(&refs).to_vec()
 }
 
+/// `SHA512_256i_tagged` over `ssid` and, for every party in party order, its
+/// key, round-1 commitment and ephemeral key. `None` if any entry is missing.
+fn round1_transcript(ssid: &[u8], parties: &[PartyId], st: &State) -> Option<Vec<u8>> {
+    let mut ops: Vec<&[u8]> = Vec::with_capacity(1 + parties.len() * 3);
+    ops.push(ssid);
+    for p in parties {
+        let j = p.index as usize;
+        ops.push(&p.key);
+        ops.push(st.kgcs.get(j)?.as_ref()?);
+        ops.push(st.peer_eph.get(j)?.as_ref()?);
+    }
+    Some(sha512_256i_tagged(TRANSCRIPT_TAG, &ops).to_vec())
+}
+
+/// Associated data for a sealed round-2 share: the round-1 transcript hash,
+/// both parties' keys, and both ephemeral X25519 keys.
+fn keygen_round2_ad(
+    transcript: &[u8],
+    sender: &PartyId,
+    recipient: &PartyId,
+    sender_eph: &[u8; 32],
+    recipient_eph: &[u8; 32],
+) -> Vec<u8> {
+    let mut ad =
+        Vec::with_capacity(AD_PREFIX.len() + 32 * 3 + 16 + sender.key.len() + recipient.key.len());
+    ad.extend_from_slice(AD_PREFIX);
+    ad.extend_from_slice(transcript);
+    for k in [&sender.key, &recipient.key] {
+        ad.extend_from_slice(&(k.len() as u64).to_be_bytes());
+        ad.extend_from_slice(k);
+    }
+    ad.extend_from_slice(sender_eph);
+    ad.extend_from_slice(recipient_eph);
+    ad
+}
+
 fn context_bytes(ssid: &[u8], idx: usize) -> Vec<u8> {
     let mut c = ssid.to_vec();
     // idx as a minimal big-endian magnitude: empty for 0.
@@ -439,12 +585,15 @@ fn ec_point(p: &EdwardsPoint) -> EcPointJson {
 struct R1Msg {
     #[serde(rename = "commitment")]
     commitment: B64Bytes,
+    #[serde(rename = "eph_pub")]
+    eph_pub: B64Bytes,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 struct R2Msg1 {
-    #[serde(rename = "share")]
-    share: B64Bytes,
+    /// The Shamir share, sealed with `share_aead::seal_share`.
+    #[serde(rename = "ciphertext")]
+    ciphertext: B64Bytes,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -457,6 +606,9 @@ struct R2Msg2 {
     schnorr_proof_alpha_y: B64Bytes,
     #[serde(rename = "schnorr_proof_t")]
     schnorr_proof_t: B64Bytes,
+    /// The sender's round-1 transcript hash.
+    #[serde(rename = "transcript")]
+    transcript: B64Bytes,
 }
 
 #[cfg(test)]
@@ -514,5 +666,97 @@ mod tests {
         let secret = crate::eddsatss::vss::reconstruct(&shares);
         let pk = ed::mul_base(&secret);
         assert!(ed::eq(&pk, &keys[0].eddsa_pub_point().unwrap()));
+    }
+
+    /// Runs keygen over a [`BatchHub`](crate::tss::testhub::BatchHub) with an
+    /// in-flight `tamper`, returning every party's result.
+    fn run_keygen_tampered(
+        ids: &[PartyId],
+        t: usize,
+        tamper: &crate::tss::testhub::Tamper,
+    ) -> Vec<Result<Key, Error>> {
+        let hub = crate::tss::testhub::BatchHub::new(ids);
+        let parties: Vec<KeygenParty> = (0..ids.len())
+            .map(|i| {
+                let params = Parameters::new(ids.to_vec(), &ids[i], t, hub.broker(i));
+                KeygenParty::new(params).unwrap()
+            })
+            .collect();
+        let mut out: Vec<Option<Result<Key, Error>>> = parties.iter().map(|_| None).collect();
+        while out.iter().any(Option::is_none) {
+            if hub.flush(Some(tamper)) == 0 {
+                break;
+            }
+            for (o, p) in out.iter_mut().zip(&parties) {
+                if o.is_none() {
+                    *o = p.try_result();
+                }
+            }
+        }
+        out.into_iter()
+            .map(|o| o.unwrap_or_else(|| Err(Error::Validation("stalled".into()))))
+            .collect()
+    }
+
+    /// Party 0 shows party 2 a different round-1 commitment than everyone else
+    /// (the unicast "broadcast" equivocation). Party 1 received nothing
+    /// tampered, yet must abort because party 2's round-1 view differs.
+    #[test]
+    fn keygen_round1_equivocation_is_detected() {
+        let ids = party_ids(3);
+        let tamper = |from: usize, to: usize, m: &mut Message| {
+            if from == 0 && to == 2 && m.typ == TYPE_R1 {
+                crate::eddsatss::rewrite_msg::<R1Msg>(m, |r1| r1.commitment.0[0] ^= 1);
+            }
+        };
+        let res = run_keygen_tampered(&ids, 1, &tamper);
+        match &res[1] {
+            Err(e) => assert!(format!("{e}").contains("transcript mismatch"), "{e}"),
+            Ok(_) => panic!("honest party 1 accepted an equivocated keygen"),
+        }
+        assert!(res[2].is_err());
+    }
+
+    /// A sealed share rewritten in flight fails the AEAD tag.
+    #[test]
+    fn keygen_tampered_sealed_share_is_rejected() {
+        let ids = party_ids(3);
+        let tamper = |from: usize, to: usize, m: &mut Message| {
+            if from == 0 && to == 1 && m.typ == TYPE_R2_1 {
+                crate::eddsatss::rewrite_msg::<R2Msg1>(m, |r| r.ciphertext.0[14] ^= 1);
+            }
+        };
+        let res = run_keygen_tampered(&ids, 1, &tamper);
+        match &res[1] {
+            Err(e) => assert!(format!("{e}").contains("open share"), "{e}"),
+            Ok(_) => panic!("tampered share accepted"),
+        }
+    }
+
+    /// The round-2 unicast carries a sealed envelope, never the bare share.
+    #[test]
+    fn keygen_share_is_not_sent_in_plaintext() {
+        let ids = party_ids(3);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let tamper = move |_: usize, _: usize, m: &mut Message| {
+            if m.typ == TYPE_R2_1 {
+                let r: R2Msg1 = m.decode().unwrap();
+                sink.lock().unwrap().push(r.ciphertext.0);
+            }
+        };
+        let keys: Vec<Key> = run_keygen_tampered(&ids, 1, &tamper)
+            .into_iter()
+            .map(|r| r.unwrap())
+            .collect();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 6);
+        for ct in seen.iter() {
+            // nonce(12) || ciphertext || tag(16).
+            assert!(ct.len() > 12 + 16);
+        }
+        for k in &keys {
+            k.validate_basic().unwrap();
+        }
     }
 }

@@ -93,7 +93,8 @@ pub mod rng;
 #[cfg(any(
     feature = "frosttss",
     feature = "frostristretto255tss",
-    feature = "frostsecp256k1tss"
+    feature = "frostsecp256k1tss",
+    feature = "eddsatss"
 ))]
 mod share_aead;
 mod sync;
