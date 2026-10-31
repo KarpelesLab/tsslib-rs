@@ -22,8 +22,8 @@ use purecrypto::ec::ristretto255::RistrettoPoint;
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
 
-const ROUND1_TYPE: &str = "frost:ristretto255:sign:round1";
-const ROUND2_TYPE: &str = "frost:ristretto255:sign:round2";
+const ROUND1_TYPE: &str = "frost:ristretto255:sign:v2:round1";
+const ROUND2_TYPE: &str = "frost:ristretto255:sign:v2:round2";
 const HIDING_LABEL: &[u8] = b"hiding";
 const BINDING_LABEL: &[u8] = b"binding";
 
@@ -189,7 +189,11 @@ impl Shared {
             });
         }
 
-        let binding_factors = compute_binding_factors::<Ristretto255>(&self.msg, &commitments);
+        let binding_factors = compute_binding_factors::<Ristretto255>(
+            &self.key.group_public_key,
+            &self.msg,
+            &commitments,
+        );
         let Some(r) = compute_group_commitment::<Ristretto255>(&commitments, &binding_factors)
         else {
             return self.deliver(Err(Error::Validation(

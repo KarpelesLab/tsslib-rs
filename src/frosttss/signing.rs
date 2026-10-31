@@ -19,8 +19,8 @@ use purecrypto::ec::{Ed25519PublicKey, Ed25519Signature};
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
 
-const ROUND1_TYPE: &str = "frost:ed25519:sign:round1";
-const ROUND2_TYPE: &str = "frost:ed25519:sign:round2";
+const ROUND1_TYPE: &str = "frost:ed25519:sign:v2:round1";
+const ROUND2_TYPE: &str = "frost:ed25519:sign:v2:round2";
 const HIDING_LABEL: &[u8] = b"hiding";
 const BINDING_LABEL: &[u8] = b"binding";
 
@@ -232,13 +232,16 @@ impl Shared {
             });
         }
 
-        let binding_factors = compute_binding_factors::<Ed25519>(&self.msg, &commitments);
+        // The key the signature verifies under (the child key when tweaked)
+        // feeds both the binding factors (RFC 9591 §4.4) and the challenge.
+        let challenge_pub = self.derived_pub.unwrap_or(self.key.group_public_key);
+        let binding_factors =
+            compute_binding_factors::<Ed25519>(&challenge_pub, &self.msg, &commitments);
         let Some(r) = compute_group_commitment::<Ed25519>(&commitments, &binding_factors) else {
             return self.deliver(Err(Error::Validation(
                 "failed to compute group commitment".into(),
             )));
         };
-        let challenge_pub = self.derived_pub.unwrap_or(self.key.group_public_key);
         let c = compute_group_challenge::<Ed25519>(&r, &challenge_pub, &self.msg);
 
         let signer_ids: Vec<Vec<u8>> = commitments.iter().map(|cm| cm.identifier.clone()).collect();
