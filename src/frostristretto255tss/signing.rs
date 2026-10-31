@@ -8,8 +8,8 @@ use super::Error;
 use super::key::Key;
 use super::signature::SignatureData;
 use crate::frost::binding::{
-    NonceCommitment, compute_binding_factors, compute_group_challenge, compute_group_commitment,
-    lagrange_coefficient, nonce_generate_labeled,
+    NonceCommitment, compute_binding_factors_with_group_key, compute_group_challenge,
+    compute_group_commitment, lagrange_coefficient, nonce_generate_labeled,
 };
 use crate::frost::{Ciphersuite, Ristretto255, Scalar, encode_scalar};
 use crate::prelude::*;
@@ -189,7 +189,7 @@ impl Shared {
             });
         }
 
-        let binding_factors = compute_binding_factors::<Ristretto255>(
+        let binding_factors = compute_binding_factors_with_group_key::<Ristretto255>(
             &self.key.group_public_key,
             &self.msg,
             &commitments,

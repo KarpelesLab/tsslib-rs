@@ -4,8 +4,8 @@ use super::Error;
 use super::key::Key;
 use super::signature::SignatureData;
 use crate::frost::binding::{
-    NonceCommitment, compute_binding_factors, compute_group_challenge, compute_group_commitment,
-    lagrange_coefficient, nonce_generate_labeled,
+    NonceCommitment, compute_binding_factors_with_group_key, compute_group_challenge,
+    compute_group_commitment, lagrange_coefficient, nonce_generate_labeled,
 };
 use crate::frost::{Ciphersuite, Ed25519, Scalar, encode_scalar};
 use crate::prelude::*;
@@ -235,8 +235,11 @@ impl Shared {
         // The key the signature verifies under (the child key when tweaked)
         // feeds both the binding factors (RFC 9591 §4.4) and the challenge.
         let challenge_pub = self.derived_pub.unwrap_or(self.key.group_public_key);
-        let binding_factors =
-            compute_binding_factors::<Ed25519>(&challenge_pub, &self.msg, &commitments);
+        let binding_factors = compute_binding_factors_with_group_key::<Ed25519>(
+            &challenge_pub,
+            &self.msg,
+            &commitments,
+        );
         let Some(r) = compute_group_commitment::<Ed25519>(&commitments, &binding_factors) else {
             return self.deliver(Err(Error::Validation(
                 "failed to compute group commitment".into(),

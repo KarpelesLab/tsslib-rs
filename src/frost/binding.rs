@@ -54,26 +54,52 @@ pub fn encode_commitment_list<C: Ciphersuite>(commitments: &[NonceCommitment<C>]
 /// `H1(Encode(group_public_key) || H4(msg) || H5(encoded commitment list) || EncodeScalar(id))`.
 /// `group_public_key` is the key the signature will verify under (the derived
 /// child key when signing with an HD tweak). Keyed by canonical identifier bytes.
-pub fn compute_binding_factors<C: Ciphersuite>(
+pub fn compute_binding_factors_with_group_key<C: Ciphersuite>(
     group_public_key: &C::Point,
     msg: &[u8],
     commitments: &[NonceCommitment<C>],
 ) -> BTreeMap<Vec<u8>, Scalar> {
-    let encoded_group_public_key = C::encode_point(group_public_key);
+    binding_factors::<C>(&C::encode_point(group_public_key), msg, commitments)
+}
+
+/// Derives the per-signer binding factor `rho_i` for every signer without
+/// the group public key:
+/// `H1(H4(msg) || H5(encoded commitment list) || EncodeScalar(id))`.
+/// Keyed by canonical identifier bytes.
+///
+/// This is the derivation earlier releases used. RFC 9591 §4.4 also hashes the group
+/// public key first; the crate's signing protocols now use
+/// [`compute_binding_factors_with_group_key`], and new code should too.
+#[deprecated(
+    note = "omits the group public key that RFC 9591 §4.4 requires; use compute_binding_factors_with_group_key"
+)]
+pub fn compute_binding_factors<C: Ciphersuite>(
+    msg: &[u8],
+    commitments: &[NonceCommitment<C>],
+) -> BTreeMap<Vec<u8>, Scalar> {
+    binding_factors::<C>(&[], msg, commitments)
+}
+
+/// `rho_i = H1(prefix || H4(msg) || H5(encoded commitment list) || EncodeScalar(id))`
+/// for every signer, keyed by canonical identifier bytes.
+fn binding_factors<C: Ciphersuite>(
+    prefix: &[u8],
+    msg: &[u8],
+    commitments: &[NonceCommitment<C>],
+) -> BTreeMap<Vec<u8>, Scalar> {
     let encoded_msg = C::h4(msg);
     let encoded_commitments = encode_commitment_list(commitments);
     let encoded_commitment_hash = C::h5(&encoded_commitments);
 
-    let mut prefix = Vec::with_capacity(
-        encoded_group_public_key.len() + encoded_msg.len() + encoded_commitment_hash.len(),
-    );
-    prefix.extend_from_slice(&encoded_group_public_key);
-    prefix.extend_from_slice(&encoded_msg);
-    prefix.extend_from_slice(&encoded_commitment_hash);
+    let mut head =
+        Vec::with_capacity(prefix.len() + encoded_msg.len() + encoded_commitment_hash.len());
+    head.extend_from_slice(prefix);
+    head.extend_from_slice(&encoded_msg);
+    head.extend_from_slice(&encoded_commitment_hash);
 
     let mut out = BTreeMap::new();
     for c in commitments {
-        let mut input = prefix.clone();
+        let mut input = head.clone();
         input.extend_from_slice(&encode_scalar(&scalar_from_be_mod_l(&c.identifier)));
         out.insert(id_key(&c.identifier), C::h1(&input));
     }
@@ -221,7 +247,7 @@ mod tests {
                 binding: C::decode_point(&hex32(s.binding_commitment)).unwrap(),
             })
             .collect();
-        let bf = compute_binding_factors::<C>(&gpk, msg, &commitments);
+        let bf = compute_binding_factors_with_group_key::<C>(&gpk, msg, &commitments);
         let r = compute_group_commitment::<C>(&commitments, &bf).unwrap();
         let c = compute_group_challenge::<C>(&r, &gpk, msg);
         let ids: Vec<Vec<u8>> = signers.iter().map(|s| vec![s.id]).collect();
@@ -250,6 +276,25 @@ mod tests {
         assert_eq!(hex::encode(got), sig);
     }
 
+    /// The deprecated two-argument form keeps its old output: the same
+    /// derivation with an empty prefix, so it differs from the RFC form.
+    #[test]
+    #[allow(deprecated)]
+    fn legacy_binding_factors_omit_the_group_key() {
+        let gpk = Ed25519::generator();
+        let commitments = vec![NonceCommitment::<Ed25519> {
+            identifier: vec![1],
+            hiding: Ed25519::generator(),
+            binding: Ed25519::generator(),
+        }];
+        let legacy = compute_binding_factors::<Ed25519>(b"m", &commitments);
+        assert_eq!(
+            legacy[&vec![1u8]],
+            binding_factors::<Ed25519>(&[], b"m", &commitments)[&vec![1u8]]
+        );
+        let rfc = compute_binding_factors_with_group_key::<Ed25519>(&gpk, b"m", &commitments);
+        assert_ne!(legacy[&vec![1u8]], rfc[&vec![1u8]]);
+    }
     #[test]
     fn rfc9591_ed25519_vector() {
         check_rfc9591_vector::<Ed25519>(
@@ -375,8 +420,8 @@ mod tests {
         ];
         let msg = b"hello";
         let gpk = Ed25519::generator();
-        let bf1 = compute_binding_factors::<Ed25519>(&gpk, msg, &commitments);
-        let bf2 = compute_binding_factors::<Ed25519>(&gpk, msg, &commitments);
+        let bf1 = compute_binding_factors_with_group_key::<Ed25519>(&gpk, msg, &commitments);
+        let bf2 = compute_binding_factors_with_group_key::<Ed25519>(&gpk, msg, &commitments);
         // Deterministic.
         assert!(bool::from(bf1[&vec![1u8]].ct_eq(&bf2[&vec![1u8]])));
         // Distinct per signer.
@@ -390,7 +435,11 @@ mod tests {
             hiding: Ed25519::generator(),
             binding: Ed25519::generator(),
         }];
-        let bf = compute_binding_factors::<Ed25519>(&Ed25519::generator(), b"m", &commitments);
+        let bf = compute_binding_factors_with_group_key::<Ed25519>(
+            &Ed25519::generator(),
+            b"m",
+            &commitments,
+        );
         let r = compute_group_commitment::<Ed25519>(&commitments, &bf).unwrap();
         // R = D + rho*E = G + rho*G = (1+rho)*G.
         let rho = &bf[&vec![1u8]];
