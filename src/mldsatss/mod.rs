@@ -6,8 +6,9 @@
 //! signatures that verify against a stock ML-DSA public key.
 //!
 //! The target is ML-DSA-44 with any `(threshold t, parties n)` where
-//! `2 ≤ t ≤ n ≤ 6`. Key generation uses a trusted dealer (matching the paper's
-//! reference); distributed key generation is future work.
+//! `2 ≤ t ≤ n ≤ 6`. Keys come from a trusted dealer (matching the paper's
+//! reference, [`trusted_dealer_keygen44`]) or from an experimental dealerless
+//! DKG ([`DkgParty44`]) that is original to this crate.
 //!
 //! # Warning
 //!
@@ -16,11 +17,12 @@
 //!
 //! # Status
 //!
-//! Trusted-dealer keygen ([`trusted_dealer_keygen44`]) and threshold signing
-//! ([`sign44`]) are implemented and produce FIPS-204-verifiable signatures.
-//! Built on `purecrypto`'s `mldsa::hazmat` lattice primitives; the hyperball
-//! rejection sampler and full-range `w` packing live in this module. Distributed
-//! key generation (no trusted dealer) is future work.
+//! Trusted-dealer keygen ([`trusted_dealer_keygen44`]), the dealerless DKG
+//! ([`DkgParty44`], experimental and unreviewed — see its module notes), and
+//! threshold signing (synchronous [`sign44`], broker-driven
+//! [`SigningParty44`]) are implemented. Built on `purecrypto`'s
+//! `mldsa::hazmat` lattice primitives; the hyperball rejection sampler and
+//! full-range `w` packing live in this module.
 
 // Index-paired loops over polynomial vectors (`for j in 0..L { v[j]... }`) are
 // idiomatic here and read closer to the FIPS 204 / reference math than iterator
@@ -40,7 +42,7 @@ use crate::prelude::*;
 pub use key::{Key44, PolyVec, Share44};
 pub use keygen::trusted_dealer_keygen44;
 pub use keygen_party::DkgParty44;
-pub use params::{GetThresholdParams44Error, ThresholdParams44, get_threshold_params44};
+pub use params::{GetThresholdParams44Error, MAX_TRIES, ThresholdParams44, get_threshold_params44};
 pub use purecrypto::mldsa::MlDsa44PublicKey as PublicKey;
 pub use signing::{sign44, sign44_checked};
 pub use signing_party::SigningParty44;

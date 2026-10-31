@@ -76,6 +76,7 @@ pub(crate) fn signing_set_mask(
     ids: impl IntoIterator<Item = u8>,
     params: &ThresholdParams44,
 ) -> Result<u8, Error> {
+    params.validate()?;
     let mut act = 0u8;
     let mut count = 0u8;
     for id in ids {
@@ -135,6 +136,7 @@ impl Key44 {
         act: u8,
         params: &ThresholdParams44,
     ) -> Result<(PolyVec<L>, PolyVec<K>), Error> {
+        params.validate()?;
         let mut s1h = zero_polys::<L>();
         let mut s2h = zero_polys::<K>();
 
@@ -193,10 +195,13 @@ impl Key44 {
                     u_real |= 1 << perm[i as usize];
                 }
             }
-            let share = self
-                .shares
-                .get(&u_real)
-                .ok_or_else(|| Error::Validation("missing share in sharing pattern".into()))?;
+            let Some(share) = self.shares.get(&u_real) else {
+                // Wipe the partial sum of the shares accumulated so far.
+                for p in s1h.iter_mut().chain(s2h.iter_mut()) {
+                    zeroize::Zeroize::zeroize(&mut p.c);
+                }
+                return Err(Error::Validation("missing share in sharing pattern".into()));
+            };
             for j in 0..L {
                 s1h[j] = s1h[j].add(&share.s1h[j]);
             }

@@ -192,11 +192,11 @@ impl FVec {
         for i in 0..(L + K) {
             for j in 0..N {
                 let mut u = round_ties_away(self.v[i * N + j]);
-                let t = u >> 31;
-                u += t & Q as i32;
-                if u >= Q as i32 {
-                    u -= Q as i32;
-                }
+                // Branch-free reduction into [0, Q): add Q if negative, then
+                // subtract Q and add it back if that went negative.
+                u += (u >> 31) & Q as i32;
+                u -= Q as i32;
+                u += (u >> 31) & Q as i32;
                 if i < L {
                     s1[i].c[j] = u as u32;
                 } else {
@@ -214,14 +214,20 @@ impl FVec {
     }
 
     /// Reports whether the ν-scaled L2 norm exceeds `r`. The first `L`
-    /// polynomial-worths of lanes are re-divided by `ν²` before accumulation.
+    /// polynomial-worths of lanes are scaled by `1/ν²` before accumulation.
+    ///
+    /// The scaling multiplies by a precomputed `1/ν²` instead of dividing each
+    /// secret lane (division latency can be operand-dependent). The result is
+    /// a party-local accept/reject decision — it is never compared bit-for-bit
+    /// across parties — so the last-ulp difference from dividing is harmless.
     pub fn excess(&self, r: f64, nu: f64) -> bool {
+        let inv_nu2 = 1.0 / (nu * nu);
         let mut sq = 0.0f64;
         for i in 0..(L + K) {
             for j in 0..N {
                 let val = self.v[i * N + j];
                 if i < L {
-                    sq += val * val / (nu * nu);
+                    sq += val * val * inv_nu2;
                 } else {
                     sq += val * val;
                 }

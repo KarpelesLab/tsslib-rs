@@ -41,6 +41,7 @@ pub fn sign44(
     ctx: &[u8],
     rng: &mut impl RngCore,
 ) -> Result<Vec<u8>, Error> {
+    params.validate()?;
     if ctx.len() > 255 {
         return Err(Error::Validation("context longer than 255 bytes".into()));
     }

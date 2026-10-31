@@ -99,6 +99,7 @@ impl DkgParty44 {
     /// Starts the dealerless DKG for this party. The committee `params.parties()`
     /// must be the full `n`-party set (sorted); this party's id is its index.
     pub fn new(params: Parameters, th: ThresholdParams44) -> Result<DkgParty44, Error> {
+        th.validate()?;
         let n = params.parties().len();
         if n != th.n as usize {
             return Err(Error::Validation(format!(

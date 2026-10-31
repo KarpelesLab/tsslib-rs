@@ -7,6 +7,12 @@ use crate::prelude::*;
 /// Upper bound on N in the supported (t, n) table.
 pub const MAX_PARTIES: usize = 6;
 
+/// Upper bound on [`ThresholdParams44::k`] accepted by
+/// [`ThresholdParams44::validate`]. The tabulated maximum is 100; each try
+/// costs one 16 KiB float vector per party, so this caps a hand-built value
+/// from driving an unbounded allocation.
+pub const MAX_TRIES: u16 = 256;
+
 /// Parameters for one (t, n) configuration of threshold ML-DSA-44.
 /// See ePrint 2025/1166 for the meaning of `k`, `nu`, `r`, `rp`.
 #[derive(Clone, Copy, Debug)]
@@ -23,6 +29,37 @@ pub struct ThresholdParams44 {
     pub r: f64,
     /// r′: secondary L2 radius used in the Combine-side correctness check.
     pub rp: f64,
+}
+
+impl ThresholdParams44 {
+    /// Checks the fields are structurally usable: `2 ≤ t ≤ n ≤ 6`,
+    /// `1 ≤ k ≤ MAX_TRIES`, and `ν`, `r`, `r′` finite and positive. The
+    /// fields are public, so every keygen / signing entry point calls this
+    /// before indexing by `n`/`t` or allocating `k` tries. Values from
+    /// [`get_threshold_params44`] always pass.
+    pub fn validate(&self) -> Result<(), super::Error> {
+        let bad = |m: String| Err(super::Error::Validation(m));
+        if self.t < 2 || self.t > self.n || self.n as usize > MAX_PARTIES {
+            return bad(format!(
+                "unsupported threshold params (t={}, n={}): need 2 ≤ t ≤ n ≤ {MAX_PARTIES}",
+                self.t, self.n
+            ));
+        }
+        if self.k == 0 || self.k > MAX_TRIES {
+            return bad(format!(
+                "threshold params k={} out of range 1..={MAX_TRIES}",
+                self.k
+            ));
+        }
+        for (name, v) in [("nu", self.nu), ("r", self.r), ("rp", self.rp)] {
+            if !(v.is_finite() && v > 0.0) {
+                return bad(format!(
+                    "threshold params {name} must be finite and positive"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Error returned by [`get_threshold_params44`] for an unsupported `(t, n)`.
@@ -123,4 +160,52 @@ pub fn sharing_pattern(t: u8, n: u8) -> Option<&'static [&'static [u8]]> {
         _ => return None,
     };
     Some(pat)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_params_validate() {
+        for n in 2..=MAX_PARTIES {
+            for t in 2..=n {
+                get_threshold_params44(t, n).unwrap().validate().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn hand_built_params_are_rejected() {
+        let ok = get_threshold_params44(2, 3).unwrap();
+        let bad = [
+            ThresholdParams44 { n: 7, ..ok },
+            ThresholdParams44 { t: 4, ..ok },
+            ThresholdParams44 { t: 1, ..ok },
+            ThresholdParams44 { k: 0, ..ok },
+            ThresholdParams44 { k: u16::MAX, ..ok },
+            ThresholdParams44 { nu: f64::NAN, ..ok },
+            ThresholdParams44 { r: -1.0, ..ok },
+            ThresholdParams44 {
+                rp: f64::INFINITY,
+                ..ok
+            },
+        ];
+        for p in bad {
+            assert!(p.validate().is_err(), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn entry_points_reject_invalid_params() {
+        let ok = get_threshold_params44(2, 3).unwrap();
+        let (_pk, keys) = super::super::trusted_dealer_keygen44(&[1u8; 32], &ok).unwrap();
+        let bad = ThresholdParams44 { n: 7, t: 7, ..ok };
+        assert!(super::super::trusted_dealer_keygen44(&[1u8; 32], &bad).is_err());
+        assert!(keys[0].recover_share(0b0111_1111, &bad).is_err());
+        let signers: Vec<_> = keys.iter().collect();
+        let mut rng = crate::rng::SystemRng;
+        let huge_k = ThresholdParams44 { k: u16::MAX, ..ok };
+        assert!(super::super::sign44(&signers[..2], &huge_k, b"m", b"", &mut rng).is_err());
+    }
 }

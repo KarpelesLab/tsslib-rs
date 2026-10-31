@@ -23,6 +23,7 @@ pub fn trusted_dealer_keygen44(
     seed: &[u8; 32],
     params: &ThresholdParams44,
 ) -> Result<(MlDsa44PublicKey, Vec<Key44>), Error> {
+    params.validate()?;
     let n = params.n as usize;
     let t = params.t as usize;
     let eta = ML_DSA_44.params.eta;

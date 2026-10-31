@@ -116,6 +116,7 @@ impl SigningParty44 {
         ctx: &[u8],
         attempt_id: u32,
     ) -> Result<SigningParty44, Error> {
+        th.validate()?;
         key.validate()?;
         if ctx.len() > 255 {
             return Err(Error::Validation("context longer than 255 bytes".into()));
