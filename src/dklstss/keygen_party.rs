@@ -64,7 +64,9 @@ struct Shared {
 
 struct State {
     vs: Vec<ProjectivePoint>,
-    shares: Vec<Scalar>,
+    /// This dealer's evaluation at its own id (the others are sent and then
+    /// dropped, which wipes them). Reset to zero once folded into `x_i`.
+    my_self_share: Scalar,
     base_snd: VecMap<String, baseot::Sender>,
 
     r1_bcasts: Vec<KeygenR1Bcast>,
@@ -104,7 +106,7 @@ impl KeygenParty {
             ssid,
             state: Mutex::new(State {
                 vs: Vec::new(),
-                shares: Vec::new(),
+                my_self_share: Scalar::ZERO,
                 base_snd: VecMap::new(),
                 r1_bcasts: Vec::new(),
                 r1_unicasts: Vec::new(),
@@ -215,7 +217,7 @@ impl Shared {
         {
             let mut st = self.state.lock();
             st.vs = vs;
-            st.shares = shares;
+            st.my_self_share = shares[self.params.party_index()].clone();
         }
 
         self.connect_r1(&others);
@@ -333,10 +335,12 @@ impl Shared {
         let me = self.params.party_id().clone();
         let my_id = secp::scalar_from_be_reduce(&me.key);
 
-        // Snapshot the round-1 payloads (others order).
+        // Snapshot the round-1 payloads (others order). The unicasts carry
+        // secret shares and are needed only here: move them out so they are
+        // wiped (via `Drop`) when this round ends, on every path.
         let (bcasts, ucs) = {
-            let st = self.state.lock();
-            (st.r1_bcasts.clone(), st.r1_unicasts.clone())
+            let mut st = self.state.lock();
+            (st.r1_bcasts.clone(), core::mem::take(&mut st.r1_unicasts))
         };
 
         let mut r2_out = Vec::with_capacity(others.len());
@@ -482,13 +486,16 @@ impl Shared {
             Err(e) => return self.deliver(Err(Error::Serde(e))),
         };
 
-        let st = self.state.lock();
+        let mut st = self.state.lock();
 
         // x_i = my own share + Σ peer shares (mod n).
-        let mut xi = st.shares[self_idx].clone();
+        let mut xi = st.my_self_share.clone();
         for pid in others {
             xi = xi.add(&st.peer_shares[&peer_key_str(pid)]);
         }
+        // The individual shares are no longer needed; drop (and so wipe) them.
+        st.my_self_share = Scalar::ZERO;
+        st.peer_shares.clear();
 
         // Joint public key X = Σ dealers' v_0.
         let mut pub_key = st.vs[0];
@@ -628,6 +635,14 @@ struct KeygenR1Unicast {
     ot_sender_pok_alpha_y: B64Bytes,
     #[serde(rename = "ot_sender_pok_t")]
     ot_sender_pok_t: B64Bytes,
+}
+
+// The share is secret: wipe it whenever a copy (sent or received) is dropped.
+impl Drop for KeygenR1Unicast {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.share.0.zeroize();
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

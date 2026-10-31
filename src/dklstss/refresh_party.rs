@@ -295,9 +295,11 @@ impl Shared {
         let me = self.params.party_id().clone();
         let my_id = secp::scalar_from_be_reduce(&me.key);
 
+        // The unicasts carry secret shares and are needed only here: move them
+        // out so they are wiped (via `Drop`) when this round ends, on every path.
         let (bcasts, ucs) = {
-            let st = self.state.lock();
-            (st.r1_bcasts.clone(), st.r1_unicasts.clone())
+            let mut st = self.state.lock();
+            (st.r1_bcasts.clone(), core::mem::take(&mut st.r1_unicasts))
         };
 
         for (n, pid) in others.iter().enumerate() {
@@ -389,13 +391,16 @@ impl Shared {
             Err(e) => return self.deliver(Err(Error::Serde(e))),
         };
 
-        let st = self.state.lock();
+        let mut st = self.state.lock();
 
         // new x_i = old x_i + (own eval at self + Σ peer evals at self).
         let mut delta_self = st.my_self_share.clone();
         for pid in others {
             delta_self = delta_self.add(&st.peer_shares[&peer_key_str(pid)]);
         }
+        // The individual shares are no longer needed; drop (and so wipe) them.
+        st.my_self_share = Scalar::ZERO;
+        st.peer_shares.clear();
         let new_xi = self.old.xi.add(&delta_self);
 
         // new BigXj[j] = old BigXj[j] + (Σ_dealers eval(V_dealer, id_j))·G.
@@ -528,6 +533,14 @@ struct RefreshR1Unicast {
     ot_sender_pok_alpha_y: B64Bytes,
     #[serde(rename = "ot_sender_pok_t")]
     ot_sender_pok_t: B64Bytes,
+}
+
+// The share is secret: wipe it whenever a copy (sent or received) is dropped.
+impl Drop for RefreshR1Unicast {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.share.0.zeroize();
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -75,7 +75,6 @@ struct State {
     r1_bcasts: Vec<ReshareR1Bcast>,
     r1_unicasts: Vec<ReshareR1Unicast>,
     r1_join: u8,
-    received_shares: VecMap<String, Scalar>,
     received_commits: VecMap<String, Vec<ProjectivePoint>>,
     new_ot_snd: VecMap<String, baseot::Sender>,
     new_ot_rcv: VecMap<String, baseot::Receiver>,
@@ -170,7 +169,6 @@ impl ResharingParty {
                 r1_bcasts: Vec::new(),
                 r1_unicasts: Vec::new(),
                 r1_join: 0,
-                received_shares: VecMap::new(),
                 received_commits: VecMap::new(),
                 new_ot_snd: VecMap::new(),
                 new_ot_rcv: VecMap::new(),
@@ -417,9 +415,11 @@ impl Shared {
         let my_id = secp::scalar_from_be_reduce(&me.key);
         let old_ids = self.params.old_parties().to_vec();
 
+        // The unicasts carry secret shares and are needed only here: move them
+        // out so they are wiped (via `Drop`) when this round ends, on every path.
         let (bcasts, ucs) = {
-            let st = self.state.lock();
-            (st.r1_bcasts.clone(), st.r1_unicasts.clone())
+            let mut st = self.state.lock();
+            (st.r1_bcasts.clone(), core::mem::take(&mut st.r1_unicasts))
         };
 
         let mut new_xi = Scalar::ZERO;
@@ -464,7 +464,6 @@ impl Shared {
             }
             new_xi = new_xi.add(&share);
             let mut st = self.state.lock();
-            st.received_shares.insert(peer_key_str(pid), share);
             st.received_commits.insert(peer_key_str(pid), vsj);
         }
         self.state.lock().new_xi = new_xi;
@@ -568,7 +567,7 @@ impl Shared {
             Err(e) => return self.deliver(Err(Error::Serde(e))),
         };
 
-        let st = self.state.lock();
+        let mut st = self.state.lock();
 
         // Reconstruct the public key from Σ V_old[0] and bind it to the
         // advertised old_ecdsa_pub (stops a malicious OLD party rotating it).
@@ -635,7 +634,8 @@ impl Shared {
             });
         }
 
-        let new_xi = st.new_xi.clone();
+        // Move the share out, leaving zero behind (the old value is wiped).
+        let new_xi = core::mem::replace(&mut st.new_xi, Scalar::ZERO);
         drop(st);
 
         let chain_code = derive_chain_code(&pub_key);
@@ -705,6 +705,14 @@ struct ReshareR1Bcast {
 struct ReshareR1Unicast {
     #[serde(rename = "share")]
     share: B64Bytes,
+}
+
+// The share is secret: wipe it whenever a copy (sent or received) is dropped.
+impl Drop for ReshareR1Unicast {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.share.0.zeroize();
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
