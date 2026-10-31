@@ -94,6 +94,7 @@ pub mod rng;
     feature = "frosttss",
     feature = "frostristretto255tss",
     feature = "frostsecp256k1tss",
+    feature = "mldsatss",
     feature = "eddsatss"
 ))]
 mod share_aead;

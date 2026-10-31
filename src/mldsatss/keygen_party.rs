@@ -14,11 +14,18 @@
 //! and no single party knows every mask's secret (the all-honest-parties mask is
 //! dealt by an honest party), so the trusted-dealer assumption is removed.
 //!
-//! Rounds: (1) broadcast a `rho` contribution → joint `rho = H(all)`; (2a) deal
-//! owned masks and broadcast only a hash commitment to the `t_M` payload; (2b)
-//! once every commitment is in, reveal it (broadcast `t_M`+share commit, unicast
-//! shares); (3) verify each held mask against its commitment/bound, assemble
-//! this party's [`Key44`], and confirm every party derived the same public key.
+//! Rounds: (1) broadcast a `rho` contribution and a fresh ephemeral X25519
+//! public key → joint `rho = H(all)`; (2a) deal owned masks and broadcast only
+//! a hash commitment to the `t_M` payload; (2b) once every commitment is in,
+//! reveal it (broadcast `t_M`+share commit, unicast shares); (3) verify each
+//! held mask against its commitment/bound, assemble this party's [`Key44`],
+//! and confirm every party derived the same public key.
+//!
+//! The unicast shares are secret, so each is sealed (X25519 + HKDF-SHA256 +
+//! ChaCha20-Poly1305) to the recipient's round-1 ephemeral key, with the
+//! associated data binding `rho`, dealer, recipient, mask and both ephemeral
+//! keys; a transport observer learns nothing about `(s1_M, s2_M)`. The
+//! ephemeral keys are per-run and wiped once the shares are opened.
 //!
 //! The commit-then-reveal on `t_M` matters: `t = Σ_M t_M` is a plain sum, so a
 //! dealer who saw the honest `t_M` first could pick its own as `t* − Σ t_honest`
@@ -27,12 +34,13 @@
 //! catches a dealer that reveals different `t_M` to different parties.
 
 use super::Error;
-use super::key::{Key44, PolyVec, Share44, expand_matrix, zero_polys};
+use super::key::{Key44, PolyVec, Share44, expand_matrix, wipe_polys, zero_polys};
 use super::keygen::gosper_masks;
 use super::packing::{PACK_POLYQ_SIZE, pack_polyq, unpack_polyq};
 use super::params::ThresholdParams44;
 use crate::prelude::*;
 use crate::rng::SystemRng;
+use crate::share_aead as aead;
 use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::expect::JsonExpect;
@@ -44,19 +52,25 @@ use purecrypto::mldsa::MlDsa44PublicKey;
 use purecrypto::mldsa::hazmat::{self, ML_DSA_44, N, Poly, pack_t1, power2_round};
 use purecrypto::rng::RngCore;
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
 const L: usize = 4;
 const K: usize = 4;
 
-const TYPE_R1: &str = "mldsa44:dkg:round1";
-const TYPE_R2C: &str = "mldsa44:dkg:r2commit";
-const TYPE_R2BC: &str = "mldsa44:dkg:r2bc";
-const TYPE_R2SH: &str = "mldsa44:dkg:r2sh";
-const TYPE_R3: &str = "mldsa44:dkg:r3confirm";
+// v2 (`dkg2`): round 1 carries an ephemeral X25519 key and round-2 shares are
+// sealed; the bumped types make old and new peers fail cleanly.
+const TYPE_R1: &str = "mldsa44:dkg2:round1";
+const TYPE_R2C: &str = "mldsa44:dkg2:r2commit";
+const TYPE_R2BC: &str = "mldsa44:dkg2:r2bc";
+const TYPE_R2SH: &str = "mldsa44:dkg2:r2sh";
+const TYPE_R3: &str = "mldsa44:dkg2:r3confirm";
 const RHO_DOMAIN: &[u8] = b"mldsatss-dkg-rho-v1";
 const COMMIT_DOMAIN: &[u8] = b"mldsatss-dkg-commit-v1";
 const T_COMMIT_DOMAIN: &[u8] = b"mldsatss-dkg-tcommit-v1";
 const CONFIRM_DOMAIN: &[u8] = b"mldsatss-dkg-confirm-v1";
+const SHARE_AD_DOMAIN: &[u8] = b"mldsatss-dkg-share-v2";
+/// A packed `(s1_M, s2_M)` share: `L + K` polynomials.
+const SHARE_PLAINTEXT_LEN: usize = (L + K) * PACK_POLYQ_SIZE;
 
 type DkgResult = Result<Key44, Error>;
 
@@ -79,11 +93,29 @@ struct Shared {
     pk: Mutex<Option<MlDsa44PublicKey>>,
 }
 
+/// One mask's plaintext `(s1_M, s2_M)` during the DKG; wiped on drop.
+#[derive(Clone)]
+struct SecretShare {
+    s1: PolyVec<L>,
+    s2: PolyVec<K>,
+}
+
+impl Drop for SecretShare {
+    fn drop(&mut self) {
+        wipe_polys(&mut self.s1[..]);
+        wipe_polys(&mut self.s2[..]);
+    }
+}
+
 struct State {
     own_contrib: [u8; 32],
     contribs: Vec<Option<[u8; 32]>>, // by committee slot (= id)
-    dealt: VecMap<u8, (PolyVec<L>, PolyVec<K>)>,
-    received: VecMap<u8, (PolyVec<L>, PolyVec<K>)>,
+    /// This run's ephemeral X25519 private key (opens the shares sent to us).
+    eph_priv: Zeroizing<[u8; 32]>,
+    /// Every party's round-1 ephemeral X25519 public key, by committee slot.
+    eph_pubs: Vec<Option<[u8; 32]>>,
+    dealt: VecMap<u8, SecretShare>,
+    received: VecMap<u8, SecretShare>,
     t_by_mask: VecMap<u8, PolyVec<K>>,
     commit_by_mask: VecMap<u8, [u8; 32]>,
     /// Joint `rho`, fixed at the end of round 1.
@@ -123,6 +155,11 @@ impl DkgParty44 {
 
         let mut own_contrib = [0u8; 32];
         SystemRng.fill_bytes(&mut own_contrib);
+        let (mut priv_raw, eph_pub) = aead::new_ephemeral_key(&mut SystemRng);
+        let eph_priv = Zeroizing::new(priv_raw);
+        priv_raw.zeroize();
+        let mut eph_pubs = vec![None; n];
+        eph_pubs[id as usize] = Some(eph_pub);
 
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {
@@ -134,6 +171,8 @@ impl DkgParty44 {
             state: Mutex::new(State {
                 own_contrib,
                 contribs: vec![None; n],
+                eph_priv,
+                eph_pubs,
                 dealt: VecMap::new(),
                 received: VecMap::new(),
                 t_by_mask: VecMap::new(),
@@ -184,15 +223,19 @@ impl Shared {
     }
 
     fn round1(self: &Arc<Self>) -> Result<(), Error> {
-        let contrib = {
+        let (contrib, eph) = {
             let mut st = self.state.lock();
             st.contribs[self.id as usize] = Some(st.own_contrib);
-            st.own_contrib
+            (
+                st.own_contrib,
+                st.eph_pubs[self.id as usize].expect("own key"),
+            )
         };
         self.broadcast(
             TYPE_R1,
             &Dkg1 {
                 contrib: B64Bytes(contrib.to_vec()),
+                eph: B64Bytes(eph.to_vec()),
             },
         )?;
         let me = Arc::clone(self);
@@ -218,9 +261,13 @@ impl Shared {
                 if r1.contrib.0.len() != 32 {
                     return self.deliver(Err(Error::Validation("bad rho contribution".into())));
                 }
+                let Ok(eph) = <[u8; 32]>::try_from(r1.eph.0.as_slice()) else {
+                    return self.deliver(Err(Error::Validation("bad ephemeral key".into())));
+                };
                 let mut c = [0u8; 32];
                 c.copy_from_slice(&r1.contrib.0);
                 st.contribs[slot] = Some(c);
+                st.eph_pubs[slot] = Some(eph);
             }
             let mut input = RHO_DOMAIN.to_vec();
             for c in &st.contribs {
@@ -253,23 +300,25 @@ impl Shared {
         for &mask in &self.masks_deal {
             let mut sseed = [0u8; 64];
             SystemRng.fill_bytes(&mut sseed);
-            let mut s1 = zero_polys::<L>();
-            let mut s2 = zero_polys::<K>();
-            for (j, p) in s1.iter_mut().enumerate() {
+            let mut sh = SecretShare {
+                s1: zero_polys::<L>(),
+                s2: zero_polys::<K>(),
+            };
+            for (j, p) in sh.s1.iter_mut().enumerate() {
                 *p = hazmat::sample_bounded_poly(&sseed, eta, j as u16);
             }
-            for (j, p) in s2.iter_mut().enumerate() {
+            for (j, p) in sh.s2.iter_mut().enumerate() {
                 *p = hazmat::sample_bounded_poly(&sseed, eta, (j + L) as u16);
             }
             // The seed alone reproduces the whole share; wipe it as soon as
             // sampling is done (best-effort).
-            zeroize::Zeroize::zeroize(&mut sseed);
-            let t_m = compute_t_m(&a, &s1, &s2);
-            let commit = commit_share(mask, &s1, &s2);
+            sseed.zeroize();
+            let t_m = compute_t_m(&a, &sh.s1, &sh.s2);
+            let commit = commit_share(mask, &sh.s1, &sh.s2);
             let t_packed = pack_vec(t_m.as_slice());
             {
                 let mut st = self.state.lock();
-                st.dealt.insert(mask, (s1, s2));
+                st.dealt.insert(mask, sh);
                 st.t_by_mask.insert(mask, t_m);
                 st.commit_by_mask.insert(mask, commit);
             }
@@ -326,7 +375,8 @@ impl Shared {
         let entries = core::mem::take(&mut self.state.lock().own_reveal);
         self.broadcast(TYPE_R2BC, &Dkg2Bcast { entries })?;
 
-        // Unicast shares to co-holders, grouped by recipient.
+        // Unicast shares to co-holders, grouped by recipient, each sealed to
+        // the recipient's round-1 ephemeral key.
         for pj in others {
             let rid = self.committee_slot(pj) as u8;
             let mut entries = Vec::new();
@@ -334,11 +384,22 @@ impl Shared {
                 if (mask >> rid) & 1 == 1 {
                     let entry = {
                         let st = self.state.lock();
-                        let (s1, s2) = &st.dealt[&mask];
+                        let sh = &st.dealt[&mask];
+                        let my_pub = st.eph_pubs[self.id as usize].expect("own key");
+                        let their_pub = st.eph_pubs[rid as usize]
+                            .ok_or_else(|| Error::Validation("missing ephemeral key".into()))?;
+                        let ad = share_ad(&st.rho, self.id, rid, mask, &my_pub, &their_pub);
+                        let pt = pack_share(sh);
+                        let ct =
+                            aead::seal_share(&mut SystemRng, &st.eph_priv, &their_pub, &ad, &pt)
+                                .map_err(|e| {
+                                    Error::Validation(format!(
+                                        "sealing share for party {rid} failed: {e}"
+                                    ))
+                                })?;
                         MaskShare {
                             mask,
-                            s1: B64Bytes(pack_vec(s1.as_slice())),
-                            s2: B64Bytes(pack_vec(s2.as_slice())),
+                            ct: B64Bytes(ct),
                         }
                     };
                     entries.push(entry);
@@ -465,15 +526,29 @@ impl Shared {
                             e.mask
                         ))));
                     }
-                    let s1 = match unpack_vec_l(&e.s1.0) {
-                        Some(v) => v,
-                        None => return self.deliver(Err(Error::Validation("bad s1 share".into()))),
+                    let (Some(their_pub), Some(my_pub)) =
+                        (st.eph_pubs[dealer as usize], st.eph_pubs[self.id as usize])
+                    else {
+                        return self
+                            .deliver(Err(Error::Validation("missing ephemeral key".into())));
                     };
-                    let s2 = match unpack_vec_k(&e.s2.0) {
-                        Some(v) => v,
-                        None => return self.deliver(Err(Error::Validation("bad s2 share".into()))),
+                    let ad = share_ad(&st.rho, dealer, self.id, e.mask, &their_pub, &my_pub);
+                    let pt = match aead::open_share(&st.eph_priv, &their_pub, &ad, &e.ct.0) {
+                        Ok(pt) => pt,
+                        Err(err) => {
+                            return self.deliver(Err(Error::Validation(format!(
+                                "party {dealer} sent an undecryptable share for mask {}: {err}",
+                                e.mask
+                            ))));
+                        }
                     };
-                    st.received.insert(e.mask, (s1, s2));
+                    let Some(sh) = unpack_share(&pt) else {
+                        return self.deliver(Err(Error::Validation(format!(
+                            "party {dealer} sent a malformed share for mask {}",
+                            e.mask
+                        ))));
+                    };
+                    st.received.insert(e.mask, sh);
                 }
             }
         }
@@ -493,6 +568,12 @@ impl Shared {
 
     fn finalize(self: &Arc<Self>) {
         let mut st = self.state.lock();
+        // Move the plaintext shares out of the session: `SecretShare` wipes on
+        // drop, so every return below (error or success) clears them. The
+        // ephemeral key has opened every share it ever will; wipe it too.
+        let dealt = core::mem::take(&mut st.dealt);
+        let received = core::mem::take(&mut st.received);
+        st.eph_priv.zeroize();
         let rho_input = {
             let mut input = RHO_DOMAIN.to_vec();
             for c in &st.contribs {
@@ -534,9 +615,9 @@ impl Shared {
         let mut shares: alloc::collections::BTreeMap<u8, Share44> =
             alloc::collections::BTreeMap::new();
         for &mask in &self.masks_hold {
-            let (s1, s2) = if let Some(v) = st.dealt.get(&mask) {
+            let mut sh = if let Some(v) = dealt.get(&mask) {
                 v.clone()
-            } else if let Some(v) = st.received.get(&mask) {
+            } else if let Some(v) = received.get(&mask) {
                 v.clone()
             } else {
                 return self.deliver(Err(Error::Validation(format!(
@@ -544,7 +625,7 @@ impl Shared {
                 ))));
             };
             // Bound check: |coeff| ≤ η.
-            for p in s1.iter().chain(s2.iter()) {
+            for p in sh.s1.iter().chain(sh.s2.iter()) {
                 if p.c.iter().any(|&c| hazmat::inf_norm(c) > eta) {
                     return self.deliver(Err(Error::Validation(format!(
                         "mask {mask} share exceeds η bound"
@@ -552,26 +633,31 @@ impl Shared {
                 }
             }
             // Commitment + t_M consistency (catches a cheating dealer).
-            if commit_share(mask, &s1, &s2) != st.commit_by_mask[&mask] {
+            if commit_share(mask, &sh.s1, &sh.s2) != st.commit_by_mask[&mask] {
                 return self.deliver(Err(Error::Validation(format!(
                     "mask {mask} share does not match its commitment"
                 ))));
             }
-            let t_recomputed = compute_t_m(&a, &s1, &s2);
+            let t_recomputed = compute_t_m(&a, &sh.s1, &sh.s2);
             if poly_vec_ne(&t_recomputed, &st.t_by_mask[&mask]) {
                 return self.deliver(Err(Error::Validation(format!(
                     "mask {mask} t_M inconsistent with its share"
                 ))));
             }
-            let mut s1h = s1.clone();
-            let mut s2h = s2.clone();
-            for p in s1h.iter_mut() {
+            // Move the polynomials into a `Share44` (which wipes on drop),
+            // leaving zeros behind in `sh`.
+            let mut share = Share44 {
+                s1: core::mem::replace(&mut sh.s1, zero_polys::<L>()),
+                s2: core::mem::replace(&mut sh.s2, zero_polys::<K>()),
+                s1h: zero_polys::<L>(),
+                s2h: zero_polys::<K>(),
+            };
+            share.s1h.copy_from_slice(&share.s1[..]);
+            share.s2h.copy_from_slice(&share.s2[..]);
+            for p in share.s1h.iter_mut().chain(share.s2h.iter_mut()) {
                 p.ntt();
             }
-            for p in s2h.iter_mut() {
-                p.ntt();
-            }
-            shares.insert(mask, Share44 { s1, s2, s1h, s2h });
+            shares.insert(mask, share);
         }
 
         // Public key + tr.
@@ -597,18 +683,10 @@ impl Shared {
             shares,
         };
         // The plaintext shares now live in `key` (which wipes itself on drop);
-        // clear the session's copies.
-        {
-            let st = &mut *st;
-            for (s1, s2) in st.dealt.values_mut().chain(st.received.values_mut()) {
-                for p in s1.iter_mut().chain(s2.iter_mut()) {
-                    zeroize::Zeroize::zeroize(&mut p.c);
-                }
-            }
-            st.dealt.clear();
-            st.received.clear();
-        }
+        // the session's copies are wiped as `dealt` / `received` drop.
         drop(st);
+        drop(dealt);
+        drop(received);
         if let Err(e) = key.validate() {
             return self.deliver(Err(e));
         }
@@ -697,6 +775,9 @@ impl Shared {
 struct Dkg1 {
     #[serde(rename = "contrib")]
     contrib: B64Bytes,
+    /// This run's ephemeral X25519 public key (32 bytes).
+    #[serde(rename = "eph")]
+    eph: B64Bytes,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -731,10 +812,10 @@ struct Dkg2Bcast {
 struct MaskShare {
     #[serde(rename = "mask")]
     mask: u8,
-    #[serde(rename = "s1")]
-    s1: B64Bytes,
-    #[serde(rename = "s2")]
-    s2: B64Bytes,
+    /// `pack(s1) ‖ pack(s2)` sealed with `share_aead::seal_share` under
+    /// [`share_ad`].
+    #[serde(rename = "ct")]
+    ct: B64Bytes,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -747,7 +828,8 @@ struct Dkg2Share {
 
 /// `t_M = InvNTT(A · NTT(s1)) + s2` (the per-mask public contribution).
 fn compute_t_m(a: &[Poly], s1: &[Poly; L], s2: &[Poly; K]) -> PolyVec<K> {
-    let mut s1h = *s1;
+    let mut s1h = zero_polys::<L>();
+    s1h.copy_from_slice(s1);
     for p in s1h.iter_mut() {
         p.ntt();
     }
@@ -760,22 +842,23 @@ fn compute_t_m(a: &[Poly], s1: &[Poly; L], s2: &[Poly; K]) -> PolyVec<K> {
         acc.inv_ntt();
         *oi = acc.add(&s2[i]);
     }
+    // The NTT-domain copy of the secret is scratch; wipe it.
+    wipe_polys(&mut s1h[..]);
     out
 }
 
 /// SHAKE256(domain ‖ mask ‖ pack(s1) ‖ pack(s2)) → 32 bytes.
 fn commit_share(mask: u8, s1: &[Poly; L], s2: &[Poly; K]) -> [u8; 32] {
-    let mut input = COMMIT_DOMAIN.to_vec();
+    // The hash input holds the packed secret; it is wiped on drop.
+    let mut input = Zeroizing::new(Vec::with_capacity(
+        COMMIT_DOMAIN.len() + 1 + SHARE_PLAINTEXT_LEN,
+    ));
+    input.extend_from_slice(COMMIT_DOMAIN);
     input.push(mask);
-    for p in s1.iter() {
-        let mut b = [0u8; PACK_POLYQ_SIZE];
-        pack_polyq(p, &mut b);
-        input.extend_from_slice(&b);
-    }
-    for p in s2.iter() {
-        let mut b = [0u8; PACK_POLYQ_SIZE];
-        pack_polyq(p, &mut b);
-        input.extend_from_slice(&b);
+    for p in s1.iter().chain(s2.iter()) {
+        let off = input.len();
+        input.resize(off + PACK_POLYQ_SIZE, 0);
+        pack_polyq(p, &mut input[off..]);
     }
     let mut out = [0u8; 32];
     shake256(&input, &mut out);
@@ -802,6 +885,55 @@ fn commit_reveal(rho: &[u8; 32], dealer: u8, entries: &[MaskT]) -> [u8; 32] {
     out
 }
 
+/// Associated data for one sealed share (fixed width):
+/// `domain ‖ rho ‖ dealer ‖ recipient ‖ mask ‖ dealer_eph ‖ recipient_eph`.
+/// Binds the ciphertext to this session and to exactly one (dealer,
+/// recipient, mask) slot, so it cannot be replayed or redirected.
+fn share_ad(
+    rho: &[u8; 32],
+    dealer: u8,
+    recipient: u8,
+    mask: u8,
+    dealer_eph: &[u8; 32],
+    recipient_eph: &[u8; 32],
+) -> Vec<u8> {
+    let mut ad = Vec::with_capacity(SHARE_AD_DOMAIN.len() + 32 + 3 + 64);
+    ad.extend_from_slice(SHARE_AD_DOMAIN);
+    ad.extend_from_slice(rho);
+    ad.push(dealer);
+    ad.push(recipient);
+    ad.push(mask);
+    ad.extend_from_slice(dealer_eph);
+    ad.extend_from_slice(recipient_eph);
+    ad
+}
+
+/// `pack(s1) ‖ pack(s2)`, wiped on drop.
+fn pack_share(sh: &SecretShare) -> Zeroizing<Vec<u8>> {
+    let mut out = Zeroizing::new(vec![0u8; SHARE_PLAINTEXT_LEN]);
+    for (i, p) in sh.s1.iter().chain(sh.s2.iter()).enumerate() {
+        pack_polyq(p, &mut out[i * PACK_POLYQ_SIZE..(i + 1) * PACK_POLYQ_SIZE]);
+    }
+    out
+}
+
+/// Inverse of [`pack_share`]; `None` on a bad length or non-canonical field.
+fn unpack_share(b: &[u8]) -> Option<SecretShare> {
+    if b.len() != SHARE_PLAINTEXT_LEN {
+        return None;
+    }
+    let (b1, b2) = b.split_at(L * PACK_POLYQ_SIZE);
+    // `SecretShare` wipes on drop, so a half-decoded share is cleared too.
+    let mut sh = SecretShare {
+        s1: zero_polys::<L>(),
+        s2: zero_polys::<K>(),
+    };
+    if !unpack_into(b1, &mut sh.s1[..]) || !unpack_into(b2, &mut sh.s2[..]) {
+        return None;
+    }
+    Some(sh)
+}
+
 /// Packs a poly vector with `pack_polyq` (one 736-byte block per poly).
 fn pack_vec(v: &[Poly]) -> Vec<u8> {
     let mut out = vec![0u8; v.len() * PACK_POLYQ_SIZE];
@@ -811,34 +943,25 @@ fn pack_vec(v: &[Poly]) -> Vec<u8> {
     out
 }
 
-fn unpack_vec_k(b: &[u8]) -> Option<PolyVec<K>> {
-    if b.len() != K * PACK_POLYQ_SIZE {
-        return None;
+/// Unpacks `out.len()` polys from `b` (exactly that many 736-byte blocks),
+/// rejecting non-canonical coefficients. Returns `false` on any mismatch.
+fn unpack_into(b: &[u8], out: &mut [Poly]) -> bool {
+    if b.len() != out.len() * PACK_POLYQ_SIZE {
+        return false;
     }
-    let mut out = zero_polys::<K>();
-    for (i, oi) in out.iter_mut().enumerate() {
-        *oi = unpack_polyq(&b[i * PACK_POLYQ_SIZE..(i + 1) * PACK_POLYQ_SIZE]);
+    for (oi, chunk) in out.iter_mut().zip(b.as_chunks::<PACK_POLYQ_SIZE>().0) {
+        *oi = unpack_polyq(chunk);
         // 23-bit fields can hold values ≥ q; `Poly` arithmetic requires < q.
         if oi.c.iter().any(|&c| c >= hazmat::Q) {
-            return None;
+            return false;
         }
     }
-    Some(out)
+    true
 }
 
-fn unpack_vec_l(b: &[u8]) -> Option<PolyVec<L>> {
-    if b.len() != L * PACK_POLYQ_SIZE {
-        return None;
-    }
-    let mut out = zero_polys::<L>();
-    for (i, oi) in out.iter_mut().enumerate() {
-        *oi = unpack_polyq(&b[i * PACK_POLYQ_SIZE..(i + 1) * PACK_POLYQ_SIZE]);
-        // 23-bit fields can hold values ≥ q; `Poly` arithmetic requires < q.
-        if oi.c.iter().any(|&c| c >= hazmat::Q) {
-            return None;
-        }
-    }
-    Some(out)
+fn unpack_vec_k(b: &[u8]) -> Option<PolyVec<K>> {
+    let mut out = zero_polys::<K>();
+    unpack_into(b, &mut out[..]).then_some(out)
 }
 
 fn poly_vec_ne(a: &[Poly; K], b: &[Poly; K]) -> bool {
@@ -947,6 +1070,7 @@ mod tests {
             TYPE_R1,
             &Dkg1 {
                 contrib: b64(&[0x42; 32]),
+                eph: b64(&aead::new_ephemeral_key(&mut SystemRng).1),
             },
         );
         // The honest party has committed, but revealed nothing to react to.
@@ -991,6 +1115,199 @@ mod tests {
             "{err}"
         );
         assert!(party.public_key().is_none());
+    }
+
+    /// Outbound rewriting hook: `(sender index, message)` → the messages to
+    /// hand to the sender's hub broker instead. A returned message whose
+    /// `from` is another party is delivered to the sender itself (a forgery
+    /// "from" that party, as a network adversary controlling it could send).
+    type Hook = Arc<dyn Fn(usize, &Message) -> Vec<Message> + Send + Sync>;
+
+    /// Wraps one party's hub broker and lets a test rewrite what it sends.
+    struct Intercept {
+        me: usize,
+        inner: Arc<dyn crate::tss::MessageBroker + Send + Sync>,
+        hook: Hook,
+    }
+
+    impl crate::tss::MessageReceiver for Intercept {
+        fn receive(&self, m: &Message) -> crate::tss::BrokerResult {
+            for out in (self.hook)(self.me, m) {
+                self.inner.receive(&out)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl crate::tss::MessageBroker for Intercept {
+        fn connect(&self, typ: &str, dest: Arc<dyn crate::tss::MessageReceiver + Send + Sync>) {
+            self.inner.connect(typ, dest);
+        }
+    }
+
+    /// Runs a DKG where every party's outbound traffic passes through `hook`. Returns the
+    /// parties (party 0's `Shared` is published to `slot0` before any round-2
+    /// traffic, for hooks that need its session state).
+    fn run_dkg_with_hook(
+        t: usize,
+        n: usize,
+        slot0: Arc<std::sync::OnceLock<Arc<Shared>>>,
+        hook: Hook,
+    ) -> Vec<DkgParty44> {
+        let th = get_threshold_params44(t, n).unwrap();
+        let ids = party_ids(n);
+        let hub = TestHub::new(&ids);
+        let mut parties = Vec::new();
+        for i in 0..n {
+            let broker: Arc<dyn crate::tss::MessageBroker + Send + Sync> = Arc::new(Intercept {
+                me: i,
+                inner: hub.broker(i),
+                hook: hook.clone(),
+            });
+            let params = Parameters::new(ids.to_vec(), &ids[i], t, broker);
+            let p = DkgParty44::new(params, th).unwrap();
+            if i == 0 {
+                slot0.set(p.shared.clone()).ok();
+            }
+            parties.push(p);
+        }
+        parties
+    }
+
+    /// Round-2 shares travel sealed: what is on the wire is a ChaCha20-Poly1305
+    /// envelope, never the packed `(s1, s2)` a holder ends up with.
+    #[test]
+    fn dkg_shares_are_sealed_on_the_wire() {
+        let seen: Arc<Mutex<Vec<Message>>> = Arc::default();
+        let rec = seen.clone();
+        let hook: Hook = Arc::new(move |from, m| {
+            if from == 0 && m.typ == TYPE_R2SH {
+                rec.lock().push(m.clone());
+            }
+            vec![m.clone()]
+        });
+        let parties = run_dkg_with_hook(2, 3, Arc::default(), hook);
+        let keys: Vec<Key44> = parties.iter().map(|p| p.wait().expect("dkg ok")).collect();
+        let msgs = seen.lock();
+        assert!(!msgs.is_empty(), "party 0 deals shares in a 2-of-3");
+        for m in msgs.iter() {
+            let to = m.to.as_ref().unwrap().index as usize;
+            for e in decode::<Dkg2Share>(m).unwrap().entries {
+                assert_eq!(e.ct.0.len(), 12 + SHARE_PLAINTEXT_LEN + 16);
+                let share = &keys[to].shares[&e.mask];
+                let plain = pack_share(&SecretShare {
+                    s1: share.s1.clone(),
+                    s2: share.s2.clone(),
+                });
+                // No 736-byte block of the packed share appears verbatim.
+                for block in plain.chunks(PACK_POLYQ_SIZE) {
+                    assert!(!e.ct.0.windows(block.len()).any(|w| w == block));
+                }
+            }
+        }
+    }
+
+    /// A share whose ciphertext was altered in transit is rejected.
+    #[test]
+    fn dkg_rejects_tampered_share_ciphertext() {
+        let hook: Hook = Arc::new(move |from, m| {
+            if !(from == 0 && m.typ == TYPE_R2SH) {
+                return vec![m.clone()];
+            }
+            let mut body: Dkg2Share = decode(m).unwrap();
+            body.entries[0].ct.0[20] ^= 1;
+            vec![
+                encode(
+                    WireFormat::default(),
+                    &m.typ,
+                    &body,
+                    m.from.clone(),
+                    m.to.clone(),
+                )
+                .unwrap(),
+            ]
+        });
+        let parties = run_dkg_with_hook(2, 3, Arc::default(), hook);
+        let Err(err) = parties[1].wait() else {
+            panic!("tampered share accepted")
+        };
+        assert!(err.to_string().contains("undecryptable share"), "{err}");
+    }
+
+    /// A dealer owning several masks reveals different `t_M` to different
+    /// parties, keeping the sums equal so every party derives the same public
+    /// key, and checking out against each holder (each party is shown the
+    /// true `t_M` only for masks it holds). It also answers every party's
+    /// round-3 digest with that same digest. Some honest `t`-subsets could then never
+    /// sign without it; the round-3 transcript check must abort the DKG.
+    #[test]
+    #[ignore = "needs the round-3 transcript check"]
+    fn dkg_rejects_dealer_equivocating_on_t_m() {
+        // 2-of-3: masks 0b011, 0b101, 0b110. Party 0 deals 3 and 5; party 1
+        // holds {3, 6}, party 2 holds {5, 6}.
+        let slot0: Arc<std::sync::OnceLock<Arc<Shared>>> = Arc::default();
+        let s0 = slot0.clone();
+        let ids = party_ids(3);
+        let hook: Hook = Arc::new(move |from, m| {
+            let fmt = WireFormat::default();
+            let me = ids[0].clone();
+            if from != 0 {
+                if m.typ == TYPE_R3 {
+                    // Party 0 "confirms" with the sender's own digest.
+                    let body: Dkg3Confirm = decode(m).unwrap();
+                    let echo = encode(fmt, TYPE_R3, &body, Some(me), m.from.clone()).unwrap();
+                    return vec![m.clone(), echo];
+                }
+                return vec![m.clone()];
+            }
+            match m.typ.as_str() {
+                // Withheld: replaced by per-recipient commitments below.
+                TYPE_R2C | TYPE_R3 => vec![],
+                TYPE_R2BC => {
+                    let rho = s0.get().unwrap().state.lock().rho;
+                    let honest: Dkg2Bcast = decode(m).unwrap();
+                    let mut out = Vec::new();
+                    // Party 1 gets a shifted t_5, party 2 a shifted t_3.
+                    for (rid, shifted) in [(1usize, 5u8), (2, 3)] {
+                        let entries: Vec<MaskT> = honest
+                            .entries
+                            .iter()
+                            .map(|e| {
+                                let mut t = e.t.0.clone();
+                                if e.mask == shifted {
+                                    let mut v = unpack_vec_k(&t).unwrap();
+                                    v[0].c[0] = (v[0].c[0] + 1) % hazmat::Q;
+                                    t = pack_vec(v.as_slice());
+                                }
+                                MaskT {
+                                    mask: e.mask,
+                                    t: B64Bytes(t),
+                                    commit: B64Bytes(e.commit.0.clone()),
+                                }
+                            })
+                            .collect();
+                        let commit = Dkg2Commit {
+                            commit: B64Bytes(commit_reveal(&rho, 0, &entries).to_vec()),
+                        };
+                        let to = Some(ids[rid].clone());
+                        out.push(
+                            encode(fmt, TYPE_R2C, &commit, Some(me.clone()), to.clone()).unwrap(),
+                        );
+                        let bc = Dkg2Bcast { entries };
+                        out.push(encode(fmt, TYPE_R2BC, &bc, Some(me.clone()), to).unwrap());
+                    }
+                    out
+                }
+                _ => vec![m.clone()],
+            }
+        });
+        let parties = run_dkg_with_hook(2, 3, slot0, hook);
+        for p in &parties[1..] {
+            let Err(err) = p.wait() else {
+                panic!("equivocating dealer went undetected")
+            };
+            assert!(err.to_string().contains("transcript"), "{err}");
+        }
     }
 
     #[test]

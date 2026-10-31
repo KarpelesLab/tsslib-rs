@@ -46,7 +46,9 @@ frostristretto255tss = ["purecrypto/ristretto255", "purecrypto/cipher", "purecry
 frostsecp256k1tss = ["purecrypto/hazmat-secp256k1", "purecrypto/bip340", "purecrypto/cipher", "purecrypto/kdf"]
 # Threshold ML-DSA-44 (FIPS 204) — "Threshold Signatures Reloaded".
 # hazmat-mldsa exposes the low-level Poly/NTT/sampler/packing API.
-mldsatss = ["purecrypto/mldsa", "purecrypto/hazmat-mldsa"]
+# ec/cipher/kdf back the X25519+HKDF+ChaCha20-Poly1305 envelope sealing the
+# DKG's point-to-point secret shares.
+mldsatss = ["purecrypto/mldsa", "purecrypto/hazmat-mldsa", "purecrypto/ec", "purecrypto/cipher", "purecrypto/kdf"]
 # Threshold ECDSA on secp256k1 — DKLs23 (ePrint 2023/765).
 # cipher backs the AES-CTR PRG in the OT-extension layer.
 dklstss = ["purecrypto/hazmat-secp256k1", "purecrypto/cipher"]
