@@ -38,6 +38,22 @@ impl<K: Ord, V> VecMap<K, V> {
         }
     }
 
+    /// Builds a map from entries in arbitrary order in O(n log n), with the
+    /// same result as inserting them one by one: for a duplicate key the
+    /// first key is kept and the last value wins.
+    fn from_unsorted(mut entries: Vec<(K, V)>) -> Self {
+        // Stable, so equal keys stay in arrival order for the merge below.
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut out: Vec<(K, V)> = Vec::with_capacity(entries.len());
+        for (k, v) in entries {
+            match out.last_mut() {
+                Some(last) if last.0 == k => last.1 = v,
+                _ => out.push((k, v)),
+            }
+        }
+        VecMap { entries: out }
+    }
+
     pub(crate) fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -164,11 +180,14 @@ where
                 self,
                 mut a: A,
             ) -> Result<Self::Value, A::Error> {
-                let mut m = VecMap::new();
-                while let Some((k, v)) = a.next_entry()? {
-                    m.insert(k, v);
+                // Entries come from peers in any order; inserting one by one
+                // would shift the tail each time (O(n²) for descending keys),
+                // so collect, sort once and merge duplicates.
+                let mut entries = Vec::new();
+                while let Some(kv) = a.next_entry()? {
+                    entries.push(kv);
                 }
-                Ok(m)
+                Ok(VecMap::from_unsorted(entries))
             }
         }
 
@@ -197,6 +216,76 @@ mod tests {
         assert_eq!(m.values().copied().collect::<Vec<_>>(), [2, 21, 4]);
         m.clear();
         assert!(m.is_empty());
+    }
+
+    /// Compares by the first field only, so we can see which of two equal
+    /// keys is kept.
+    #[derive(Debug, Clone, Copy)]
+    struct Tagged(u32, u32);
+    impl PartialEq for Tagged {
+        fn eq(&self, o: &Self) -> bool {
+            self.0 == o.0
+        }
+    }
+    impl Eq for Tagged {}
+    impl PartialOrd for Tagged {
+        fn partial_cmp(&self, o: &Self) -> Option<core::cmp::Ordering> {
+            Some(self.cmp(o))
+        }
+    }
+    impl Ord for Tagged {
+        fn cmp(&self, o: &Self) -> core::cmp::Ordering {
+            self.0.cmp(&o.0)
+        }
+    }
+
+    #[test]
+    fn from_unsorted_matches_repeated_insert() {
+        // Descending keys, each appearing about twice.
+        let input: Vec<(Tagged, u32)> = (0..200u32)
+            .map(|i| (Tagged(100 - (i % 101), i), i))
+            .collect();
+        let mut by_insert = VecMap::new();
+        for &(k, v) in &input {
+            by_insert.insert(k, v);
+        }
+        let sorted = VecMap::from_unsorted(input);
+        let a: Vec<_> = by_insert.into_iter().map(|(k, v)| (k.0, k.1, v)).collect();
+        let b: Vec<_> = sorted.into_iter().map(|(k, v)| (k.0, k.1, v)).collect();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 101);
+    }
+
+    #[test]
+    fn wire_decode_unordered_with_duplicates() {
+        // Map encoding = count, then (key, value) pairs: same as a Vec of tuples.
+        let bytes =
+            crate::wire::to_vec(&vec![(3u32, 1u8), (1, 2), (2, 3), (1, 4), (3, 5)]).unwrap();
+        let m: VecMap<u32, u8> = crate::wire::from_slice(&bytes).unwrap();
+        assert_eq!(m.into_iter().collect::<Vec<_>>(), [(1, 4), (2, 3), (3, 5)]);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn json_decode_unordered_keeps_last_duplicate() {
+        let m: VecMap<String, u8> =
+            serde_json::from_str(r#"{"c":1,"b":2,"a":3,"b":4,"c":5}"#).unwrap();
+        let pairs: Vec<(String, u8)> = m.into_iter().collect();
+        assert_eq!(pairs, [("a".into(), 3), ("b".into(), 4), ("c".into(), 5)]);
+    }
+
+    #[test]
+    fn wire_decode_many_descending_keys_is_not_quadratic() {
+        // Quadratic insertion of 100k descending keys took tens of seconds
+        // in debug builds; the sort-based decoder takes a few milliseconds.
+        const N: u32 = 100_000;
+        let desc: Vec<(u32, ())> = (0..N).rev().map(|k| (k, ())).collect();
+        let bytes = crate::wire::to_vec(&desc).unwrap();
+        let t = std::time::Instant::now();
+        let m: VecMap<u32, ()> = crate::wire::from_slice(&bytes).unwrap();
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(m.len(), N as usize);
+        assert!(m.into_iter().map(|(k, _)| k).eq(0..N));
     }
 
     #[cfg(feature = "json")]
