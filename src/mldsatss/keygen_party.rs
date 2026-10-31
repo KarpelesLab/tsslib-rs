@@ -30,8 +30,16 @@
 //! The commit-then-reveal on `t_M` matters: `t = Σ_M t_M` is a plain sum, so a
 //! dealer who saw the honest `t_M` first could pick its own as `t* − Σ t_honest`
 //! for a key `t*` it knows entirely (a rogue-key attack; any mask held only by
-//! corrupt parties is never checked by an honest one). The round-3 confirmation
-//! catches a dealer that reveals different `t_M` to different parties.
+//! corrupt parties is never checked by an honest one).
+//!
+//! None of the broadcasts is a reliable broadcast, and each party checks a
+//! `t_M` only for masks it holds, so a dealer owning several masks could
+//! reveal different `t_M` to different parties with equal sums: everyone
+//! would derive the same public key, yet some honest `t`-subsets could never
+//! sign. The round-3 confirmation therefore hashes the whole public
+//! transcript — every round-1 contribution and ephemeral key, every round-2
+//! commitment, and every mask's `(t_M, commitment)` in canonical order — plus
+//! the public key, and aborts unless every party reports the same digest.
 
 use super::Error;
 use super::key::{Key44, PolyVec, Share44, expand_matrix, wipe_polys, zero_polys};
@@ -67,7 +75,7 @@ const TYPE_R3: &str = "mldsa44:dkg2:r3confirm";
 const RHO_DOMAIN: &[u8] = b"mldsatss-dkg-rho-v1";
 const COMMIT_DOMAIN: &[u8] = b"mldsatss-dkg-commit-v1";
 const T_COMMIT_DOMAIN: &[u8] = b"mldsatss-dkg-tcommit-v1";
-const CONFIRM_DOMAIN: &[u8] = b"mldsatss-dkg-confirm-v1";
+const CONFIRM_DOMAIN: &[u8] = b"mldsatss-dkg-confirm-v2";
 const SHARE_AD_DOMAIN: &[u8] = b"mldsatss-dkg-share-v2";
 /// A packed `(s1_M, s2_M)` share: `L + K` polynomials.
 const SHARE_PLAINTEXT_LEN: usize = (L + K) * PACK_POLYQ_SIZE;
@@ -682,6 +690,8 @@ impl Shared {
             t1,
             shares,
         };
+        // Round-3 digest over the whole public transcript as this party saw it.
+        let digest = transcript_digest(&st, &all_masks, &pk_bytes);
         // The plaintext shares now live in `key` (which wipes itself on drop);
         // the session's copies are wiped as `dealt` / `received` drop.
         drop(st);
@@ -691,13 +701,10 @@ impl Shared {
             return self.deliver(Err(e));
         }
 
-        // Round 3: all parties must have derived the same public key. The
-        // round-2 broadcasts are not reliable broadcasts, so a dealer could
-        // have revealed a different (committed) `t_M` to different parties.
-        let mut input = CONFIRM_DOMAIN.to_vec();
-        input.extend_from_slice(&pk_bytes);
-        let mut digest = [0u8; 32];
-        shake256(&input, &mut digest);
+        // Round 3: all parties must have seen the same transcript. None of
+        // the broadcasts is a reliable broadcast, so a dealer could reveal
+        // different (separately committed) `t_M` to different parties —
+        // with equal sums the public key alone would still agree.
         if let Err(e) = self.broadcast(
             TYPE_R3,
             &Dkg3Confirm {
@@ -718,7 +725,7 @@ impl Shared {
                         Ok(c) if c.digest.0 == digest => {}
                         Ok(_) => {
                             return me.deliver(Err(Error::Validation(format!(
-                                "party {} derived a different public key",
+                                "party {} saw a different DKG transcript",
                                 me.committee_slot(pid)
                             ))));
                         }
@@ -860,6 +867,48 @@ fn commit_share(mask: u8, s1: &[Poly; L], s2: &[Poly; K]) -> [u8; 32] {
         input.resize(off + PACK_POLYQ_SIZE, 0);
         pack_polyq(p, &mut input[off..]);
     }
+    let mut out = [0u8; 32];
+    shake256(&input, &mut out);
+    out
+}
+
+/// The round-3 confirmation digest: SHAKE256 over the full public transcript
+/// in canonical order — `domain ‖ n ‖ Σ_slot (contrib ‖ eph ‖ t_commit) ‖
+/// #masks ‖ Σ_mask (mask ‖ pack(t_M) ‖ share commit) ‖ pk`, each optional
+/// field prefixed by a presence byte. Two honest parties agree on it only if
+/// they saw identical round-1 contributions, round-2 commitments and every
+/// mask's `(t_M, commitment)` reveal.
+fn transcript_digest(st: &State, all_masks: &[u8], pk_bytes: &[u8]) -> [u8; 32] {
+    fn put(input: &mut Vec<u8>, v: Option<&[u8]>) {
+        match v {
+            Some(b) => {
+                input.push(1);
+                input.extend_from_slice(&(b.len() as u32).to_le_bytes());
+                input.extend_from_slice(b);
+            }
+            None => input.push(0),
+        }
+    }
+    let mut input = CONFIRM_DOMAIN.to_vec();
+    input.push(st.contribs.len() as u8);
+    for slot in 0..st.contribs.len() {
+        put(&mut input, st.contribs[slot].as_ref().map(|b| &b[..]));
+        put(&mut input, st.eph_pubs[slot].as_ref().map(|b| &b[..]));
+        put(&mut input, st.t_commits[slot].as_ref().map(|b| &b[..]));
+    }
+    input.push(all_masks.len() as u8);
+    for &m in all_masks {
+        input.push(m);
+        put(
+            &mut input,
+            st.t_by_mask
+                .get(&m)
+                .map(|t| pack_vec(t.as_slice()))
+                .as_deref(),
+        );
+        put(&mut input, st.commit_by_mask.get(&m).map(|c| &c[..]));
+    }
+    put(&mut input, Some(pk_bytes));
     let mut out = [0u8; 32];
     shake256(&input, &mut out);
     out
@@ -1241,7 +1290,6 @@ mod tests {
     /// round-3 digest with that same digest. Some honest `t`-subsets could then never
     /// sign without it; the round-3 transcript check must abort the DKG.
     #[test]
-    #[ignore = "needs the round-3 transcript check"]
     fn dkg_rejects_dealer_equivocating_on_t_m() {
         // 2-of-3: masks 0b011, 0b101, 0b110. Party 0 deals 3 and 5; party 1
         // holds {3, 6}, party 2 holds {5, 6}.
