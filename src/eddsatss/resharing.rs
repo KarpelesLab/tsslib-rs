@@ -11,9 +11,20 @@
 //! [`Key::subset_for_parties`].
 //!
 //! Rounds: (old) round1 broadcasts `EDDSAPub` + a VSS commitment; (new) round2
-//! acks; (old) round3 unicasts each new party its share and opens the VSS
-//! commitment; (new) round4 rebuilds the share/public key and acks; old-only
-//! parties then retire their share.
+//! acks with a fresh ephemeral X25519 key; (old) round3 unicasts each new party
+//! its share, sealed to that key with the X25519/ChaCha20-Poly1305 envelope, and
+//! opens the VSS commitment; (new) round4 rebuilds the share/public key and acks
+//! with a digest of everything it accepted; old-only parties then retire their
+//! share.
+//!
+//! The round-1/round-3 "broadcasts" are per-recipient sends, so a corrupt old
+//! dealer could give each new party a different polynomial with the right
+//! constant term: every check would pass locally while the new shares are
+//! mutually inconsistent. The round-4 digest closes this: it hashes `EDDSAPub`,
+//! both committees, the thresholds and every dealer's opened commitment vector.
+//! New parties require every other new party's digest to equal their own, and
+//! old-only parties retire their share only once all new parties report the same
+//! digest. Any mismatch is an error.
 
 #![allow(dead_code)]
 
@@ -23,21 +34,31 @@ use super::vss;
 use super::{Error, ed::point_to_json};
 use crate::prelude::*;
 use crate::rng::SystemRng;
+use crate::share_aead as aead;
 use crate::sync::{Mutex, Receiver as MpscReceiver, Sender as MpscSender, channel};
 use crate::tss::b64::B64Bytes;
 use crate::tss::bigint::BigUintDec;
 use crate::tss::expect::JsonExpect;
+use crate::tss::hashing::sha512_256i_tagged;
 use crate::tss::{Message, PartyId, ReSharingParameters, decode, encode};
 use alloc::sync::Arc;
+use core::cmp::Ordering;
 use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint, Scalar};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
-const TYPE_R1: &str = "eddsa:reshare:round1";
-const TYPE_R2: &str = "eddsa:reshare:round2";
-const TYPE_R3_1: &str = "eddsa:reshare:round3-1";
-const TYPE_R3_2: &str = "eddsa:reshare:round3-2";
-const TYPE_R4: &str = "eddsa:reshare:round4";
+// v2: round 2 carries the new party's ephemeral X25519 key, round-3 shares are
+// sealed, and the round-4 ACK carries a consistency digest. v1 peers fail on the
+// type string.
+const TYPE_R1: &str = "eddsa:reshare:v2:round1";
+const TYPE_R2: &str = "eddsa:reshare:v2:round2";
+const TYPE_R3_1: &str = "eddsa:reshare:v2:round3-1";
+const TYPE_R3_2: &str = "eddsa:reshare:v2:round3-2";
+const TYPE_R4: &str = "eddsa:reshare:v2:round4";
+/// Associated-data prefix for the sealed round-3 shares.
+const AD_PREFIX: &[u8] = b"eddsatss/reshare/r3/v2|";
+/// Domain tag for the round-4 consistency digest.
+const DIGEST_TAG: &[u8] = b"eddsatss/reshare/r4-digest/v2";
 
 /// A running threshold-EdDSA resharing session.
 pub struct ResharingParty {
@@ -50,14 +71,28 @@ struct Shared {
     input: Key,
     state: Mutex<State>,
     result_tx: Mutex<Option<MpscSender<Result<Key, Error>>>>,
+    /// Test hook: as an old dealer, give the new party with this key a
+    /// different polynomial (same constant term) than everyone else.
+    #[cfg(test)]
+    equivocate_to: Option<Vec<u8>>,
 }
 
 struct State {
     eddsa_pub: Option<EdwardsPoint>,
 
     // old side
+    vc: Vec<u8>,
     vd: Vec<Vec<u8>>,
     new_shares: Vec<Scalar>, // aligned to new_parties
+    dealer_eph_priv: [u8; 32],
+    dealer_eph_pub: [u8; 32],
+    new_eph: Vec<Option<[u8; 32]>>, // new parties' ephemeral keys, aligned to new_parties
+    #[cfg(test)]
+    alt: Option<AltDeal>,
+
+    // new side
+    my_eph_priv: [u8; 32],
+    my_eph_pub: [u8; 32],
 
     // collected (new side)
     r1msgs: Vec<R1Msg>,
@@ -69,13 +104,56 @@ struct State {
     r3_join: u8,
 
     new_key: Option<Key>,
-    /// Dual (old+new) members: the other new parties' ROUND4 ACKs are all in.
-    acks_done: bool,
+    /// This new party's round-4 consistency digest.
+    digest: Option<Vec<u8>>,
+    /// Dual (old+new) members: the other new parties' ROUND4 digests, once all
+    /// are in.
+    peer_digests: Option<Vec<Vec<u8>>>,
+}
+
+/// Test hook state: the equivocating deal for one new party.
+#[cfg(test)]
+struct AltDeal {
+    new_index: usize,
+    vc: Vec<u8>,
+    vd: Vec<Vec<u8>>,
+    share: Scalar,
+}
+
+/// The X25519 private keys open and seal the share envelopes; wiped with the
+/// session.
+impl Drop for State {
+    fn drop(&mut self) {
+        self.dealer_eph_priv.zeroize();
+        self.my_eph_priv.zeroize();
+    }
 }
 
 impl ResharingParty {
     /// Starts resharing.
     pub fn new(params: ReSharingParameters, input: Key) -> Result<ResharingParty, Error> {
+        Self::start(params, input, None)
+    }
+
+    /// Test-only: starts resharing as an old dealer that equivocates toward the
+    /// new party whose key is `target`.
+    #[cfg(test)]
+    fn new_equivocating(
+        params: ReSharingParameters,
+        input: Key,
+        target: Vec<u8>,
+    ) -> Result<ResharingParty, Error> {
+        Self::start(params, input, Some(target))
+    }
+
+    /// `equivocate_to` is a test hook and is ignored outside tests.
+    fn start(
+        params: ReSharingParameters,
+        input: Key,
+        equivocate_to: Option<Vec<u8>>,
+    ) -> Result<ResharingParty, Error> {
+        #[cfg(not(test))]
+        let _ = equivocate_to;
         let (tx, rx) = channel();
         // Old-committee members reindex their input to the old committee so the
         // Lagrange lookup in prepare_wi uses old-committee indices rather than
@@ -88,24 +166,45 @@ impl ResharingParty {
         } else {
             input
         };
+        let n_new = params.new_parties().len();
+        let mut state = State {
+            eddsa_pub: None,
+            vc: Vec::new(),
+            vd: Vec::new(),
+            new_shares: Vec::new(),
+            dealer_eph_priv: [0u8; 32],
+            dealer_eph_pub: [0u8; 32],
+            new_eph: vec![None; n_new],
+            #[cfg(test)]
+            alt: None,
+            my_eph_priv: [0u8; 32],
+            my_eph_pub: [0u8; 32],
+            r1msgs: Vec::new(),
+            r1_from: Vec::new(),
+            r3m1: Vec::new(),
+            r3m1_from: Vec::new(),
+            r3m2: Vec::new(),
+            r3m2_from: Vec::new(),
+            r3_join: 0,
+            new_key: None,
+            digest: None,
+            peer_digests: None,
+        };
+        // A new party's ephemeral key is sampled up front: a dual (old+new)
+        // member's own dealer half seals to it, possibly before round 2 runs.
+        if let Some(j) = new_position(params.new_parties(), params.party_id()) {
+            let (eph_priv, eph_pub) = aead::new_ephemeral_key(&mut SystemRng);
+            state.my_eph_priv = eph_priv;
+            state.my_eph_pub = eph_pub;
+            state.new_eph[j] = Some(eph_pub);
+        }
         let shared = Arc::new(Shared {
             params,
             input,
-            state: Mutex::new(State {
-                eddsa_pub: None,
-                vd: Vec::new(),
-                new_shares: Vec::new(),
-                r1msgs: Vec::new(),
-                r1_from: Vec::new(),
-                r3m1: Vec::new(),
-                r3m1_from: Vec::new(),
-                r3m2: Vec::new(),
-                r3m2_from: Vec::new(),
-                r3_join: 0,
-                new_key: None,
-                acks_done: false,
-            }),
+            state: Mutex::new(state),
             result_tx: Mutex::new(Some(tx)),
+            #[cfg(test)]
+            equivocate_to,
         });
         if shared.params.is_new_committee() {
             shared.setup_new_round1();
@@ -159,6 +258,7 @@ impl Shared {
         let (vi, shares) = vss::create(new_t, &wi, &new_ks, &mut rng)
             .map_err(|e| Error::Validation(format!("new committee: {e}")))?;
         let (vc, vd) = super::commit::commit(&flatten_points(&vi), &mut rng);
+        let (eph_priv, eph_pub) = aead::new_ephemeral_key(&mut rng);
 
         let pub_pt = self
             .input
@@ -168,20 +268,39 @@ impl Shared {
 
         {
             let mut st = self.state.lock();
+            st.vc = vc;
             st.vd = vd;
             st.new_shares = shares.iter().map(|s| s.value.clone()).collect();
             st.eddsa_pub = Some(pub_pt);
+            st.dealer_eph_priv = eph_priv;
+            st.dealer_eph_pub = eph_pub;
+            #[cfg(test)]
+            if let Some(target) = &self.equivocate_to {
+                // A second polynomial with the same constant term `wi`.
+                let j = new_ids
+                    .iter()
+                    .position(|p| p.key == *target)
+                    .expect("equivocation target in new committee");
+                let (vi2, shares2) = vss::create(new_t, &wi, &new_ks, &mut rng).unwrap();
+                let (vc2, vd2) = super::commit::commit(&flatten_points(&vi2), &mut rng);
+                st.alt = Some(AltDeal {
+                    new_index: j,
+                    vc: vc2,
+                    vd: vd2,
+                    share: shares2[j].value.clone(),
+                });
+            }
         }
 
-        let r1 = R1Msg {
-            eddsa_pub_x: B64Bytes(px),
-            eddsa_pub_y: B64Bytes(py),
-            v_commitment: B64Bytes(vc),
-        };
         // Every new party, including ourselves when we sit on both committees:
         // the new side expects round 1 from all old parties, so the self-message
         // is sent explicitly.
-        for pj in self.params.new_parties() {
+        for (j, pj) in self.params.new_parties().iter().enumerate() {
+            let r1 = R1Msg {
+                eddsa_pub_x: B64Bytes(px.clone()),
+                eddsa_pub_y: B64Bytes(py.clone()),
+                v_commitment: B64Bytes(self.dealt_commitment(j)),
+            };
             self.send_to(TYPE_R1, &r1, pj)?;
         }
 
@@ -191,30 +310,106 @@ impl Shared {
         } else {
             self.connect(TYPE_R2, &new_others, {
                 let me = Arc::clone(self);
-                move |_| me.round3_old()
+                let new_others = new_others.clone();
+                move |msgs| {
+                    if let Err(e) = me.harvest_new_eph(&new_others, &msgs) {
+                        return me.deliver(Err(e));
+                    }
+                    me.round3_old()
+                }
             });
         }
         Ok(())
     }
 
+    /// Records each new party's round-2 ephemeral key.
+    fn harvest_new_eph(&self, from: &[PartyId], msgs: &[Message]) -> Result<(), Error> {
+        let new_ids = self.params.new_parties();
+        for (pj, m) in from.iter().zip(msgs) {
+            let r2: R2Msg = decode(m)?;
+            let eph: [u8; 32] = r2.eph_pub.0.as_slice().try_into().map_err(|_| {
+                Error::Validation("resharing: malformed ephemeral key from new party".into())
+            })?;
+            let j = new_position(new_ids, pj).ok_or_else(|| {
+                Error::Validation("resharing: round-2 sender not in new committee".into())
+            })?;
+            self.state.lock().new_eph[j] = Some(eph);
+        }
+        Ok(())
+    }
+
+    /// The commitment this dealer sends to new party `j` (honest: the same for
+    /// everyone).
+    fn dealt_commitment(&self, j: usize) -> Vec<u8> {
+        let st = self.state.lock();
+        #[cfg(test)]
+        if let Some(a) = st.alt.as_ref().filter(|a| a.new_index == j) {
+            return a.vc.clone();
+        }
+        let _ = j;
+        st.vc.clone()
+    }
+
+    /// The decommitment this dealer sends to new party `j`.
+    fn dealt_decommitment(&self, j: usize) -> Vec<Vec<u8>> {
+        let st = self.state.lock();
+        #[cfg(test)]
+        if let Some(a) = st.alt.as_ref().filter(|a| a.new_index == j) {
+            return a.vd.clone();
+        }
+        let _ = j;
+        st.vd.clone()
+    }
+
+    /// The share this dealer sends to new party `j` (`honest` unless the
+    /// equivocation test hook targets `j`).
+    fn dealt_share(&self, j: usize, honest: &Scalar) -> Scalar {
+        #[cfg(test)]
+        if let Some(a) = self.state.lock().alt.as_ref().filter(|a| a.new_index == j) {
+            return a.share.clone();
+        }
+        let _ = j;
+        honest.clone()
+    }
+
     fn round3_old(self: &Arc<Self>) {
+        let mut rng = SystemRng;
         let new_ids = self.params.new_parties().to_vec();
-        let (new_shares, vd) = {
+        let me = self.params.party_id().clone();
+        let (new_shares, eph_priv, eph_pub, new_eph) = {
             let st = self.state.lock();
-            (st.new_shares.clone(), st.vd.clone())
+            (
+                st.new_shares.clone(),
+                Zeroizing::new(st.dealer_eph_priv),
+                st.dealer_eph_pub,
+                st.new_eph.clone(),
+            )
         };
         for (j, pj) in new_ids.iter().enumerate() {
+            let recipient_pub = match new_eph[j] {
+                Some(k) => k,
+                None => return self.fail("resharing: missing new party ephemeral key"),
+            };
+            let share = self.dealt_share(j, &new_shares[j]);
+            let ad = reshare_round3_ad(&me, pj, &eph_pub, &recipient_pub);
+            let plaintext = Zeroizing::new(ed::scalar_to_be(&share));
+            let ct = match aead::seal_share(&mut rng, &eph_priv, &recipient_pub, &ad, &plaintext) {
+                Ok(c) => c,
+                Err(e) => return self.fail(format!("resharing: seal share: {e}")),
+            };
             let r3m1 = R3Msg1 {
-                share: B64Bytes(ed::scalar_to_be(&new_shares[j])),
+                eph_pub: B64Bytes(eph_pub.to_vec()),
+                ciphertext: B64Bytes(ct),
             };
             if let Err(e) = self.send_to(TYPE_R3_1, &r3m1, pj) {
                 return self.deliver(Err(e));
             }
         }
-        let r3m2 = R3Msg2 {
-            v_decommitment: vd.into_iter().map(B64Bytes).collect(),
-        };
-        for pj in &new_ids {
+        for (j, pj) in new_ids.iter().enumerate() {
+            let vd = self.dealt_decommitment(j);
+            let r3m2 = R3Msg2 {
+                v_decommitment: vd.into_iter().map(B64Bytes).collect(),
+            };
             if let Err(e) = self.send_to(TYPE_R3_2, &r3m2, pj) {
                 return self.deliver(Err(e));
             }
@@ -222,32 +417,53 @@ impl Shared {
 
         let new_others = self.new_others();
         if new_others.is_empty() {
-            self.round5_old();
+            self.round5_old(Vec::new());
         } else {
             self.connect(TYPE_R4, &new_others, {
                 let me = Arc::clone(self);
-                move |_| me.round5_old()
+                move |msgs| me.round5_old(msgs)
             });
         }
     }
 
-    fn round5_old(self: &Arc<Self>) {
-        // Old-only members retire their share.
+    fn round5_old(self: &Arc<Self>, msgs: Vec<Message>) {
+        let digests: Vec<Vec<u8>> = match msgs
+            .iter()
+            .map(|m| decode::<R4Msg>(m).map(|r| r.digest.0))
+            .collect()
+        {
+            Ok(d) => d,
+            Err(e) => return self.deliver(Err(e.into())),
+        };
+
+        // Old-only members retire their share, but only once every new party
+        // has reported the same view of the reshare: otherwise a dealer may
+        // have handed out inconsistent shares and the old share is still the
+        // only copy of the key.
         if !self.params.is_new_committee() {
+            let first = match digests.first() {
+                Some(d) => d,
+                None => return self.fail("resharing: no new-committee acknowledgements"),
+            };
+            if digests.iter().any(|d| d != first) {
+                return self
+                    .fail("resharing: new committee disagrees on the reshare (digest mismatch)");
+            }
             let mut retired = self.input.clone();
+            retired.zeroize();
             retired.xi = BigUintDec::from_be_bytes(&[]);
             return self.deliver(Ok(retired));
         }
         // Dual member: this is the one ROUND4 handler. The ACKs can complete
         // before our own `round4_new` has produced the key; in that case
         // `round4_new` delivers.
-        let new_key = {
+        let done = {
             let mut st = self.state.lock();
-            st.acks_done = true;
-            st.new_key.clone()
+            st.peer_digests = Some(digests);
+            st.new_key.is_some()
         };
-        if let Some(k) = new_key {
-            self.deliver(Ok(k));
+        if done {
+            self.finish_new();
         }
     }
 
@@ -282,17 +498,21 @@ impl Shared {
                 _ => {}
             }
         }
-        {
+        let my_eph_pub = {
             let mut st = self.state.lock();
             st.eddsa_pub = eddsa_pub;
             st.r1msgs = r1msgs;
             st.r1_from = old_ids.to_vec();
-        }
+            st.my_eph_pub
+        };
 
-        // Ack to old parties.
+        // Ack to old parties with our ephemeral key, so they can seal our share.
+        let r2 = R2Msg {
+            eph_pub: B64Bytes(my_eph_pub.to_vec()),
+        };
         for pj in old_ids {
             if pj.key != self.params.party_id().key {
-                let _ = self.send_to(TYPE_R2, &R2Msg {}, pj);
+                let _ = self.send_to(TYPE_R2, &r2, pj);
             }
         }
 
@@ -345,23 +565,31 @@ impl Shared {
     fn round4_new(self: &Arc<Self>) {
         let new_t = self.params.new_threshold();
         let new_ids = self.params.new_parties().to_vec();
-        let me_id = ed::scalar_from_be(&self.params.party_id().key);
+        let me = self.params.party_id().clone();
+        let me_id = ed::scalar_from_be(&me.key);
 
         let (eddsa_pub, r1msgs, r1_from, r3m1, r3m1_from, r3m2, r3m2_from) = {
-            let st = self.state.lock();
+            let mut st = self.state.lock();
             (
                 st.eddsa_pub.unwrap(),
                 st.r1msgs.clone(),
                 st.r1_from.clone(),
-                st.r3m1.clone(),
+                core::mem::take(&mut st.r3m1),
                 st.r3m1_from.clone(),
                 st.r3m2.clone(),
                 st.r3m2_from.clone(),
             )
         };
+        let (my_eph_priv, my_eph_pub) = {
+            let st = self.state.lock();
+            (Zeroizing::new(st.my_eph_priv), st.my_eph_pub)
+        };
 
         let mut new_xi = Scalar::ZERO;
         let mut vc_agg: Vec<Option<EdwardsPoint>> = (0..=new_t).map(|_| None).collect();
+        // Every dealer's opened commitment vector, in old-committee order, for
+        // the round-4 consistency digest.
+        let mut dealt: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::with_capacity(r3m1.len());
 
         for (k, r3m1_msg) in r3m1.iter().enumerate() {
             let oid = &r3m1_from[k];
@@ -387,7 +615,17 @@ impl Shared {
                 Some(v) => v,
                 None => return self.fail("resharing: VSS commitments off curve"),
             };
-            let share = ed::scalar_from_be(&r3m1_msg.share.0);
+            let sender_pub: [u8; 32] = match r3m1_msg.eph_pub.0.as_slice().try_into() {
+                Ok(a) => a,
+                Err(_) => return self.fail("resharing: malformed ephemeral key from old party"),
+            };
+            let ad = reshare_round3_ad(oid, &me, &sender_pub, &my_eph_pub);
+            let share_be =
+                match aead::open_share(&my_eph_priv, &sender_pub, &ad, &r3m1_msg.ciphertext.0) {
+                    Ok(b) => b,
+                    Err(e) => return self.fail(format!("resharing: open share: {e}")),
+                };
+            let share = ed::scalar_from_be(&share_be);
             if !vss::verify(&me_id, &share, new_t, &vj) {
                 return self.fail("resharing: VSS share verification failed");
             }
@@ -398,6 +636,7 @@ impl Shared {
                     Some(acc) => ed::add(acc, &vj[c]),
                 });
             }
+            dealt.push((oid.key.clone(), flat));
         }
 
         let vc0 = match vc_agg[0] {
@@ -420,12 +659,14 @@ impl Shared {
             new_big_xjs.push(bx);
         }
 
+        let digest = reshare_digest(&self.params, &eddsa_pub, &dealt);
+
         // Wipe the transient big-endian copy of the new secret share once it
         // has been captured by the Key (which zeroizes its own copy on drop).
         let mut new_xi_be = ed::scalar_to_be(&new_xi);
         let new_key = Key {
             xi: BigUintDec::from_be_bytes(&new_xi_be),
-            share_id: BigUintDec::from_be_bytes(&self.params.party_id().key),
+            share_id: BigUintDec::from_be_bytes(&me.key),
             ks: new_ids
                 .iter()
                 .map(|p| BigUintDec::from_be_bytes(&p.key))
@@ -434,12 +675,20 @@ impl Shared {
             eddsa_pub: ec_point(&eddsa_pub),
         };
         new_xi_be.zeroize();
-        self.state.lock().new_key = Some(new_key.clone());
+        let acks_done = {
+            let mut st = self.state.lock();
+            st.new_key = Some(new_key);
+            st.digest = Some(digest.clone());
+            st.peer_digests.is_some()
+        };
 
-        // Ack round4 to every other old+new party.
+        // Ack round4, with our digest, to every other old+new party.
+        let r4 = R4Msg {
+            digest: B64Bytes(digest),
+        };
         for pj in &self.params.old_and_new_parties() {
-            if pj.key != self.params.party_id().key {
-                let _ = self.send_to(TYPE_R4, &R4Msg {}, pj);
+            if pj.key != me.key {
+                let _ = self.send_to(TYPE_R4, &r4, pj);
             }
         }
 
@@ -448,22 +697,50 @@ impl Shared {
             // Dual member: `round3_old` owns the ROUND4 handler (a second
             // `connect` would replace it and lose ACKs). Whichever of
             // `round4_new` / `round5_old` finishes last delivers.
-            if self.state.lock().acks_done {
-                self.deliver(Ok(new_key));
+            if acks_done || new_others.is_empty() {
+                self.finish_new();
             }
         } else if new_others.is_empty() {
-            self.deliver(Ok(new_key));
+            self.finish_new();
         } else {
             self.connect(TYPE_R4, &new_others, {
                 let me = Arc::clone(self);
-                move |_| {
-                    let k = me.state.lock().new_key.clone();
-                    if let Some(k) = k {
-                        me.deliver(Ok(k));
+                move |msgs| {
+                    let digests: Result<Vec<Vec<u8>>, _> = msgs
+                        .iter()
+                        .map(|m| decode::<R4Msg>(m).map(|r| r.digest.0))
+                        .collect();
+                    match digests {
+                        Ok(d) => {
+                            me.state.lock().peer_digests = Some(d);
+                            me.finish_new();
+                        }
+                        Err(e) => me.deliver(Err(e.into())),
                     }
                 }
             });
         }
+    }
+
+    /// New-committee completion: every other new party's digest must equal
+    /// ours before the new key is released.
+    fn finish_new(&self) {
+        let (key, digest, peers) = {
+            let st = self.state.lock();
+            (
+                st.new_key.clone(),
+                st.digest.clone(),
+                st.peer_digests.clone().unwrap_or_default(),
+            )
+        };
+        let (Some(key), Some(digest)) = (key, digest) else {
+            return;
+        };
+        if peers.iter().any(|d| *d != digest) {
+            return self
+                .fail("resharing: new committee disagrees on the reshare (digest mismatch)");
+        }
+        self.deliver(Ok(key));
     }
 
     // --- helpers ---
@@ -529,6 +806,59 @@ impl Shared {
 
 // --- helpers ---------------------------------------------------------------
 
+/// `p`'s position in the (sorted) new committee.
+fn new_position(new_ids: &[PartyId], p: &PartyId) -> Option<usize> {
+    new_ids.iter().position(|q| q.cmp_key(p) == Ordering::Equal)
+}
+
+/// Associated data for a sealed round-3 share: both parties' keys and both
+/// ephemeral X25519 keys.
+fn reshare_round3_ad(
+    sender: &PartyId,
+    recipient: &PartyId,
+    sender_eph: &[u8; 32],
+    recipient_eph: &[u8; 32],
+) -> Vec<u8> {
+    let mut ad =
+        Vec::with_capacity(AD_PREFIX.len() + 16 + sender.key.len() + recipient.key.len() + 64);
+    ad.extend_from_slice(AD_PREFIX);
+    for k in [&sender.key, &recipient.key] {
+        ad.extend_from_slice(&(k.len() as u64).to_be_bytes());
+        ad.extend_from_slice(k);
+    }
+    ad.extend_from_slice(sender_eph);
+    ad.extend_from_slice(recipient_eph);
+    ad
+}
+
+/// The round-4 consistency digest: `SHA512_256i_tagged` over `EDDSAPub`, the
+/// thresholds, both committees' keys, and every dealer's key followed by its
+/// opened commitment vector (flattened affine coordinates), in old-committee
+/// order. Every operand count is fixed by the parameters, so the framing is
+/// unambiguous.
+fn reshare_digest(
+    params: &ReSharingParameters,
+    eddsa_pub: &EdwardsPoint,
+    dealt: &[(Vec<u8>, Vec<Vec<u8>>)],
+) -> Vec<u8> {
+    let (px, py) = ed::coords_be(eddsa_pub);
+    let old_t = (params.old_threshold() as u64).to_be_bytes();
+    let new_t = (params.new_threshold() as u64).to_be_bytes();
+    let n_old = (params.old_parties().len() as u64).to_be_bytes();
+    let n_new = (params.new_parties().len() as u64).to_be_bytes();
+    let n_dealt = (dealt.len() as u64).to_be_bytes();
+    let mut ops: Vec<&[u8]> = vec![&px, &py, &old_t, &new_t, &n_old];
+    ops.extend(params.old_parties().iter().map(|p| p.key.as_slice()));
+    ops.push(&n_new);
+    ops.extend(params.new_parties().iter().map(|p| p.key.as_slice()));
+    ops.push(&n_dealt);
+    for (key, flat) in dealt {
+        ops.push(key);
+        ops.extend(flat.iter().map(|b| b.as_slice()));
+    }
+    sha512_256i_tagged(DIGEST_TAG, &ops).to_vec()
+}
+
 fn flatten_points(vs: &[EdwardsPoint]) -> Vec<Vec<u8>> {
     let mut out = Vec::with_capacity(vs.len() * 2);
     for p in vs {
@@ -569,12 +899,20 @@ struct R1Msg {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct R2Msg {}
+struct R2Msg {
+    /// The new party's ephemeral X25519 public key.
+    #[serde(rename = "eph_pub")]
+    eph_pub: B64Bytes,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct R3Msg1 {
-    #[serde(rename = "share")]
-    share: B64Bytes,
+    /// The old dealer's ephemeral X25519 public key.
+    #[serde(rename = "eph_pub")]
+    eph_pub: B64Bytes,
+    /// The share, sealed with `share_aead::seal_share`.
+    #[serde(rename = "ciphertext")]
+    ciphertext: B64Bytes,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -584,7 +922,11 @@ struct R3Msg2 {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct R4Msg {}
+struct R4Msg {
+    /// The sender's consistency digest (see [`reshare_digest`]).
+    #[serde(rename = "digest")]
+    digest: B64Bytes,
+}
 
 #[cfg(test)]
 mod tests {
@@ -734,6 +1076,97 @@ mod tests {
             ks: idx.iter().map(|&i| k.ks[i].clone()).collect(),
             big_xj: idx.iter().map(|&i| k.big_xj[i].clone()).collect(),
             eddsa_pub: k.eddsa_pub.clone(),
+        }
+    }
+
+    type Outcome = Result<Key, Error>;
+
+    /// 2-of-3 keygen over parties 1..=3, then reshare from the old committee
+    /// {1, 2} to the disjoint new committee {11, 12, 13} (2-of-3). If
+    /// `equivocate_to` is set, old dealer 1 gives that new party a different
+    /// polynomial (with the correct constant term) than the others. Returns
+    /// `(old results, new results)`.
+    fn reshare_2of3(equivocate_to: Option<u8>) -> (Vec<Outcome>, Vec<Outcome>) {
+        let kg_ids = PartyId::sort(vec![pid(1), pid(2), pid(3)], 0);
+        let hub = TestHub::new(&kg_ids);
+        let kg: Vec<crate::eddsatss::KeygenParty> = (0..3)
+            .map(|i| {
+                let params = Parameters::new(kg_ids.clone(), &kg_ids[i], 1, hub.broker(i));
+                crate::eddsatss::KeygenParty::new(params).unwrap()
+            })
+            .collect();
+        let keys: Vec<Key> = kg.iter().map(|p| p.wait().unwrap()).collect();
+
+        let old_ids = PartyId::sort(vec![pid(1), pid(2)], 0);
+        let new_ids = PartyId::sort(vec![pid(11), pid(12), pid(13)], 0);
+        let mut all = old_ids.clone();
+        all.extend(new_ids.iter().cloned());
+        let rhub = ReshareHub::new(&all);
+        let params = |p: &PartyId| {
+            ReSharingParameters::new(
+                old_ids.clone(),
+                new_ids.clone(),
+                1,
+                1,
+                p.clone(),
+                rhub.broker(p),
+            )
+        };
+
+        let mut sessions = Vec::new();
+        for p in &new_ids {
+            sessions.push(ResharingParty::new(params(p), keys[0].clone()).unwrap());
+        }
+        for (i, p) in old_ids.iter().enumerate() {
+            let s = match (i, equivocate_to) {
+                (0, Some(t)) => {
+                    ResharingParty::new_equivocating(params(p), keys[i].clone(), vec![t])
+                }
+                _ => ResharingParty::new(params(p), keys[i].clone()),
+            };
+            sessions.push(s.unwrap());
+        }
+        let mut new_res: Vec<Result<Key, Error>> = sessions
+            .iter()
+            .map(|s| s.try_result().expect("every party finished"))
+            .collect();
+        let old_res = new_res.split_off(3);
+        (old_res, new_res)
+    }
+
+    #[test]
+    fn honest_reshare_retires_old_shares() {
+        let (old, new) = reshare_2of3(None);
+        for r in &old {
+            assert!(r.as_ref().unwrap().xi.as_be_bytes().is_empty());
+        }
+        let new: Vec<Key> = new.into_iter().map(Result::unwrap).collect();
+        for k in &new {
+            k.validate_basic().unwrap();
+            assert_eq!(k.big_xj.len(), 3);
+            for (a, b) in k.big_xj.iter().zip(&new[0].big_xj) {
+                assert_eq!(a.coords, b.coords);
+            }
+        }
+    }
+
+    /// An old dealer hands one new party a different polynomial with the right
+    /// constant term. Each new party's local checks pass, but the round-4
+    /// digests disagree: no new party accepts its key and, crucially, no
+    /// old-only party retires its share.
+    #[test]
+    fn equivocating_old_dealer_is_detected_and_old_shares_kept() {
+        let (old, new) = reshare_2of3(Some(13));
+        for (i, r) in new.iter().enumerate() {
+            match r {
+                Err(e) => assert!(format!("{e}").contains("digest mismatch"), "new {i}: {e}"),
+                Ok(_) => panic!("new party {i} accepted an inconsistent reshare"),
+            }
+        }
+        // Old party 0 is the cheater; honest old party 1 must keep its share.
+        match &old[1] {
+            Err(e) => assert!(format!("{e}").contains("digest mismatch"), "{e}"),
+            Ok(_) => panic!("honest old party retired its share after an inconsistent reshare"),
         }
     }
 }
