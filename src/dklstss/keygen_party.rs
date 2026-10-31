@@ -88,6 +88,15 @@ impl KeygenParty {
     /// Starts the DKG for this party. Returns immediately after round 1 is
     /// emitted; the result is delivered once all rounds complete.
     pub fn new(params: Parameters) -> Result<KeygenParty, Error> {
+        // Reject a degenerate threshold before anything is dealt: with t = 0
+        // each dealer's polynomial is constant, so every unicast "share" is
+        // the dealer's whole secret contribution.
+        let (t, n) = (params.threshold(), params.parties().len());
+        if t < 1 || t >= n {
+            return Err(Error::Validation(format!(
+                "invalid threshold T={t} for N={n} (need 1 <= T < N)"
+            )));
+        }
         let (tx, rx) = channel();
         let ssid = keygen_session(&params);
         let shared = Arc::new(Shared {
@@ -702,6 +711,28 @@ mod tests {
             .iter()
             .map(|p| p.wait().expect("keygen succeeds"))
             .collect()
+    }
+
+    /// A broker that fails the test if anything is ever sent through it.
+    struct NoSend;
+    impl crate::tss::MessageReceiver for NoSend {
+        fn receive(&self, msg: &Message) -> crate::tss::BrokerResult {
+            panic!("unexpected send of {}", msg.typ);
+        }
+    }
+    impl crate::tss::MessageBroker for NoSend {
+        fn connect(&self, _: &str, _: Arc<dyn crate::tss::MessageReceiver + Send + Sync>) {}
+    }
+
+    /// T = 0 would deal constant polynomials (every share = the dealer's
+    /// whole secret), T >= N is unsignable: both are refused before round 1.
+    #[test]
+    fn rejects_invalid_threshold_before_dealing() {
+        let ids = party_ids(3);
+        for t in [0, 3, 4] {
+            let params = Parameters::new(ids.clone(), &ids[0], t, Arc::new(NoSend));
+            assert!(KeygenParty::new(params).is_err(), "T={t} accepted");
+        }
     }
 
     #[test]

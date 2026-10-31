@@ -124,9 +124,16 @@ impl ResharingParty {
                 .collect();
             super::resharing::check_indexes(&ids)?;
         }
+        // Every role checks the new threshold before anything is dealt: an
+        // OLD-only dealer with new T = 0 would deal a constant polynomial,
+        // i.e. send λ_i·x_i in the clear to every new member (who could then
+        // sum them into the private key).
         let new_t = params.new_threshold();
-        if is_new && (new_t < 1 || new_t >= params.new_parties().len()) {
-            return Err(Error::Validation(format!("invalid new threshold {new_t}")));
+        let new_n = params.new_parties().len();
+        if new_t < 1 || new_t >= new_n {
+            return Err(Error::Validation(format!(
+                "invalid new threshold T'={new_t} for N'={new_n} (need 1 <= T' < N')"
+            )));
         }
 
         let my_new_idx = params
@@ -801,6 +808,39 @@ mod tests {
         );
         let r = ResharingParty::new(params, old_keys[0].ecdsa_pub, Some(old_keys[0].clone()));
         assert!(r.is_err());
+    }
+
+    /// A broker that fails the test if anything is ever sent through it.
+    struct NoSend;
+    impl crate::tss::MessageReceiver for NoSend {
+        fn receive(&self, msg: &Message) -> crate::tss::BrokerResult {
+            panic!("unexpected send of {}", msg.typ);
+        }
+    }
+    impl crate::tss::MessageBroker for NoSend {
+        fn connect(&self, _: &str, _: Arc<dyn crate::tss::MessageReceiver + Send + Sync>) {}
+    }
+
+    /// An OLD-only dealer must refuse a degenerate new threshold before
+    /// dealing: with T' = 0 its "shares" would all be λ_i·x_i in the clear.
+    #[test]
+    fn old_only_dealer_rejects_invalid_new_threshold() {
+        let old_ids = party_ids(&[1, 2, 3]);
+        let old_keys = keygen(old_ids.len(), 1, &old_ids, &mut SystemRng).unwrap();
+        let new_ids = party_ids(&[11, 12, 13]);
+        for new_t in [0, 3, 4] {
+            let params = ReSharingParameters::new(
+                old_ids.clone(),
+                new_ids.clone(),
+                1,
+                new_t,
+                old_ids[0].clone(),
+                Arc::new(NoSend),
+            );
+            assert!(params.is_old_committee() && !params.is_new_committee());
+            let r = ResharingParty::new(params, old_keys[0].ecdsa_pub, Some(old_keys[0].clone()));
+            assert!(r.is_err(), "new T={new_t} accepted");
+        }
     }
 
     /// Overlapping committees: party 3 is both an old dealer and a new member.
